@@ -1,0 +1,25 @@
+# Build outputs and virtual machine artifacts
+/out/
+/work/
+/build/image/out/
+/build/image/work/
+/build/image/cache/
+*.iso
+*.qcow2
+*.raw
+*.img
+
+# Language and editor artifacts
+target/
+.venv/
+__pycache__/
+*.py[cod]
+.vscode/
+.idea/
+
+# Local environment files and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
