@@ -321,6 +321,15 @@ static void KiPhase1Initialization(void *Context)
     IoInitializeDrivers();
     IoReportVolumes();
     bool NetworkOk = NetRunProtocolSelfTests();
+    bool DhcpTestsOk = NetDhcpRunSelfTests();
+    bool DhcpStartOk = true;
+    if (NetworkOk && DhcpTestsOk && NetGetInterfaceList()) {
+        STATUS DhcpStatus = NetStart();
+        DhcpStartOk = HZ_SUCCESS(DhcpStatus);
+        if (!DhcpStartOk)
+            DbgPrintEx(DPFLTR_ERROR_LEVEL, "Network: could not start DHCP client (0x%08X)\n",
+                       (uint32_t)DhcpStatus);
+    }
     W32kInitialize();
     ObDumpNamespace();
     bool LanguagesOk = KiRunLanguageSelfTests();
@@ -335,7 +344,7 @@ static void KiPhase1Initialization(void *Context)
     KiStartSystemThread(KiStatusThread, KI_THREAD_PRIORITY_DEFAULT + 1, "Status");
 
     bool AllOk = BreakpointOk && ClockOk && IoApicOk && MemoryOk && SchedulerOk && LanguagesOk && ProcessesOk &&
-                 FileSystemsOk && NetworkOk && DesktopOk;
+                 FileSystemsOk && NetworkOk && DhcpTestsOk && DhcpStartOk && DesktopOk;
     if (DisplayOk)
         InbvSetStatusText(AllOk ? HZ_MILESTONE " complete" : HZ_MILESTONE " complete with warnings (see log)");
     DbgPrint("[HZ] BOOT %s: %s kernel finished phase 1 (%llu ms after kernel entry)\n", AllOk ? "OK" : "DEGRADED",

@@ -112,7 +112,7 @@ constexpr float OverlayRadius = 8.0f;
 constexpr int32_t ControlHeight = 32;
 }  // namespace Theme
 
-enum class FontRole : uint8_t { Body, BodyStrong, Caption, Subtitle, Title, Mono };
+enum class FontRole : uint8_t { Body, BodyStrong, Caption, Subtitle, Title, Mono, BodyLarge, Display };
 HZ_FONT *GetFont(FontRole Role);
 
 /* Colors */

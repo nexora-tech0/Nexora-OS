@@ -472,7 +472,7 @@ void TestSystemInformation()
                         (Interface.MacAddress[0] | Interface.MacAddress[1] | Interface.MacAddress[2] |
                          Interface.MacAddress[3] | Interface.MacAddress[4] | Interface.MacAddress[5]);
         NetworkInfoValid = NetworkInfoValid && Interface.Name[0] && MacValid && Interface.LinkUp <= 1 &&
-                           Interface.Mtu >= 576 && Interface.Mtu <= 1500;
+                           Interface.ConfigurationState <= 3 && Interface.Mtu >= 576 && Interface.Mtu <= 1500;
     }
     Check(NetworkInfoValid, "network interface information has bounded, valid entries");
 

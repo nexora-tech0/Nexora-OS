@@ -131,12 +131,13 @@ Nexora currently runs its own statically linked PE32+ applications. It does not 
 general Windows application compatibility or a Linux ELF/syscall runtime; those require separate
 loader and API work and are not implied by the native app catalog. Files and Terminal can launch
 Nexora-compatible `.exe` programs, but Windows executables that import DLLs are not supported yet.
-There is not a browser app or TCP/IP stack in this build. The initial E1000 driver can initialize
-VirtualBox's Intel PRO/1000 MT Desktop adapter and report link state, but DHCP, DNS, TCP/UDP sockets,
-HTTPS/TLS and the user-mode networking API are not implemented yet, so pages cannot be loaded.
+There is not a browser app or a complete TCP/IP stack in this build. The Intel E1000 driver can
+initialize VirtualBox's PRO/1000 MT Desktop adapter, and the bounded DHCPv4 client requests and
+reports an IPv4 address, gateway, and DNS server. DNS queries, ARP-based routing, TCP sockets,
+HTTPS/TLS, and the user-mode networking API are not implemented yet, so pages cannot be loaded.
 Firefox also requires DLL loading and Windows API support that Nexora does not provide. The
-`network-interface` smoke case verifies only device initialization and link detection, not Internet
-connectivity.
+`network-interface` smoke case exercises the E1000 driver and DHCP handshake on QEMU user-mode NAT;
+it does not verify DNS or general Internet access.
 
 On Windows, run these from a WSL2 shell in the checkout; `make vbox` drives the Windows
 VirtualBox through `VBoxManage.exe`. The VM logs COM1 to `serial-com1.log` in its VM folder.

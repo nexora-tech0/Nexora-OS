@@ -273,16 +273,26 @@ extern "C" HZ_FONT *HzGetFont(int Which)
     static const struct {
         const char *Path;
         int32_t Size;
+        const char *FallbackPath;
     } Standard[HZ_FONT_COUNT] = {
-        {"C:\\Nexora\\Fonts\\Inter-Regular.ttf", 14},  {"C:\\Nexora\\Fonts\\Inter-SemiBold.ttf", 14},
-        {"C:\\Nexora\\Fonts\\Inter-SemiBold.ttf", 28}, {"C:\\Nexora\\Fonts\\Inter-Regular.ttf", 13},
-        {"C:\\Nexora\\Fonts\\Inter-SemiBold.ttf", 20}, {"C:\\Nexora\\Fonts\\Inter-Regular.ttf", 12},
-        {"C:\\Nexora\\Fonts\\JetBrainsMono-Regular.ttf", 14},
+        {"C:\\Nexora\\Fonts\\Inter-Regular.ttf", 14, "C:\\Nexora\\Fonts\\Inter-SemiBold.ttf"},
+        {"C:\\Nexora\\Fonts\\Inter-SemiBold.ttf", 14, "C:\\Nexora\\Fonts\\Inter-Regular.ttf"},
+        {"C:\\Nexora\\Fonts\\Inter-SemiBold.ttf", 28, "C:\\Nexora\\Fonts\\Inter-Regular.ttf"},
+        {"C:\\Nexora\\Fonts\\Inter-Regular.ttf", 13, "C:\\Nexora\\Fonts\\Inter-SemiBold.ttf"},
+        {"C:\\Nexora\\Fonts\\Inter-SemiBold.ttf", 20, "C:\\Nexora\\Fonts\\Inter-Regular.ttf"},
+        {"C:\\Nexora\\Fonts\\Inter-Regular.ttf", 12, "C:\\Nexora\\Fonts\\Inter-SemiBold.ttf"},
+        {"C:\\Nexora\\Fonts\\JetBrainsMono-Regular.ttf", 14, "C:\\Nexora\\Fonts\\Inter-Regular.ttf"},
+        {"C:\\Nexora\\Fonts\\Inter-Regular.ttf", 18, "C:\\Nexora\\Fonts\\Inter-SemiBold.ttf"},
+        {"C:\\Nexora\\Fonts\\InterDisplay-SemiBold.ttf", 72, "C:\\Nexora\\Fonts\\Inter-SemiBold.ttf"},
     };
     if (Which < 0 || Which >= HZ_FONT_COUNT)
         return nullptr;
     if (!g_StandardTried[Which]) {
         g_Standard[Which] = HzLoadFont(Standard[Which].Path, Standard[Which].Size);
+        if (!g_Standard[Which]) {
+            HzPrint("hzuser: falling back from %s", Standard[Which].Path);
+            g_Standard[Which] = HzLoadFont(Standard[Which].FallbackPath, Standard[Which].Size);
+        }
         g_StandardTried[Which] = true;
         if (!g_Standard[Which])
             HzPrint("hzuser: cannot load %s", Standard[Which].Path);

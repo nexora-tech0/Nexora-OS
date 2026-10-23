@@ -74,7 +74,9 @@ typedef struct _HZ_FONT HZ_FONT;
 #define HZ_FONT_SUBTITLE 4    /* Inter SemiBold 20 px */
 #define HZ_FONT_SMALL 5       /* Inter Regular 12 px */
 #define HZ_FONT_MONO 6        /* JetBrains Mono Regular 14 px (M9) */
-#define HZ_FONT_COUNT 7
+#define HZ_FONT_BODY_LARGE 7  /* Inter Regular 18 px */
+#define HZ_FONT_DISPLAY 8     /* Inter Display SemiBold 72 px */
+#define HZ_FONT_COUNT 9
 
 void HzCanvasFromSurface(HZ_CANVAS *Canvas, const HZ_SURFACE *Surface);
 void HzFillRect(HZ_CANVAS *Canvas, HZ_RECT Rect, uint32_t Color);   /* replaces pixels */

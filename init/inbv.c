@@ -71,12 +71,13 @@ void InbvAnimate(void)
         int LogoSize = HZ_MAX(64, HZ_MIN(H / 6, 160));
         int LogoY = H * 42 / 100 - LogoSize / 2;
         Inbv.Frame++;
-        uint32_t Fade = HZ_MIN(Inbv.Frame * 22, 255);
-        if (Fade < 255 || Inbv.Frame == 12)
+        uint32_t FadeFrame = HZ_MIN(Inbv.Frame, 12u);
+        uint32_t Fade = FadeFrame * FadeFrame * (36 - 2 * FadeFrame) * 255 / 1728;
+        if (FadeFrame < 12 || Inbv.Frame == 12)
             VidDrawLogoTinted((W - LogoSize) / 2, LogoY, LogoSize, SPLASH_BACKGROUND,
                               VidBlend(SPLASH_BACKGROUND, 0xC5CDD4, Fade));
         if (Inbv.Frame >= 3) {
-            int CenterX = W / 2, CenterY = H * 86 / 100;
+            int CenterX = W / 2, CenterY = HZ_MIN(H - 24, LogoY + LogoSize + H * 9 / 100);
             uint32_t Phase = (Inbv.Frame / 2) % 24;
             VidFillRect(CenterX - 20, CenterY - 20, 40, 40, SPLASH_BACKGROUND);
             for (int I = 0; I < 12; I++) {

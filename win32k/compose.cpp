@@ -693,9 +693,12 @@ void CompositorThread(void *Context)
             int Count = SnapshotLayers();
             KeWaitForSingleObject(&Cmp.ComposeLock, NULL);
             uint64_t FadeElapsed = KeQueryUptimeMicroseconds() - Cmp.DesktopFadeStartUs;
-            uint32_t FadeAlpha = Cmp.DesktopFadeStartUs == 0 || FadeElapsed >= 240000
-                                     ? 255
-                                     : (uint32_t)(FadeElapsed * 255 / 240000);
+            uint32_t FadeAlpha = 255;
+            if (Cmp.DesktopFadeStartUs != 0 && FadeElapsed < 240000) {
+                uint64_t T = FadeElapsed * 65535 / 240000;
+                uint64_t Eased = T * T * (3 * 65535 - 2 * T) / (65535ull * 65535ull);
+                FadeAlpha = (uint32_t)(Eased * 255 / 65535);
+            }
             const RGN_RECT *Rects;
             size_t N = RgnGetRects(Cmp.Working, &Rects);
             for (size_t i = 0; i < N; i++) {

@@ -28,12 +28,19 @@ struct _NET_INTERFACE {
     NETIF_SEND_FRAME SendFrame;
     NETIF_RECEIVE_FRAME ReceiveFrame;
     NETIF_QUERY_LINK QueryLink;
+    volatile uint32_t ConfigurationState;
+    uint8_t Ipv4Address[4];
+    uint8_t SubnetMask[4];
+    uint8_t Gateway[4];
+    uint8_t DnsServer[4];
 };
 
 /* Called by a bus/device driver during I/O initialization. Interfaces remain registered thereafter. */
 STATUS NetRegisterInterface(NET_INTERFACE *Interface);
 NET_INTERFACE *NetGetInterfaceList(void);
+STATUS NetStart(void);
 bool NetRunProtocolSelfTests(void);
+bool NetDhcpRunSelfTests(void);
 
 HZ_EXTERN_C_END
 

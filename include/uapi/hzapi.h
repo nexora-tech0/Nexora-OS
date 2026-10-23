@@ -232,8 +232,12 @@ typedef struct _HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION {
     char Name[16];
     uint8_t MacAddress[6];
     uint8_t LinkUp;
-    uint8_t Reserved;
+    uint8_t ConfigurationState; /* 0 = unconfigured, 1 = DHCP in progress, 2 = configured, 3 = failed */
     uint32_t Mtu;
+    uint8_t Ipv4Address[4];
+    uint8_t SubnetMask[4];
+    uint8_t Gateway[4];
+    uint8_t DnsServer[4];
 } HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION;
 
 typedef struct _HZ_SYSTEM_BASIC_INFORMATION {

@@ -42,10 +42,11 @@ public:
     void Paint(Painter &P) override
     {
         const Rect &B = Bounds();
-        if (IsPressed())
+        if (IsPressed()) {
             P.FillRoundRect(B, Theme::ControlRadius, Theme::SubtleFillPressed);
-        else if (IsHovered())
-            P.FillRoundRect(B, Theme::ControlRadius, Theme::SubtleFillHover);
+        } else if (Hover_.Value() > 0) {
+            P.FillRoundRect(B, Theme::ControlRadius, ScaleAlpha(Theme::SubtleFillHover, Hover_.Value()));
+        }
         PaintAppIcon(P, Rect{B.X + (B.Width - 36) / 2, B.Y + 12, 36, 36}, &Program_, Program_.Name.CStr());
         P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 4, B.Y + 56, B.Width - 8, 20}, Program_.Name.CStr(),
                    Theme::TextPrimary, Align::Center);
@@ -57,8 +58,22 @@ public:
             P.FocusRing(Bounds(), Theme::ControlRadius);
     }
 
-    void OnPointerEnter() override { Invalidate(); }
-    void OnPointerLeave() override { Invalidate(); }
+    void OnPointerEnter() override
+    {
+        Hover_.To(1, 110);
+        StartAnimation();
+    }
+    void OnPointerLeave() override
+    {
+        Hover_.To(0, 140);
+        StartAnimation();
+    }
+
+    bool Animate() override
+    {
+        Invalidate();
+        return Hover_.Running();
+    }
 
     void OnPointerDown(PointerEvent &E) override
     {
@@ -91,6 +106,7 @@ public:
 
 private:
     hz::apps::App Program_;
+    Transition Hover_;
 };
 
 /* A recently opened program: icon, name and description on one row. */

@@ -33,8 +33,17 @@ public:
         bool Active = AppWindow_ && g_Shell.Active == Window_ && !AppWindow_->Minimized;
         bool Open = (Kind_ == TaskKind::Start && g_Shell.Start) || (Kind_ == TaskKind::Quick && g_Shell.Quick) ||
                     (Kind_ == TaskKind::PinnedApp && AppWindow_);
+        if (Kind_ == TaskKind::App || Kind_ == TaskKind::PinnedApp) {
+            if (!ActiveInitialized_ || Active != WasActive_) {
+                ActiveInitialized_ = true;
+                WasActive_ = Active;
+                ActiveIndicator_.To(Active ? 1.0f : 0.0f, 160);
+                StartAnimation();
+            }
+        }
+        Color BaseFill = Active || Open ? Theme::ControlFill : 0;
         Color Fill = IsPressed() ? Theme::SubtleFillPressed
-                                 : (IsHovered() ? Theme::ControlFillHover : (Active || Open ? Theme::ControlFill : 0));
+                                 : MixColors(BaseFill, Theme::ControlFillHover, Hover_.Value());
         if (Fill)
             P.FillRoundRect(B, Theme::ControlRadius, Fill);
         int32_t Cy = B.Y + (B.Height - 24) / 2 - ((Kind_ == TaskKind::App || Kind_ == TaskKind::PinnedApp) ? 2 : 0);
@@ -45,10 +54,13 @@ public:
         case TaskKind::App:
         case TaskKind::PinnedApp:
             PaintAppIcon(P, Rect{B.X + (B.Width - 24) / 2, Cy, 24, 24}, Program, Title_.CStr());
-            if (Active)
-                P.FillRoundRect(B.X + (B.Width - 16) / 2.0f, (float)B.Bottom() - 4, 16, 3, 1.5f, Theme::Accent);
-            else
-                P.FillRoundRect(B.X + (B.Width - 6) / 2.0f, (float)B.Bottom() - 4, 6, 3, 1.5f, Theme::TextTertiary);
+            if (AppWindow_) {
+                float Indicator = ActiveIndicator_.Value();
+                float IndicatorWidth = 6 + Indicator * 10;
+                Color IndicatorColor = MixColors(Theme::TextTertiary, Theme::Accent, Indicator);
+                P.FillRoundRect(B.X + (B.Width - IndicatorWidth) / 2, (float)B.Bottom() - 4, IndicatorWidth, 3, 1.5f,
+                                IndicatorColor);
+            }
             break;
         case TaskKind::Quick:
             P.DrawIcon(Icon::Volume, Rect{B.X + 14, B.Y + 12, 16, 16}, Theme::TextPrimary);
@@ -57,8 +69,16 @@ public:
         }
     }
 
-    void OnPointerEnter() override { Invalidate(); }
-    void OnPointerLeave() override { Invalidate(); }
+    void OnPointerEnter() override
+    {
+        Hover_.To(1, 110);
+        StartAnimation();
+    }
+    void OnPointerLeave() override
+    {
+        Hover_.To(0, 140);
+        StartAnimation();
+    }
 
     void OnPointerDown(PointerEvent &E) override
     {
@@ -96,6 +116,12 @@ public:
         }
         if (Element *Root = GetWindow() ? GetWindow()->Content() : nullptr)
             Root->Invalidate();
+    }
+
+    bool Animate() override
+    {
+        Invalidate();
+        return Hover_.Running() || ActiveIndicator_.Running();
     }
 
 private:
@@ -136,6 +162,9 @@ private:
     HWND Window_;
     hz::String Title_;
     hz::String AppId_;
+    Transition Hover_;
+    Transition ActiveIndicator_;
+    bool ActiveInitialized_ = false, WasActive_ = false;
 };
 
 class ClockView final : public Element {

@@ -72,6 +72,10 @@ HZ_FONT *GetFont(FontRole Role)
         return HzGetFont(HZ_FONT_TITLE);
     case FontRole::Mono:
         return HzGetFont(HZ_FONT_MONO);
+    case FontRole::BodyLarge:
+        return HzGetFont(HZ_FONT_BODY_LARGE);
+    case FontRole::Display:
+        return HzGetFont(HZ_FONT_DISPLAY);
     default:
         return HzGetFont(HZ_FONT_UI);
     }

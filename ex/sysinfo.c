@@ -136,6 +136,14 @@ STATUS NtQuerySystemInformation(const uint64_t *Args)
             memcpy(Entry->MacAddress, Interface->MacAddress, sizeof(Entry->MacAddress));
             Entry->LinkUp = Interface->QueryLink(Interface) ? 1 : 0;
             Entry->Mtu = Interface->Mtu;
+            Entry->ConfigurationState =
+                __atomic_load_n(&Interface->ConfigurationState, __ATOMIC_ACQUIRE);
+            if (Entry->ConfigurationState == 2) {
+                memcpy(Entry->Ipv4Address, Interface->Ipv4Address, sizeof(Entry->Ipv4Address));
+                memcpy(Entry->SubnetMask, Interface->SubnetMask, sizeof(Entry->SubnetMask));
+                memcpy(Entry->Gateway, Interface->Gateway, sizeof(Entry->Gateway));
+                memcpy(Entry->DnsServer, Interface->DnsServer, sizeof(Entry->DnsServer));
+            }
         }
         uint32_t Fit = Length / sizeof(Entries[0]);
         Returned = Count * sizeof(Entries[0]);

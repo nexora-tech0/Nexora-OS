@@ -139,6 +139,7 @@ HZUI_OBJS := $(patsubst %,$(UOBJ)/user/lib/hzui/%.cpp.obj,painter element window
 HZUI_LIB := $(BUILD)/user/hzui.lib
 USER_PROGRAMS := hello usertest crash fstest wintest uitest welcome apptest
 UI_FONTS := third_party/inter/Inter-Regular.ttf third_party/inter/Inter-SemiBold.ttf \
+    third_party/inter/InterDisplay-SemiBold.ttf \
     third_party/jetbrains-mono/JetBrainsMono-Regular.ttf
 # Programs built from every .cpp in a directory (name:directory).
 USER_APP_DIRS := user/shell $(patsubst %/,%,$(sort $(dir $(wildcard user/apps/*/*.cpp))))

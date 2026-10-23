@@ -550,8 +550,8 @@ class LockView final : public Element {
 public:
     LockView()
     {
-        Big_ = HzLoadFont("C:\\Nexora\\Fonts\\Inter-SemiBold.ttf", 72);
-        Medium_ = HzLoadFont("C:\\Nexora\\Fonts\\Inter-Regular.ttf", 18);
+        Big_ = HzGetFont(HZ_FONT_DISPLAY);
+        Medium_ = HzGetFont(HZ_FONT_BODY_LARGE);
     }
 
     TextBox *Box = nullptr; /* the password box (a sibling over this view) */
@@ -561,8 +561,10 @@ public:
     {
         const Rect &B = Bounds();
         float T = Leave_.Value();
-        int32_t Shift = (int32_t)(T * B.Height * 0.25f);
+        int32_t Shift = (int32_t)(T * B.Height * 0.07f);
         float Fade = 1 - T;
+        P.FillVerticalGradient(Rect{B.X, B.Y, B.Width, B.Height / 2}, 0,
+                               ScaleAlpha(0x48000000, Fade), ScaleAlpha(0x00000000, Fade));
         P.FillVerticalGradient(Rect{B.X, B.Y + B.Height / 3, B.Width, B.Height - B.Height / 3}, 0,
                                ScaleAlpha(0x00000000, Fade), ScaleAlpha(0xA0000000, Fade));
         char Time[16], Date[64];

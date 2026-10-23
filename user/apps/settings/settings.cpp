@@ -435,11 +435,15 @@ void SettingsApp::AddNetwork()
     TextBlock *Link = Card->Row("Link");
     TextBlock *Mac = Card->Row("Hardware address");
     TextBlock *Mtu = Card->Row("MTU");
+    TextBlock *Ipv4 = Card->Row("IPv4 address");
+    TextBlock *Gateway = Card->Row("Gateway");
+    TextBlock *Dns = Card->Row("DNS server");
+    TextBlock *Configuration = Card->Row("Configuration");
     TextBlock *Availability = Card->Add<TextBlock>("", FontRole::Caption);
     Availability->Foreground = Theme::TextSecondary;
     Availability->Wrap = true;
     Availability->Margin = Thickness(0, 8, 0, 0);
-    List_.Push(Page{"Network", Icon::Info, P, [Device, Link, Mac, Mtu, Availability]() {
+    List_.Push(Page{"Network", Icon::Info, P, [Device, Link, Mac, Mtu, Ipv4, Gateway, Dns, Configuration, Availability]() {
                         HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION Interfaces[HZ_MAX_NETWORK_INTERFACES] = {};
                         uint32_t Returned = 0;
                         STATUS Status = NtQuerySystemInformation(HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION_CLASS,
@@ -449,6 +453,10 @@ void SettingsApp::AddNetwork()
                             Link->SetText("Unknown");
                             Mac->SetText("N/A");
                             Mtu->SetText("N/A");
+                            Ipv4->SetText("N/A");
+                            Gateway->SetText("N/A");
+                            Dns->SetText("N/A");
+                            Configuration->SetText("Unavailable");
                             Availability->SetText(
                                 hz::String::Format("Could not query adapters (0x%08X).", (uint32_t)Status).CStr());
                             return;
@@ -459,6 +467,10 @@ void SettingsApp::AddNetwork()
                             Link->SetText("Disconnected");
                             Mac->SetText("N/A");
                             Mtu->SetText("N/A");
+                            Ipv4->SetText("N/A");
+                            Gateway->SetText("N/A");
+                            Dns->SetText("N/A");
+                            Configuration->SetText("No adapter");
                             Availability->SetText("No supported network adapter was detected.");
                             return;
                         }
@@ -470,8 +482,38 @@ void SettingsApp::AddNetwork()
                                                         I.MacAddress[4], I.MacAddress[5])
                                          .CStr());
                         Mtu->SetText(hz::String::Format("%u bytes", I.Mtu).CStr());
-                        Availability->SetText(
-                            "The adapter is ready. DHCP, DNS, Internet protocols, and browser access are not available yet.");
+                        if (I.ConfigurationState == 2) {
+                            auto FormatAddress = [](const uint8_t Address[4]) {
+                                return hz::String::Format("%u.%u.%u.%u", Address[0], Address[1], Address[2], Address[3]);
+                            };
+                            Ipv4->SetText(FormatAddress(I.Ipv4Address).CStr());
+                            Gateway->SetText(FormatAddress(I.Gateway).CStr());
+                            Dns->SetText(FormatAddress(I.DnsServer).CStr());
+                        } else {
+                            Ipv4->SetText("Not assigned");
+                            Gateway->SetText("Not assigned");
+                            Dns->SetText("Not assigned");
+                        }
+                        switch (I.ConfigurationState) {
+                        case 1:
+                            Configuration->SetText("Requesting address");
+                            Availability->SetText("DHCP is requesting network configuration.");
+                            break;
+                        case 2:
+                            Configuration->SetText("Configured by DHCP");
+                            Availability->SetText(
+                                "An IPv4 address, gateway, and DNS server were assigned. DNS queries, Internet protocols, and browser access are not available yet.");
+                            break;
+                        case 3:
+                            Configuration->SetText("DHCP failed");
+                            Availability->SetText(
+                                "The adapter is connected, but DHCP did not assign an address. Check the network or DHCP server.");
+                            break;
+                        default:
+                            Configuration->SetText("Not configured");
+                            Availability->SetText("The adapter is detected. DHCP configuration has not started.");
+                            break;
+                        }
                     }});
 }
 
