@@ -1,0 +1,7 @@
+# Shell scripts, Makefiles and configs must keep LF endings even on Windows checkouts,
+# because they run inside WSL, Docker or Linux.
+* text=auto eol=lf
+*.ttf binary
+*.png binary
+*.iso binary
+*.efi binary

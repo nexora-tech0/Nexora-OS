@@ -1,0 +1,119 @@
+/*
+ * Nexora OS - include/hzbase.h
+ * Base types, status codes and compiler helpers shared by every kernel component.
+ */
+#ifndef HZBASE_H
+#define HZBASE_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+#define HZ_EXTERN_C_BEGIN extern "C" {
+#define HZ_EXTERN_C_END }
+#define HZ_NORETURN [[noreturn]]
+#else
+#define HZ_EXTERN_C_BEGIN
+#define HZ_EXTERN_C_END
+#define HZ_NORETURN _Noreturn
+#endif
+
+#define HZ_PACKED __attribute__((packed))
+#define HZ_ALIGNED(n) __attribute__((aligned(n)))
+#define HZ_UNUSED __attribute__((unused))
+#define HZ_USED __attribute__((used))
+#define HZ_SECTION(s) __attribute__((section(s)))
+#define HZ_PRINTF(fmt, args) __attribute__((format(printf, fmt, args)))
+#define HZ_LIKELY(x) __builtin_expect(!!(x), 1)
+#define HZ_UNLIKELY(x) __builtin_expect(!!(x), 0)
+
+#define HZ_ARRAYSIZE(a) (sizeof(a) / sizeof((a)[0]))
+#define HZ_MIN(a, b) ((a) < (b) ? (a) : (b))
+#define HZ_MAX(a, b) ((a) > (b) ? (a) : (b))
+#define HZ_ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((__typeof__(x))(a) - 1))
+#define HZ_ALIGN_DOWN(x, a) ((x) & ~((__typeof__(x))(a) - 1))
+
+#define KiB(x) ((uint64_t)(x) << 10)
+#define MiB(x) ((uint64_t)(x) << 20)
+#define GiB(x) ((uint64_t)(x) << 30)
+
+/* NT-style status codes: negative values are errors. */
+typedef int32_t STATUS;
+
+#define HZ_SUCCESS(s) ((STATUS)(s) >= 0)
+
+/* Values follow the NT numbering so they read the same in logs; this header is shared with
+   user mode (include/uapi/hzapi.h includes it). */
+#define STATUS_SUCCESS ((STATUS)0x00000000)
+#define STATUS_WAIT_0 ((STATUS)0x00000000)          /* + index of the satisfied object */
+#define STATUS_ABANDONED_WAIT_0 ((STATUS)0x00000080) /* + index; mutex owner exited */
+#define STATUS_ALERTED ((STATUS)0x00000101)          /* alertable wait interrupted */
+#define STATUS_TIMEOUT ((STATUS)0x00000102)
+#define STATUS_PENDING ((STATUS)0x00000103)
+#define STATUS_DATATYPE_MISALIGNMENT ((STATUS)0x80000002)
+#define STATUS_BREAKPOINT ((STATUS)0x80000003)
+#define STATUS_UNSUCCESSFUL ((STATUS)0xC0000001)
+#define STATUS_NOT_IMPLEMENTED ((STATUS)0xC0000002)
+#define STATUS_INFO_LENGTH_MISMATCH ((STATUS)0xC0000004)
+#define STATUS_ACCESS_VIOLATION ((STATUS)0xC0000005)
+#define STATUS_INVALID_HANDLE ((STATUS)0xC0000008)
+#define STATUS_INVALID_PARAMETER ((STATUS)0xC000000D)
+#define STATUS_NO_MEMORY ((STATUS)0xC0000017)
+#define STATUS_CONFLICTING_ADDRESSES ((STATUS)0xC0000018)
+#define STATUS_ILLEGAL_INSTRUCTION ((STATUS)0xC000001D)
+#define STATUS_ACCESS_DENIED ((STATUS)0xC0000022)
+#define STATUS_BUFFER_TOO_SMALL ((STATUS)0xC0000023)
+#define STATUS_OBJECT_TYPE_MISMATCH ((STATUS)0xC0000024)
+#define STATUS_OBJECT_NAME_INVALID ((STATUS)0xC0000033)
+#define STATUS_OBJECT_NAME_NOT_FOUND ((STATUS)0xC0000034)
+#define STATUS_OBJECT_NAME_COLLISION ((STATUS)0xC0000035)
+#define STATUS_OBJECT_PATH_NOT_FOUND ((STATUS)0xC000003A)
+#define STATUS_SEMAPHORE_LIMIT_EXCEEDED ((STATUS)0xC0000047)
+#define STATUS_INVALID_IMAGE_FORMAT ((STATUS)0xC000007B)
+#define STATUS_INTEGER_DIVIDE_BY_ZERO ((STATUS)0xC0000094)
+#define STATUS_PRIVILEGED_INSTRUCTION ((STATUS)0xC0000096)
+#define STATUS_DEVICE_NOT_READY ((STATUS)0xC00000A3)
+#define STATUS_NAME_TOO_LONG ((STATUS)0xC0000106)
+#define STATUS_INSUFFICIENT_RESOURCES ((STATUS)0xC000009A)
+#define STATUS_THREAD_IS_TERMINATING ((STATUS)0xC000004B)
+#define STATUS_OBJECT_PATH_SYNTAX_BAD ((STATUS)0xC000003B)
+#define STATUS_FILE_IS_A_DIRECTORY ((STATUS)0xC00000BA)
+#define STATUS_INVALID_INFO_CLASS ((STATUS)0xC0000003)
+#define STATUS_DLL_NOT_FOUND ((STATUS)0xC0000135)
+#define STATUS_INVALID_IMAGE_NOT_MZ ((STATUS)0xC000012F)
+#define STATUS_PROCESS_IS_TERMINATING ((STATUS)0xC000010A)
+#define STATUS_INVALID_PAGE_PROTECTION ((STATUS)0xC0000045)
+#define STATUS_NOT_SUPPORTED ((STATUS)0xC00000BB)
+#define STATUS_FLOAT_INVALID_OPERATION ((STATUS)0xC0000090)
+#define STATUS_STACK_OVERFLOW ((STATUS)0xC00000FD)
+#define STATUS_INVALID_SYSTEM_SERVICE ((STATUS)0xC000001C)
+#define STATUS_NOT_FOUND ((STATUS)0xC0000225)
+#define STATUS_ASSERTION_FAILURE ((STATUS)0xC0000420)
+#define STATUS_PIPE_BROKEN ((STATUS)0xC000014B)
+#define STATUS_FILE_TOO_LARGE ((STATUS)0xC0000904)
+#define STATUS_DEVICE_BUSY ((STATUS)0x80000011)
+#define STATUS_INVALID_CID ((STATUS)0xC000000B)
+/* I/O and file systems (M5) */
+#define STATUS_NO_MORE_FILES ((STATUS)0x80000006)
+#define STATUS_NO_MORE_ENTRIES ((STATUS)0x8000001A)
+#define STATUS_NO_SUCH_DEVICE ((STATUS)0xC000000E)
+#define STATUS_INVALID_DEVICE_REQUEST ((STATUS)0xC0000010)
+#define STATUS_END_OF_FILE ((STATUS)0xC0000011)
+#define STATUS_DISK_CORRUPT_ERROR ((STATUS)0xC0000032)
+#define STATUS_SHARING_VIOLATION ((STATUS)0xC0000043)
+#define STATUS_DELETE_PENDING ((STATUS)0xC0000056)
+#define STATUS_DISK_FULL ((STATUS)0xC000007F)
+#define STATUS_DEVICE_DATA_ERROR ((STATUS)0xC000009C)
+#define STATUS_MEDIA_WRITE_PROTECTED ((STATUS)0xC00000A2)
+#define STATUS_IO_TIMEOUT ((STATUS)0xC00000B5)
+#define STATUS_NOT_SAME_DEVICE ((STATUS)0xC00000D4)
+#define STATUS_DIRECTORY_NOT_EMPTY ((STATUS)0xC0000101)
+#define STATUS_FILE_CORRUPT_ERROR ((STATUS)0xC0000102)
+#define STATUS_NOT_A_DIRECTORY ((STATUS)0xC0000103)
+#define STATUS_CANNOT_DELETE ((STATUS)0xC0000121)
+#define STATUS_UNRECOGNIZED_VOLUME ((STATUS)0xC000014F)
+#define STATUS_INVALID_DEVICE_STATE ((STATUS)0xC0000184)
+
+#endif /* HZBASE_H */

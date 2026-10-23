@@ -1,0 +1,20 @@
+# Nexora OS region/clipping library (win32k). no_std, linked into the kernel as a static library.
+[package]
+name = "horizon_rgn"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+debug = true
+codegen-units = 1
+overflow-checks = true
