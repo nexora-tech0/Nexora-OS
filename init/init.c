@@ -26,6 +26,7 @@
 #include "io.h"
 #include "ke.h"
 #include "mm.h"
+#include "netif.h"
 #include "ob.h"
 #include "ps.h"
 #include "rtl.h"
@@ -319,6 +320,7 @@ static void KiPhase1Initialization(void *Context)
     /* Drivers (PCI, disks, PS/2, ramdisk), file systems and drive letters. */
     IoInitializeDrivers();
     IoReportVolumes();
+    bool NetworkOk = NetRunProtocolSelfTests();
     W32kInitialize();
     ObDumpNamespace();
     bool LanguagesOk = KiRunLanguageSelfTests();
@@ -333,7 +335,7 @@ static void KiPhase1Initialization(void *Context)
     KiStartSystemThread(KiStatusThread, KI_THREAD_PRIORITY_DEFAULT + 1, "Status");
 
     bool AllOk = BreakpointOk && ClockOk && IoApicOk && MemoryOk && SchedulerOk && LanguagesOk && ProcessesOk &&
-                 FileSystemsOk && DesktopOk;
+                 FileSystemsOk && NetworkOk && DesktopOk;
     if (DisplayOk)
         InbvSetStatusText(AllOk ? HZ_MILESTONE " complete" : HZ_MILESTONE " complete with warnings (see log)");
     DbgPrint("[HZ] BOOT %s: %s kernel finished phase 1 (%llu ms after kernel entry)\n", AllOk ? "OK" : "DEGRADED",

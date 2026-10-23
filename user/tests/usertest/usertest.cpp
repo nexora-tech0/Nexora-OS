@@ -460,6 +460,22 @@ void TestSystemInformation()
     CheckStatus(NtQuerySystemInformation(99, &Basic, sizeof(Basic), nullptr), STATUS_INVALID_INFO_CLASS,
                 "unknown information class");
 
+    HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION Interfaces[HZ_MAX_NETWORK_INTERFACES] = {};
+    CheckStatus(NtQuerySystemInformation(HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION_CLASS, Interfaces, sizeof(Interfaces),
+                                         &Returned),
+                STATUS_SUCCESS, "network interface information");
+    bool NetworkInfoValid = Returned <= sizeof(Interfaces) && Returned % sizeof(Interfaces[0]) == 0;
+    uint32_t InterfaceCount = NetworkInfoValid ? Returned / sizeof(Interfaces[0]) : 0;
+    for (uint32_t i = 0; i < InterfaceCount; i++) {
+        const HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION &Interface = Interfaces[i];
+        bool MacValid = !(Interface.MacAddress[0] & 1) &&
+                        (Interface.MacAddress[0] | Interface.MacAddress[1] | Interface.MacAddress[2] |
+                         Interface.MacAddress[3] | Interface.MacAddress[4] | Interface.MacAddress[5]);
+        NetworkInfoValid = NetworkInfoValid && Interface.Name[0] && MacValid && Interface.LinkUp <= 1 &&
+                           Interface.Mtu >= 576 && Interface.Mtu <= 1500;
+    }
+    Check(NetworkInfoValid, "network interface information has bounded, valid entries");
+
     HZ_SYSTEM_PROCESS_INFORMATION Processes[16];
     CheckStatus(NtQuerySystemInformation(HZ_SYSTEM_PROCESS_INFORMATION_CLASS, Processes, sizeof(Processes), &Returned),
                 STATUS_SUCCESS, "process list");

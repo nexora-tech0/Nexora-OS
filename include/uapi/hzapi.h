@@ -216,6 +216,8 @@ typedef struct _HZ_TEB {
 #define HZ_SYSTEM_BASIC_INFORMATION_CLASS 0u
 #define HZ_SYSTEM_PROCESS_INFORMATION_CLASS 1u
 #define HZ_SYSTEM_PROCESSOR_INFORMATION_CLASS 2u /* M11: one entry per online processor */
+#define HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION_CLASS 3u
+#define HZ_MAX_NETWORK_INTERFACES 8u
 
 typedef struct _HZ_SYSTEM_PROCESSOR_INFORMATION {
     uint32_t Number;
@@ -225,6 +227,14 @@ typedef struct _HZ_SYSTEM_PROCESSOR_INFORMATION {
     uint64_t Interrupts;
     uint64_t TlbShootdowns;  /* flush requests from other processors it handled */
 } HZ_SYSTEM_PROCESSOR_INFORMATION;
+
+typedef struct _HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION {
+    char Name[16];
+    uint8_t MacAddress[6];
+    uint8_t LinkUp;
+    uint8_t Reserved;
+    uint32_t Mtu;
+} HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION;
 
 typedef struct _HZ_SYSTEM_BASIC_INFORMATION {
     uint32_t PageSize;

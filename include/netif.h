@@ -33,6 +33,7 @@ struct _NET_INTERFACE {
 /* Called by a bus/device driver during I/O initialization. Interfaces remain registered thereafter. */
 STATUS NetRegisterInterface(NET_INTERFACE *Interface);
 NET_INTERFACE *NetGetInterfaceList(void);
+bool NetRunProtocolSelfTests(void);
 
 HZ_EXTERN_C_END
 

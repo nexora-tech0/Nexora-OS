@@ -166,6 +166,7 @@ private:
     void ChangeOffset(int Minutes);
     void AddDisplay();
     void AddStorage();
+    void AddNetwork();
     void AddTime();
     void AddAbout();
     void Show(size_t Index);
@@ -426,6 +427,54 @@ void SettingsApp::AddStorage()
                     }});
 }
 
+void SettingsApp::AddNetwork()
+{
+    StackPanel *P = NewPage("Network", "Wired network adapter status for this system.");
+    InfoCard *Card = P->Add<InfoCard>("Ethernet");
+    TextBlock *Device = Card->Row("Adapter");
+    TextBlock *Link = Card->Row("Link");
+    TextBlock *Mac = Card->Row("Hardware address");
+    TextBlock *Mtu = Card->Row("MTU");
+    TextBlock *Availability = Card->Add<TextBlock>("", FontRole::Caption);
+    Availability->Foreground = Theme::TextSecondary;
+    Availability->Wrap = true;
+    Availability->Margin = Thickness(0, 8, 0, 0);
+    List_.Push(Page{"Network", Icon::Info, P, [Device, Link, Mac, Mtu, Availability]() {
+                        HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION Interfaces[HZ_MAX_NETWORK_INTERFACES] = {};
+                        uint32_t Returned = 0;
+                        STATUS Status = NtQuerySystemInformation(HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION_CLASS,
+                                                                 Interfaces, sizeof(Interfaces), &Returned);
+                        if (!HZ_SUCCESS(Status)) {
+                            Device->SetText("Status unavailable");
+                            Link->SetText("Unknown");
+                            Mac->SetText("N/A");
+                            Mtu->SetText("N/A");
+                            Availability->SetText(
+                                hz::String::Format("Could not query adapters (0x%08X).", (uint32_t)Status).CStr());
+                            return;
+                        }
+                        uint32_t Count = Returned / sizeof(Interfaces[0]);
+                        if (!Count) {
+                            Device->SetText("No supported adapter");
+                            Link->SetText("Disconnected");
+                            Mac->SetText("N/A");
+                            Mtu->SetText("N/A");
+                            Availability->SetText("No supported network adapter was detected.");
+                            return;
+                        }
+                        const HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION &I = Interfaces[0];
+                        Device->SetText(I.Name);
+                        Link->SetText(I.LinkUp ? "Connected" : "Cable unplugged");
+                        Mac->SetText(hz::String::Format("%02X:%02X:%02X:%02X:%02X:%02X", I.MacAddress[0],
+                                                        I.MacAddress[1], I.MacAddress[2], I.MacAddress[3],
+                                                        I.MacAddress[4], I.MacAddress[5])
+                                         .CStr());
+                        Mtu->SetText(hz::String::Format("%u bytes", I.Mtu).CStr());
+                        Availability->SetText(
+                            "The adapter is ready. DHCP, DNS, Internet protocols, and browser access are not available yet.");
+                    }});
+}
+
 void SettingsApp::AddTime()
 {
     bool Live = hz::fs::IsLiveSystem();
@@ -537,7 +586,6 @@ bool SettingsApp::Create(const char *Initial)
     Brand->Margin = Thickness(8, 0, 0, 8);
     Nav_ = Left->Add<ListView>();
     Nav_->ItemHeight = 40;
-    Nav_->Height = 6 * 40 + 8;
 
     Host_ = Root->Add<ScrollViewer>();
     Host_->GridColumn = 1;
@@ -548,10 +596,12 @@ bool SettingsApp::Create(const char *Initial)
     AddAccounts();
     AddDisplay();
     AddStorage();
+    AddNetwork();
     AddTime();
     AddAbout();
 
     Nav_->SetItemCount(List_.Size());
+    Nav_->Height = (int32_t)(List_.Size() * 40 + 8);
     Nav_->PaintItem = [this](Painter &P, const Rect &R, size_t I) {
         P.DrawIcon(List_[I].Glyph, Rect{R.X + 8, R.Y + (R.Height - 18) / 2, 18, 18}, Theme::TextSecondary);
         P.TextLine(GetFont(FontRole::Body), Rect{R.X + 38, R.Y, R.Width - 38, R.Height}, List_[I].Title, Theme::TextPrimary);

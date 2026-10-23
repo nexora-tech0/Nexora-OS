@@ -5,6 +5,7 @@
 #include "ex.h"
 #include "hal.h"
 #include "mm.h"
+#include "netif.h"
 #include "ps.h"
 #include "rtl.h"
 
@@ -118,6 +119,23 @@ STATUS NtQuerySystemInformation(const uint64_t *Args)
             E->ContextSwitches = Prcb->ContextSwitches;
             E->Interrupts = Prcb->InterruptCount;
             E->TlbShootdowns = Prcb->TlbShootdowns;
+        }
+        uint32_t Fit = Length / sizeof(Entries[0]);
+        Returned = Count * sizeof(Entries[0]);
+        Status = MmCopyToUser(Buffer, Entries, HZ_MIN(Fit, Count) * sizeof(Entries[0]));
+        if (HZ_SUCCESS(Status) && Fit < Count)
+            Status = STATUS_BUFFER_TOO_SMALL;
+    } else if (Class == HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION_CLASS) {
+        HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION Entries[HZ_MAX_NETWORK_INTERFACES];
+        uint32_t Count = 0;
+        for (NET_INTERFACE *Interface = NetGetInterfaceList();
+             Interface && Count < HZ_MAX_NETWORK_INTERFACES; Interface = Interface->Next) {
+            HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION *Entry = &Entries[Count++];
+            memset(Entry, 0, sizeof(*Entry));
+            RtlStringCopy(Entry->Name, sizeof(Entry->Name), Interface->Name);
+            memcpy(Entry->MacAddress, Interface->MacAddress, sizeof(Entry->MacAddress));
+            Entry->LinkUp = Interface->QueryLink(Interface) ? 1 : 0;
+            Entry->Mtu = Interface->Mtu;
         }
         uint32_t Fit = Length / sizeof(Entries[0]);
         Returned = Count * sizeof(Entries[0]);

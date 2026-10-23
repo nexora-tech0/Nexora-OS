@@ -27,6 +27,7 @@ Processors (M11): every case boots with QEMU_SMP processors from the environment
 """
 
 import argparse
+import errno
 import os
 import re
 import shutil
@@ -173,7 +174,13 @@ CASES = {
         "entry": None,
         "disk": False,
         "qemu_args": ["-netdev", "user,id=net0", "-device", "e1000,netdev=net0"],
-        "expect": ["Network: interface eth0 registered", "E1000: ", "up link", "shell: ready"],
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("welcome: desktop windows created", ["sendkey meta_l"]),
+                    ("shell: start opened", ["type:settings", "sendkey ret"]),
+                    ("settings: started", ["sendkey down", "sendkey down", "sendkey down", "sendkey down",
+                                           "sendkey ret"])],
+        "expect": ["Network: interface eth0 registered", "E1000: ", "up link", "Network protocol self-tests: ",
+                   "passed", "usertest: ", "checks, 0 failed", "shell: ready", "settings: Network"],
         "fail": ["*** STOP", "ERROR:"],
         "timeout": 120.0,
     },
@@ -750,6 +757,9 @@ def run_case(case, timeout):
                     text = f.read()
             except FileNotFoundError:
                 text = ""
+            except OSError as e:
+                if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, getattr(errno, "ENODATA", -1)):
+                    raise
             if exited:
                 if spec.get("exit_ok") and qemu.returncode == 0 and all(m in text for m in spec["expect"]):
                     ok = True
