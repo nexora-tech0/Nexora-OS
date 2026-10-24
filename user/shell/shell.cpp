@@ -59,9 +59,13 @@ void Shell::LoadSettings()
     PasswordHash = Config.Get("PasswordHash");
     UtcOffset = hz::fs::ClampUtcOffset(Config.GetInt("UtcOffsetMinutes", 0));
     FirstBoot = Persistent && Config.GetInt("FirstBoot", 0) != 0;
-    int Saved = Config.GetInt("Wallpaper", -1);
+    int Saved = Config.GetInt("Wallpaper", 0);
     if (Saved >= 0 && Saved <= (int)HZ_MAX_WALLPAPER && (uint32_t)Saved != Wallpaper && HZ_SUCCESS(NtUserSetWallpaper((uint32_t)Saved)))
         Wallpaper = (uint32_t)Saved;
+    int SavedLock = Config.GetInt("LockWallpaper", HZ_LOCK_WALLPAPER_DEFAULT);
+    LockWallpaper = SavedLock >= 0 && SavedLock <= (int)HZ_MAX_WALLPAPER
+                        ? (uint32_t)SavedLock
+                        : HZ_LOCK_WALLPAPER_DEFAULT;
     Recent.Clear();
     hz::String List = Config.Get("Recent");
     for (const char *P = List.CStr(); *P;) {
@@ -86,9 +90,10 @@ void Shell::LoadSettings()
     }
     if (Bar)
         Bar->Rebuild();
-    HzPrint("shell: settings %s: user '%s', wallpaper %u%s%s%s", HZ_SUCCESS(Status) ? "loaded" : "not found",
-            DisplayName(), Wallpaper, HasPassword() ? ", password" : "", FirstBoot ? ", first boot" : "",
-            Persistent ? "" : " (live system: not saved)");
+    HzPrint("shell: settings %s: user '%s', wallpaper %u%s%s%s, lock wallpaper %u",
+            HZ_SUCCESS(Status) ? "loaded" : "not found", DisplayName(), Wallpaper,
+            HasPassword() ? ", password" : "", FirstBoot ? ", first boot" : "",
+            Persistent ? "" : " (live system: not saved)", LockWallpaper);
 }
 
 void Shell::SaveSettings()
@@ -96,6 +101,7 @@ void Shell::SaveSettings()
     if (!Persistent)
         return;
     Config.SetInt("Wallpaper", (int)Wallpaper);
+    Config.SetInt("LockWallpaper", (int)LockWallpaper);
     hz::String List;
     for (size_t i = 0; i < Recent.Size(); i++) {
         if (i)
@@ -139,12 +145,59 @@ void Shell::ToggleTaskbarPin(const hz::String &Id)
 
 void Shell::SetWallpaper(uint32_t Index)
 {
-    if (Index > HZ_MAX_WALLPAPER || !HZ_SUCCESS(NtUserSetWallpaper(Index)))
+    if (Index > HZ_MAX_WALLPAPER)
         return;
+    if (!Locked || !LockWallpaperApplied) {
+        STATUS Status = NtUserSetWallpaper(Index);
+        if (!HZ_SUCCESS(Status)) {
+            HzPrint("shell: cannot set desktop wallpaper %u (0x%08X)", Index, (uint32_t)Status);
+            return;
+        }
+    }
     Wallpaper = Index;
     if (Quick && Quick->Content())
         Quick->Content()->Invalidate();
     SaveSettings();
+}
+
+void Shell::SetLockWallpaper(uint32_t Index)
+{
+    if (Index > HZ_MAX_WALLPAPER)
+        return;
+    if (Locked && LockWallpaperApplied) {
+        STATUS Status = NtUserSetWallpaper(Index);
+        if (!HZ_SUCCESS(Status)) {
+            HzPrint("shell: cannot set lock-screen wallpaper %u (0x%08X)", Index, (uint32_t)Status);
+            return;
+        }
+    }
+    LockWallpaper = Index;
+    SaveSettings();
+    HzPrint("shell: lock-screen wallpaper %u", LockWallpaper);
+}
+
+bool Shell::ShowLockWallpaper()
+{
+    STATUS Status = NtUserSetWallpaper(LockWallpaper);
+    if (!HZ_SUCCESS(Status)) {
+        HzPrint("shell: cannot apply lock-screen wallpaper %u (0x%08X)", LockWallpaper, (uint32_t)Status);
+        LockWallpaperApplied = false;
+        return false;
+    }
+    LockWallpaperApplied = true;
+    return true;
+}
+
+void Shell::RestoreDesktopWallpaper()
+{
+    if (!LockWallpaperApplied)
+        return;
+    STATUS Status = NtUserSetWallpaper(Wallpaper);
+    if (!HZ_SUCCESS(Status)) {
+        HzPrint("shell: cannot restore desktop wallpaper %u (0x%08X)", Wallpaper, (uint32_t)Status);
+        return;
+    }
+    LockWallpaperApplied = false;
 }
 
 void ShowAppContextMenu(Window *Owner, const hz::apps::App &App, Point Screen, HWND Window)
@@ -316,6 +369,10 @@ void Shell::OnShellRequest(uint64_t Request, uint64_t Detail)
             return;
         SetWallpaper((uint32_t)Detail);
         HzPrint("shell: wallpaper %u (requested)", Wallpaper);
+    } else if (Request == HZ_SHELL_REQUEST_LOCK_WALLPAPER) {
+        if (Detail > HZ_MAX_WALLPAPER)
+            return;
+        SetLockWallpaper((uint32_t)Detail);
     } else if (Request == HZ_SHELL_REQUEST_SETTINGS) {
         bool WasFirstBoot = FirstBoot;
         LoadSettings();
@@ -499,7 +556,9 @@ Icon IconByName(const hz::String &Name)
         {"Sun", Icon::Sun},           {"Moon", Icon::Moon},       {"Info", Icon::Info},         {"Search", Icon::Search},
         {"Folder", Icon::Folder},     {"Document", Icon::Document}, {"Drive", Icon::Drive},     {"Prompt", Icon::Prompt},
         {"Calculator", Icon::Calculator}, {"Chart", Icon::Chart}, {"Pencil", Icon::Pencil},     {"Trash", Icon::Trash},
-        {"Save", Icon::Save},         {"Cube", Icon::Cube},         {"Open", Icon::Open},       {"Volume", Icon::Volume},     {"Power", Icon::Power},
+        {"Save", Icon::Save},         {"Cube", Icon::Cube},         {"Open", Icon::Open},       {"Volume", Icon::Volume},
+        {"Power", Icon::Power},       {"Nexora", Icon::Nexora},     {"Wifi", Icon::Wifi},       {"Network", Icon::Wifi},
+        {"Accessibility", Icon::Accessibility}, {"AppWindow", Icon::AppWindow},
     };
     for (const auto &E : Table)
         if (hz::fs::EqualNames(E.Name, Name.CStr()))
@@ -544,17 +603,17 @@ void FormatClock(char *Time, size_t TimeSize, char *Date, size_t DateSize)
     HzFormat(Date, DateSize, "%s, %u %s", hz::fs::WeekdayNames[T.Weekday], T.Day, hz::fs::MonthNames[(T.Month - 1) % 12]);
 }
 
-/* The lock screen: the time and date, a greeting and a hint. Any key or a click unlocks; with a
-   password (M11) it first shows the password box (Enter checks it, Escape hides it again). */
+/* A Nexora sign-in surface with a focused password field, account label and lock-screen controls. */
 class LockView final : public Element {
 public:
     LockView()
     {
         Big_ = HzGetFont(HZ_FONT_DISPLAY);
         Medium_ = HzGetFont(HZ_FONT_BODY_LARGE);
+        Prompting_ = g_Shell.HasPassword();
     }
 
-    TextBox *Box = nullptr; /* the password box (a sibling over this view) */
+    TextBox *Box = nullptr;
     bool Prompting() const { return Prompting_; }
 
     void Paint(Painter &P) override
@@ -563,36 +622,65 @@ public:
         float T = Leave_.Value();
         int32_t Shift = (int32_t)(T * B.Height * 0.07f);
         float Fade = 1 - T;
-        P.FillVerticalGradient(Rect{B.X, B.Y, B.Width, B.Height / 2}, 0,
-                               ScaleAlpha(0x48000000, Fade), ScaleAlpha(0x00000000, Fade));
+        uint32_t TopShade = HighContrast_ ? 0x74000000 : 0x35000000;
+        uint32_t BottomShade = HighContrast_ ? 0xB8000000 : 0x71000000;
+        P.FillVerticalGradient(Rect{B.X, B.Y, B.Width, B.Height / 2}, 0, ScaleAlpha(TopShade, Fade),
+                               ScaleAlpha(0x08000000, Fade));
         P.FillVerticalGradient(Rect{B.X, B.Y + B.Height / 3, B.Width, B.Height - B.Height / 3}, 0,
-                               ScaleAlpha(0x00000000, Fade), ScaleAlpha(0xA0000000, Fade));
+                               ScaleAlpha(0x08000000, Fade), ScaleAlpha(BottomShade, Fade));
         char Time[16], Date[64];
         FormatClock(Time, sizeof(Time), Date, sizeof(Date));
-        int32_t Y = B.Y + B.Height * 12 / 100 - Shift;
+        if (!g_Shell.HasPassword()) {
+            int32_t Y = B.Y + B.Height * 12 / 100 - Shift;
+            if (Big_) {
+                int32_t W = HzMeasureText(Big_, Time);
+                P.Text(Big_, B.X + (B.Width - W) / 2, Y + HzFontAscent(Big_), Time,
+                       ScaleAlpha(0xFFFFFFFF, Fade));
+                Y += HzFontLineHeight(Big_);
+            }
+            if (Medium_) {
+                int32_t W = HzMeasureText(Medium_, Date);
+                P.Text(Medium_, B.X + (B.Width - W) / 2, Y + HzFontAscent(Medium_), Date,
+                       ScaleAlpha(0xFFFFFFFF, Fade));
+            }
+            if (Prompting_) {
+                hz::String Hello = hz::String::Format("Hello, %s", g_Shell.DisplayName());
+                P.TextLine(GetFont(FontRole::Subtitle),
+                           Rect{B.X, B.Bottom() - 112 - Shift, B.Width, 32}, Hello.CStr(),
+                           ScaleAlpha(0xFFFFFFFF, Fade), Align::Center);
+                P.TextLine(GetFont(FontRole::Body),
+                           Rect{B.X, B.Bottom() - 72 - Shift, B.Width, 24},
+                           "Press any key or click to unlock", ScaleAlpha(Theme::TextSecondary, Fade),
+                           Align::Center);
+            }
+            return;
+        }
+        int32_t Y = B.Y + 48 - Shift;
         if (Big_) {
-            int32_t W = HzMeasureText(Big_, Time);
-            P.Text(Big_, B.X + (B.Width - W) / 2, Y + HzFontAscent(Big_), Time, ScaleAlpha(0xFFFFFFFF, Fade));
-            Y += HzFontLineHeight(Big_);
+            P.Text(Big_, B.X + 40, Y + HzFontAscent(Big_), Time, ScaleAlpha(0xFFFFFFFF, Fade));
+            Y += HzFontLineHeight(Big_) + 3;
         }
         if (Medium_) {
-            int32_t W = HzMeasureText(Medium_, Date);
-            P.Text(Medium_, B.X + (B.Width - W) / 2, Y + HzFontAscent(Medium_), Date, ScaleAlpha(0xFFFFFFFF, Fade));
+            P.Text(Medium_, B.X + 42, Y + HzFontAscent(Medium_), Date, ScaleAlpha(0xF0FFFFFF, Fade));
         }
-        if (!Prompting_)
-            return;
-        bool Password = g_Shell.HasPassword();
-        if (!g_Shell.UserName.Empty() || Password) {
-            hz::String Hello = hz::String::Format("Hello, %s", g_Shell.DisplayName());
-            P.TextLine(GetFont(FontRole::Subtitle), Rect{B.X, B.Bottom() - (Password ? 190 : 112) - Shift, B.Width, 32},
-                       Hello.CStr(), ScaleAlpha(0xFFFFFFFF, Fade), Align::Center);
+        int32_t CenterX = B.X + B.Width / 2;
+        int32_t CenterY = B.Y + B.Height * 46 / 100 - Shift;
+        P.FillRoundRect(Rect{CenterX - 190, CenterY - 162, 380, 320}, 14, 0x62424E60);
+        P.StrokeRoundRect(Rect{CenterX - 190, CenterY - 162, 380, 320}, 14, 1, 0x50FFFFFF);
+        P.FillCircle((float)CenterX, (float)CenterY - 105, 40, ScaleAlpha(0xB82A3544, Fade));
+        P.DrawIcon(Icon::Person, Rect{CenterX - 25, CenterY - 130, 50, 50}, ScaleAlpha(0xFFFFFFFF, Fade), 1.8f);
+        P.TextLine(GetFont(FontRole::Subtitle), Rect{B.X + 16, CenterY - 58, B.Width - 32, 34},
+                   g_Shell.DisplayName(), ScaleAlpha(0xFFFFFFFF, Fade), Align::Center);
+        const char *Hint = Wrong_ ? "That password did not match. Try again."
+                           : Prompting_ ? "Enter your password to sign in"
+                                        : "Press any key or click to continue";
+        P.TextLine(GetFont(FontRole::Body), Rect{B.X + 16, CenterY - 22, B.Width - 32, 24}, Hint,
+                   ScaleAlpha(Wrong_ ? 0xFFFFA18F : 0xE8FFFFFF, Fade), Align::Center);
+        if (!Prompting_) {
+            P.FillRoundRect(Rect{CenterX - 58, CenterY + 18, 116, 34}, 5, ScaleAlpha(0xCCFFFFFF, Fade));
+            P.TextLine(GetFont(FontRole::BodyStrong), Rect{CenterX - 58, CenterY + 18, 116, 34},
+                       "Continue", ScaleAlpha(0xFF18202A, Fade), Align::Center);
         }
-        const char *Hint = !Password    ? "Press any key or click to unlock"
-                           : !Prompting_ ? "Press any key or click to sign in"
-                           : Wrong_      ? "The password is incorrect. Try again."
-                                         : "Type your password and press Enter";
-        P.TextLine(GetFont(FontRole::Body), Rect{B.X, B.Bottom() - 72 - Shift, B.Width, 24}, Hint,
-                   ScaleAlpha(Wrong_ && Prompting_ ? 0xFFFF9A8A : Theme::TextSecondary, Fade), Align::Center);
     }
 
     void OnPointerDown(PointerEvent &E) override
@@ -649,6 +737,12 @@ public:
         Invalidate();
     }
 
+    void ToggleHighContrast()
+    {
+        HighContrast_ = !HighContrast_;
+        Invalidate();
+    }
+
     bool Animate() override
     {
         Invalidate();
@@ -663,7 +757,124 @@ private:
     Transition Leave_;
     bool Leaving_ = false;
     bool Prompting_ = false, Accepted_ = false, Wrong_ = false;
+    bool HighContrast_ = false;
     uint32_t Failures_ = 0;
+};
+
+enum class LockControl : uint8_t { Network, Accessibility, Power };
+
+class LockControlButton final : public Element {
+public:
+    LockControlButton(Icon Glyph, const char *Label, LockControl Action, LockView *View)
+        : Glyph_(Glyph), Action_(Action), View_(View)
+    {
+        Width = Height = 48;
+        Focusable = true;
+        ToolTip = Label;
+    }
+
+    void Paint(Painter &P) override
+    {
+        Color Fill = IsPressed() ? 0x806A7A8E : IsHovered() ? 0x70586779 : 0x50374455;
+        P.FillRoundRect(Bounds(), 7, Fill);
+        P.StrokeRoundRect(Bounds(), 7, 1, 0x70FFFFFF);
+        P.DrawIcon(Glyph_, Rect{Bounds().X + 15, Bounds().Y + 15, 18, 18}, 0xFFFFFFFF, 1.45f);
+    }
+
+    void PaintOverlay(Painter &P) override
+    {
+        if (ShowsFocusRing())
+            P.FocusRing(Bounds(), 7);
+    }
+
+    void OnPointerDown(PointerEvent &E) override
+    {
+        if (E.Button == HZ_MOUSE_LEFT)
+            E.Handled = true;
+    }
+
+    void OnPointerUp(PointerEvent &E) override
+    {
+        if (E.Button == HZ_MOUSE_LEFT && Bounds().Contains(E.Position))
+            Activate();
+    }
+
+    void OnKeyDown(KeyEvent &E) override
+    {
+        if (E.Key == HZ_VK_RETURN || E.Key == HZ_VK_SPACE) {
+            E.Handled = true;
+            Activate();
+        }
+    }
+
+private:
+    void Activate()
+    {
+        if (Action_ == LockControl::Accessibility) {
+            View_->ToggleHighContrast();
+            return;
+        }
+        if (Action_ == LockControl::Power) {
+            MessageBox(GetWindow(), "Power", "Choose a power option.", "Shut down|Restart|Cancel", [](int Choice) {
+                if (Choice == 0)
+                    g_Shell.RequestShutdown(HZ_SHUTDOWN_POWER_OFF);
+                else if (Choice == 1)
+                    g_Shell.RequestShutdown(HZ_SHUTDOWN_REBOOT);
+            });
+            return;
+        }
+
+        HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION Interfaces[HZ_MAX_NETWORK_INTERFACES] = {};
+        uint32_t Returned = 0;
+        STATUS Status = NtQuerySystemInformation(HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION_CLASS,
+                                                 Interfaces, sizeof(Interfaces), &Returned);
+        hz::String Text;
+        if (!HZ_SUCCESS(Status)) {
+            Text = hz::String::Format("Network status is unavailable (0x%08X).", (uint32_t)Status);
+        } else if (Returned > sizeof(Interfaces) || Returned % sizeof(Interfaces[0])) {
+            Text = "The network status response was malformed.";
+        } else {
+            size_t Count = Returned / sizeof(Interfaces[0]);
+            if (!Count)
+                Text = "No network adapters were detected.";
+            for (size_t i = 0; i < Count; i++) {
+                const HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION &Interface = Interfaces[i];
+                if (!Text.Empty())
+                    Text.Append("\n");
+                Text.Append(hz::String::Format("%s: %s%s", Interface.Name,
+                                               Interface.LinkUp ? "connected" : "disconnected",
+                                               Interface.ConfigurationState == 2 ? " (configured)" : "")
+                               .CStr());
+            }
+        }
+        MessageBox(GetWindow(), "Network", Text.CStr(), "Close", nullptr);
+    }
+
+    Icon Glyph_;
+    LockControl Action_;
+    LockView *View_;
+};
+
+class LockAccountChip final : public Element {
+public:
+    LockAccountChip()
+    {
+        Width = 220;
+        Height = 52;
+        HitTestVisible = false;
+    }
+
+    void Paint(Painter &P) override
+    {
+        const Rect &B = Bounds();
+        P.FillRoundRect(B, 7, 0x52374455);
+        P.FillCircle(B.X + 26.0f, B.Y + 26.0f, 17, 0xB82A3544);
+        P.DrawIcon(Icon::Person, Rect{B.X + 15, B.Y + 15, 22, 22}, 0xFFFFFFFF, 1.4f);
+        P.TextLine(GetFont(FontRole::BodyStrong), Rect{B.X + 54, B.Y + 7, B.Width - 62, 20},
+                   g_Shell.DisplayName(), Theme::TextPrimary);
+        P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 54, B.Y + 27, B.Width - 62, 17},
+                   "Active account", Theme::TextSecondary);
+    }
 };
 
 }  // namespace
@@ -672,20 +883,38 @@ Window *CreateLockScreen()
 {
     const Rect &S = g_Shell.Screen;
     Window *Lock = new Window("Lock", S.Width, S.Height,
-                              HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_TRANSPARENT | HZ_WS_NOFRAME | HZ_WS_VISIBLE);
+                              HZ_WS_POPUP | HZ_WS_TOPMOST |
+                                  (g_Shell.HasPassword() ? HZ_WS_MICA : HZ_WS_TRANSPARENT) |
+                                  HZ_WS_NOFRAME | HZ_WS_VISIBLE);
     Lock->Background = 0x00000000;
     Grid *Root = new Grid();
     LockView *View = Root->Add<LockView>();
     TextBox *Box = Root->Add<TextBox>("Password");
     Box->Password = true;
     Box->MaxLength = 64;
-    Box->Width = 300;
+    Box->Width = 320;
+    Box->Height = 42;
     Box->HorizontalAlignment = Align::Center;
-    Box->VerticalAlignment = Align::End;
-    Box->Margin = Thickness(0, 0, 0, 120);
-    Box->SetVisible(false);
+    Box->VerticalAlignment = Align::Center;
+    Box->Margin = Thickness(0, 54, 0, 0);
+    Box->SetVisible(View->Prompting());
     Box->OnSubmit = [View](const hz::String &Typed) { View->Submit(Typed); };
     View->Box = Box;
+    LockAccountChip *Account = Root->Add<LockAccountChip>();
+    Account->SetVisible(g_Shell.HasPassword());
+    Account->HorizontalAlignment = Align::Start;
+    Account->VerticalAlignment = Align::End;
+    Account->Margin = Thickness(24, 0, 0, 22);
+    StackPanel *Controls = Root->Add<StackPanel>(Orientation::Horizontal, 8);
+    Controls->Width = 160;
+    Controls->Height = 48;
+    Controls->HorizontalAlignment = Align::End;
+    Controls->VerticalAlignment = Align::End;
+    Controls->Margin = Thickness(0, 0, 24, 24);
+    Controls->Add<LockControlButton>(Icon::Wifi, "Network status", LockControl::Network, View);
+    Controls->Add<LockControlButton>(Icon::Accessibility, "High contrast", LockControl::Accessibility, View);
+    Controls->Add<LockControlButton>(Icon::Power, "Power options", LockControl::Power, View);
+    Controls->SetVisible(g_Shell.HasPassword());
     Lock->SetContent(Root);
     Lock->OnUnhandledKey = [View](KeyEvent &E) {
         E.Handled = true;
@@ -700,6 +929,8 @@ Window *CreateLockScreen()
         delete Lock;
         return nullptr;
     }
+    if (View->Prompting())
+        Lock->SetFocus(Box);
     Lock->SetTimer(1000, [View]() { View->Invalidate(); });
     return Lock;
 }
@@ -708,6 +939,7 @@ void Shell::Unlock()
 {
     if (!Locked)
         return;
+    RestoreDesktopWallpaper();
     Locked = false;
     if (Lock) {
         Window *L = Lock;
@@ -810,8 +1042,10 @@ void Shell::LockNow()
         return;
     CloseFlyouts();
     Locked = true;
+    ShowLockWallpaper();
     Lock = CreateLockScreen();
     if (!Lock) {
+        RestoreDesktopWallpaper();
         Locked = false;
         return;
     }
@@ -861,6 +1095,7 @@ extern "C" int main(int argc, char **argv)
         g_Shell.Locked = false;
         if (g_Shell.HasPassword()) { /* ending the shell must not get past the password */
             g_Shell.Locked = true;
+            g_Shell.ShowLockWallpaper();
             g_Shell.Lock = CreateLockScreen();
             HzPrint("shell: lock screen shown");
         }
@@ -871,6 +1106,8 @@ extern "C" int main(int argc, char **argv)
         HzPrint("shell: ready");
         return RunMessageLoop();
     }
+    if (!g_Shell.FirstBoot)
+        g_Shell.ShowLockWallpaper();
     g_Shell.Lock = g_Shell.FirstBoot ? nullptr : CreateLockScreen();
     if (g_Shell.Lock)
         HzPrint("shell: lock screen shown");

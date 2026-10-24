@@ -34,8 +34,11 @@ block-building game.
   drawn in user mode with shared Inter body, large-body, display and technical-text font roles,
   cached font files and fallback faces; the shell with a timezone-aware lock-screen clock
   (optionally with a password), animated taskbar hover and active-window feedback, Start with
-  search, quick settings, Alt+Tab, a clipboard, and consistent themed right-click menus. Wallpapers in
-  `assets/Wallpapers` are packaged with the system and one is selected at each boot.
+  search, quick settings, Alt+Tab, a clipboard, and consistent themed right-click menus. The
+  supplied photographs in `assets/Wallpapers` are packaged with the system; Settings can choose
+  independent desktop and lock-screen images. Accounts with a password get a separate sign-in
+  layout with network, accessibility and power controls; password-free sessions keep the existing
+  clock-first lock screen.
   App shortcuts can be pinned independently of Start's app tiles, and those taskbar pins are
   saved in user settings.
 - **Programs:** Notepad (word wrap, find, undo), Files (copy, cut, paste and delete of whole

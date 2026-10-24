@@ -137,6 +137,18 @@ inline uint32_t Blend(uint32_t Below, uint32_t Above, uint32_t Alpha)
     return (R << 16) | (G << 8) | B;
 }
 
+bool CmpLoadWallpaperBitmap(const char *Path, uint32_t *Out, uint32_t *Random);
+
+bool CmpLoadWallpaper(uint32_t Index, uint32_t *Out)
+{
+    char Path[128];
+    RtlFormatString(Path, sizeof(Path), "\\??\\C:\\Nexora\\Wallpapers\\wallpaper-%03u.bmp", Index);
+    uint32_t Random = Cmp.BootWallpaperSeed ^ (Index + 1u);
+    if (!Random)
+        Random = 0xA341316Cu;
+    return CmpLoadWallpaperBitmap(Path, Out, &Random);
+}
+
 inline uint32_t Darken(uint32_t Pixel, uint32_t Alpha)
 {
     return Blend(Pixel, 0, Alpha);
@@ -185,10 +197,7 @@ uint32_t AddColor(uint32_t Base, uint32_t Add, uint32_t Amount)
     return (HZ_MIN(R, 255u) << 16) | (HZ_MIN(G, 255u) << 8) | HZ_MIN(B, 255u);
 }
 
-/*
- * Nexora OS wallpapers: a three-colour sky, a glow, and layered curved bands. Procedural and
- * resolution-free; the variants differ in palette only (0 "Nexora blue", 1 "Blue hour", 2 "Dawn").
- */
+/* Fallback palettes used only when the bundled image catalog cannot be loaded at boot. */
 struct CMP_PALETTE {
     uint32_t SkyTop, SkyMiddle, SkyBottom, Glow, Band;
     uint32_t WaveTop, WaveMiddle, WaveBottom;
@@ -318,6 +327,8 @@ const CMP_PALETTE CmpPalettes[HZ_MAX_WALLPAPER + 1] = {
     {0x071A3D, 0x164B8C, 0x09255A, 0x74C8FF, 0xD2E9FF, 0x2B65A7, 0x5C91C3, 0xAFCBE4},
     {0x050D22, 0x0F2A52, 0x1C4E74, 0x4CC8FF, 0xA8DCFF, 0x123B67, 0x23608D, 0x72AFCF},
     {0x161028, 0x4E2E58, 0x9A5466, 0xFFC27A, 0xFFDCC0, 0x633F65, 0xA76579, 0xE6A981},
+    {0x10241D, 0x285C43, 0x102C35, 0x85D7A6, 0xD9F0DC, 0x316E53, 0x639C73, 0xAAC9AC},
+    {0x171F2D, 0x40566E, 0x17263D, 0xF0B9A2, 0xF6E0D6, 0x38516A, 0x73889B, 0xBBC6CD},
 };
 
 void BuildWallpaper(uint32_t *Out, uint32_t Index)
@@ -795,8 +806,10 @@ STATUS CmpSetWallpaper(uint32_t Index)
             BuildWallpaper(Wallpaper, 0);
             Index = 0;
         }
-    } else {
-        BuildWallpaper(Wallpaper, Index);
+    } else if (!CmpLoadWallpaper(Index, Wallpaper)) {
+        ExFreePoolWithTag(Wallpaper, CMP_TAG);
+        ExFreePoolWithTag(Mica, CMP_TAG);
+        return STATUS_NOT_FOUND;
     }
     BuildMica(Wallpaper, Mica);
     KeWaitForSingleObject(&Cmp.ComposeLock, NULL); /* not in the middle of a frame */

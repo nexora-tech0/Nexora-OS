@@ -304,23 +304,25 @@ private:
     Icon Glyph_;
 };
 
-/* The kernel's wallpaper palettes (win32k/compose.cpp), for the previews. */
+/* Compact fallback tints for the quick-settings wallpaper picker. */
 struct Swatch {
     Color Top, Middle, Bottom, Glow;
     const char *Name;
 };
 const Swatch kSwatches[HZ_MAX_WALLPAPER + 1] = {
-    {0xFF071A3D, 0xFF164B8C, 0xFF09255A, 0xFF74C8FF, "Nexora blue"},
-    {0xFF050D22, 0xFF0F2A52, 0xFF1C4E74, 0xFF4CC8FF, "Blue hour"},
-    {0xFF161028, 0xFF4E2E58, 0xFF9A5466, 0xFFFFC27A, "Dawn"},
+    {0xFF153D2C, 0xFF285840, 0xFF102A36, 0xFF85D7A6, "Mountain falls"},
+    {0xFF24455D, 0xFF356D89, 0xFF162B42, 0xFF8DD2E8, "Coastal cliffs"},
+    {0xFF272638, 0xFF56516A, 0xFF242C42, 0xFFE4A68A, "City at dusk"},
+    {0xFF344332, 0xFF65744A, 0xFF273841, 0xFFD7BA79, "Red fox"},
+    {0xFF25334A, 0xFF56677B, 0xFF28394B, 0xFFE9C4B0, "Coastal lock screen"},
 };
 
 class WallpaperSwatch final : public Element {
 public:
     explicit WallpaperSwatch(uint32_t Index) : Index_(Index)
     {
-        Width = 96;
-        Height = 56;
+        Width = 56;
+        Height = 48;
         Focusable = true;
         ToolTip = kSwatches[Index].Name;
     }

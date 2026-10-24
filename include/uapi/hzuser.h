@@ -163,9 +163,11 @@ typedef struct _HZ_MSG {
 #define HZ_SHELL_REQUEST_SETTINGS 2u  /* C:\Nexora\Settings\shell.ini changed: read it again (M10) */
 #define HZ_SHELL_REQUEST_LOCK 3u      /* M11: show the lock screen */
 #define HZ_SHELL_REQUEST_SHUTDOWN 4u  /* M11: close the programs, then LParam = HZ_SHUTDOWN_* */
+#define HZ_SHELL_REQUEST_LOCK_WALLPAPER 5u /* LParam = independent lock-screen wallpaper index */
 
-#define HZ_MAX_WALLPAPER 2u          /* SetWallpaper: 0 dusk, 1 blue hour, 2 dawn */
+#define HZ_MAX_WALLPAPER 4u          /* The five bundled Nexora wallpaper images, indexed 0..4 */
 #define HZ_WALLPAPER_AUTO (HZ_MAX_WALLPAPER + 1u) /* automatic boot wallpaper; display info only */
+#define HZ_LOCK_WALLPAPER_DEFAULT HZ_MAX_WALLPAPER
 #define HZ_MAX_CLIPBOARD 65536u      /* bytes of clipboard text */
 
 /* HZ_WM_SIZE WParam */

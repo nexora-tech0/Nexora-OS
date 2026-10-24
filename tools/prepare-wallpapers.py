@@ -8,8 +8,9 @@ from PIL import Image, ImageOps
 
 
 SUPPORTED = {".bmp", ".jpeg", ".jpg", ".png", ".webp"}
-MAX_WALLPAPERS = 256
+MAX_WALLPAPERS = 5
 MAX_SIZE = (1920, 1280)
+PREVIEW_SIZE = (256, 144)
 
 
 def main() -> int:
@@ -25,7 +26,7 @@ def main() -> int:
 
     images = sorted(
         (path for path in source.iterdir() if path.is_file() and path.suffix.lower() in SUPPORTED),
-        key=lambda path: path.name.casefold(),
+        key=lambda path: ("lock screen" in path.stem.casefold(), path.name.casefold()),
     )
     if len(images) > MAX_WALLPAPERS:
         print(f"too many wallpapers: {len(images)} (maximum {MAX_WALLPAPERS})", file=sys.stderr)
@@ -37,6 +38,8 @@ def main() -> int:
                 image = ImageOps.exif_transpose(image).convert("RGB")
                 image.thumbnail(MAX_SIZE, Image.Resampling.LANCZOS)
                 image.save(output / f"wallpaper-{index:03}.bmp", format="BMP")
+                preview = ImageOps.fit(image, PREVIEW_SIZE, method=Image.Resampling.LANCZOS)
+                preview.save(output / f"wallpaper-preview-{index:03}.bmp", format="BMP")
         except (OSError, ValueError) as error:
             print(f"cannot prepare wallpaper {path}: {error}", file=sys.stderr)
             return 1

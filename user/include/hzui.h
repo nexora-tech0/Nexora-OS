@@ -136,7 +136,7 @@ enum class Icon : uint8_t {
     None, Check, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Close, Add, Remove, Search, More,
     Info, Clock, Home, Settings, Star, Power, Volume, Sun, Moon, Leaf, Plane,
     Folder, Document, Drive, Prompt, Calculator, Chart, ArrowUp, Pencil, Trash, Save, Open, Refresh,
-    Cut, Copy, Paste, Person, Cube, Nexora
+    Cut, Copy, Paste, Person, Cube, Wifi, Accessibility, AppWindow, Nexora
 };
 
 /* Draws into a canvas in its coordinates, through a stack of clip rectangles. Shapes are
@@ -153,6 +153,7 @@ public:
 
     void Clear(const Rect &R, Color C);       /* replaces pixels (backgrounds) */
     void FillRect(const Rect &R, Color C);
+    void DrawBitmap(const Rect &Destination, const uint32_t *Pixels, int32_t Width, int32_t Height);
     void FillRoundRect(float X, float Y, float W, float H, float Radius, Color C);
     void FillRoundRect(const Rect &R, float Radius, Color C) { FillRoundRect((float)R.X, (float)R.Y, (float)R.Width, (float)R.Height, Radius, C); }
     /* A stroke of Thickness inside the edge. */

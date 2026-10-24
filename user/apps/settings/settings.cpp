@@ -24,17 +24,74 @@ using namespace hzui;
 
 namespace {
 
-/* The kernel's wallpaper palettes (win32k/compose.cpp), for the previews. */
+/* Fallback tints used only if a packaged wallpaper preview cannot be read. */
 struct Swatch {
     Color Top, Middle, Bottom, Glow;
     const char *Name;
     const char *Description;
 };
 const Swatch kSwatches[HZ_MAX_WALLPAPER + 1] = {
-    {0xFF0B0E26, 0xFF261A4A, 0xFF4A2448, 0xFFFF8A4C, "Nexora dusk", "Violet sky, the sun setting"},
-    {0xFF050D22, 0xFF0F2A52, 0xFF1C4E74, 0xFF4CC8FF, "Blue hour", "Deep blue, a cool glow"},
-    {0xFF161028, 0xFF4E2E58, 0xFF9A5466, 0xFFFFC27A, "Dawn", "Warm rose, the sun rising"},
+    {0xFF153D2C, 0xFF285840, 0xFF102A36, 0xFF85D7A6, "Mountain falls", "Waterfall beneath a mountain"},
+    {0xFF24455D, 0xFF356D89, 0xFF162B42, 0xFF8DD2E8, "Coastal cliffs", "Cliffs at sunset"},
+    {0xFF272638, 0xFF56516A, 0xFF242C42, 0xFFE4A68A, "City at dusk", "City lights at twilight"},
+    {0xFF344332, 0xFF65744A, 0xFF273841, 0xFFD7BA79, "Red fox", "A red fox in winter"},
+    {0xFF25334A, 0xFF56677B, 0xFF28394B, 0xFFE9C4B0, "Coastal lock screen", "Purple mountain coast"},
 };
+
+uint16_t ReadLe16(const uint8_t *Data)
+{
+    return (uint16_t)(Data[0] | ((uint16_t)Data[1] << 8));
+}
+
+uint32_t ReadLe32(const uint8_t *Data)
+{
+    return (uint32_t)Data[0] | ((uint32_t)Data[1] << 8) | ((uint32_t)Data[2] << 16) |
+           ((uint32_t)Data[3] << 24);
+}
+
+uint32_t *LoadWallpaperPreview(uint32_t Index, int32_t &Width, int32_t &Height)
+{
+    hz::String Path = hz::String::Format("C:\\Nexora\\Wallpapers\\wallpaper-preview-%03u.bmp", Index);
+    hz::String File;
+    STATUS Status = hz::fs::ReadAll(Path, File, 256 * 1024);
+    if (!HZ_SUCCESS(Status)) {
+        HzPrint("settings: cannot read wallpaper preview %u (0x%08X)", Index, (uint32_t)Status);
+        return nullptr;
+    }
+    const uint8_t *Data = (const uint8_t *)File.CStr();
+    if (File.Length() < 54 || Data[0] != 'B' || Data[1] != 'M')
+        return nullptr;
+    uint32_t PixelOffset = ReadLe32(Data + 10), HeaderSize = ReadLe32(Data + 14);
+    int32_t SourceWidth = (int32_t)ReadLe32(Data + 18), SignedHeight = (int32_t)ReadLe32(Data + 22);
+    uint16_t Planes = ReadLe16(Data + 26), BitsPerPixel = ReadLe16(Data + 28);
+    uint32_t Compression = ReadLe32(Data + 30);
+    if (HeaderSize < 40 || (uint64_t)HeaderSize + 14 > File.Length() || PixelOffset < HeaderSize + 14 ||
+        PixelOffset > File.Length() || SourceWidth <= 0 || SourceWidth > 512 || SignedHeight == INT32_MIN ||
+        SignedHeight == 0 || Planes != 1 || BitsPerPixel != 24 || Compression != 0)
+        return nullptr;
+    int32_t SourceHeight = SignedHeight < 0 ? -SignedHeight : SignedHeight;
+    if (SourceHeight > 512)
+        return nullptr;
+    uint64_t RowBytes = ((uint64_t)SourceWidth * 3 + 3) & ~3ull;
+    if (RowBytes * (uint32_t)SourceHeight > File.Length() - PixelOffset)
+        return nullptr;
+    uint64_t PixelCount = (uint64_t)SourceWidth * SourceHeight;
+    uint32_t *Pixels = (uint32_t *)malloc((size_t)PixelCount * sizeof(uint32_t));
+    if (!Pixels)
+        return nullptr;
+    for (int32_t Y = 0; Y < SourceHeight; Y++) {
+        int32_t SourceY = SignedHeight < 0 ? Y : SourceHeight - 1 - Y;
+        const uint8_t *Row = Data + PixelOffset + RowBytes * (uint32_t)SourceY;
+        for (int32_t X = 0; X < SourceWidth; X++) {
+            const uint8_t *Pixel = Row + (size_t)X * 3;
+            Pixels[(size_t)Y * SourceWidth + X] =
+                0xFF000000u | ((uint32_t)Pixel[2] << 16) | ((uint32_t)Pixel[1] << 8) | Pixel[0];
+        }
+    }
+    Width = SourceWidth;
+    Height = SourceHeight;
+    return Pixels;
+}
 
 bool CurrentWallpaper(uint32_t &Wallpaper)
 {
@@ -47,41 +104,61 @@ bool CurrentWallpaper(uint32_t &Wallpaper)
     return true;
 }
 
+uint32_t CurrentLockWallpaper()
+{
+    hz::fs::Settings S;
+    STATUS Status = S.Load(hz::fs::SettingsPath("shell"));
+    if (!HZ_SUCCESS(Status) && Status != STATUS_NOT_FOUND)
+        HzPrint("settings: could not read lock-screen wallpaper setting (0x%08X)", (uint32_t)Status);
+    int Saved = S.GetInt("LockWallpaper", HZ_LOCK_WALLPAPER_DEFAULT);
+    return Saved >= 0 && Saved <= (int)HZ_MAX_WALLPAPER ? (uint32_t)Saved : HZ_LOCK_WALLPAPER_DEFAULT;
+}
+
 class WallpaperCard final : public Element {
 public:
-    WallpaperCard(uint32_t Index, uint32_t *Selected, TextBlock *Status)
-        : Index_(Index), Selected_(Selected), Status_(Status)
+    WallpaperCard(uint32_t Index, uint32_t *Desktop, uint32_t *Lock, bool *LockTarget, TextBlock *Status)
+        : Index_(Index), Desktop_(Desktop), Lock_(Lock), LockTarget_(LockTarget), Status_(Status)
     {
-        Height = 150;
+        Height = 142;
         Focusable = true;
         ToolTip = kSwatches[Index].Description;
+        Preview_ = LoadWallpaperPreview(Index, PreviewWidth_, PreviewHeight_);
     }
+
+    ~WallpaperCard() override { free(Preview_); }
 
     void Paint(Painter &P) override
     {
         const Rect &B = Bounds();
         const Swatch &S = kSwatches[Index_];
-        Rect Image{B.X + 4, B.Y + 4, B.Width - 8, 112 - 8};
-        P.PushClip(Image);
-        P.FillVerticalGradient(Rect{Image.X, Image.Y, Image.Width, Image.Height * 6 / 10}, 0, S.Top, S.Middle);
-        P.FillVerticalGradient(Rect{Image.X, Image.Y + Image.Height * 6 / 10, Image.Width, Image.Height - Image.Height * 6 / 10},
-                               0, S.Middle, S.Bottom);
-        P.FillCircle(Image.X + Image.Width / 2.0f, (float)Image.Bottom() + 16, 44, ScaleAlpha(S.Glow, 0.55f));
-        P.FillRect(Rect{Image.X, Image.Bottom() - 1, Image.Width, 1}, ScaleAlpha(S.Glow, 0.8f));
-        P.PopClip();
-        bool Chosen = *Selected_ == Index_;
+        Rect Image{B.X + 4, B.Y + 4, B.Width - 8, 104};
+        if (Preview_) {
+            P.DrawBitmap(Image, Preview_, PreviewWidth_, PreviewHeight_);
+        } else {
+            P.PushClip(Image);
+            P.FillVerticalGradient(Rect{Image.X, Image.Y, Image.Width, Image.Height * 6 / 10}, 0, S.Top, S.Middle);
+            P.FillVerticalGradient(Rect{Image.X, Image.Y + Image.Height * 6 / 10, Image.Width,
+                                        Image.Height - Image.Height * 6 / 10},
+                                   0, S.Middle, S.Bottom);
+            P.FillCircle(Image.X + Image.Width / 2.0f, (float)Image.Bottom() + 16, 44,
+                         ScaleAlpha(S.Glow, 0.55f));
+            P.PopClip();
+        }
+        uint32_t Selected = *LockTarget_ ? *Lock_ : *Desktop_;
+        bool Chosen = Selected == Index_;
         if (Chosen)
-            P.StrokeRoundRect(Rect{B.X, B.Y, B.Width, 112}, 8, 3, Theme::Accent);
+            P.StrokeRoundRect(Rect{B.X, B.Y, B.Width, 108}, 8, 3, Theme::Accent);
         else if (IsHovered())
-            P.StrokeRoundRect(Rect{B.X, B.Y, B.Width, 112}, 8, 1, Theme::ControlStrongStroke);
-        P.TextLine(GetFont(Chosen ? FontRole::BodyStrong : FontRole::Body), Rect{B.X + 4, B.Y + 118, B.Width - 8, 24}, S.Name,
+            P.StrokeRoundRect(Rect{B.X, B.Y, B.Width, 108}, 8, 1, Theme::ControlStrongStroke);
+        P.TextLine(GetFont(Chosen ? FontRole::BodyStrong : FontRole::Body),
+                   Rect{B.X + 4, B.Y + 112, B.Width - 8, 24}, S.Name,
                    Theme::TextPrimary);
     }
 
     void PaintOverlay(Painter &P) override
     {
         if (ShowsFocusRing())
-            P.FocusRing(Rect{Bounds().X, Bounds().Y, Bounds().Width, 112}, 8);
+            P.FocusRing(Rect{Bounds().X, Bounds().Y, Bounds().Width, 108}, 8);
     }
 
     void OnPointerEnter() override { Invalidate(); }
@@ -117,25 +194,35 @@ public:
             Status_->SetText("The shell is not available to change the wallpaper.");
             return;
         }
-        STATUS Status = NtUserPostMessage(Shell, HZ_WM_SHELLREQUEST, HZ_SHELL_REQUEST_WALLPAPER, Index_);
+        uint32_t Request = *LockTarget_ ? HZ_SHELL_REQUEST_LOCK_WALLPAPER : HZ_SHELL_REQUEST_WALLPAPER;
+        STATUS Status = NtUserPostMessage(Shell, HZ_WM_SHELLREQUEST, Request, Index_);
         if (!HZ_SUCCESS(Status)) {
             HzPrint("settings: wallpaper request failed (0x%08X)", (uint32_t)Status);
             Status_->Foreground = Theme::Accent;
             Status_->SetText(hz::String::Format("The wallpaper request failed (0x%08X).", (uint32_t)Status).CStr());
             return;
         }
-        *Selected_ = Index_;
-        HzPrint("settings: wallpaper %u requested", Index_);
+        if (*LockTarget_)
+            *Lock_ = Index_;
+        else
+            *Desktop_ = Index_;
+        if (*LockTarget_)
+            HzPrint("settings: lock-screen wallpaper %u requested", Index_);
+        else
+            HzPrint("settings: wallpaper %u requested", Index_);
         Status_->Foreground = Theme::TextSecondary;
-        Status_->SetText("Wallpaper change requested.");
+        Status_->SetText(*LockTarget_ ? "Lock-screen wallpaper saved." : "Desktop wallpaper change requested.");
         if (Parent())
             Parent()->Invalidate();
     }
 
 private:
     uint32_t Index_;
-    uint32_t *Selected_;
+    uint32_t *Desktop_, *Lock_;
+    bool *LockTarget_;
     TextBlock *Status_;
+    uint32_t *Preview_ = nullptr;
+    int32_t PreviewWidth_ = 0, PreviewHeight_ = 0;
     bool Pressed_ = false;
 };
 
@@ -205,6 +292,8 @@ private:
     hz::Vector<size_t> NavigationPages_;
     size_t Current_ = hz::NotFound;
     uint32_t Wallpaper_ = 0;
+    uint32_t LockWallpaper_ = HZ_LOCK_WALLPAPER_DEFAULT;
+    bool WallpaperTargetIsLock_ = false;
     /* Accounts */
     TextBox *AccountName_ = nullptr, *OldPassword_ = nullptr, *NewPassword_ = nullptr, *Confirm_ = nullptr;
     TextBlock *NameNote_ = nullptr, *PasswordNote_ = nullptr, *PasswordState_ = nullptr;
@@ -255,37 +344,55 @@ StackPanel *SettingsApp::NewPage(const char *Title, const char *Subtitle)
 
 void SettingsApp::AddPersonalization()
 {
-    StackPanel *P = NewPage("Personalization", "Choose the desktop wallpaper. The change applies right away.");
+    StackPanel *P = NewPage("Personalization", "Choose separate images for the desktop and the lock screen.");
     TextBlock *Status = P->Add<TextBlock>("", FontRole::Caption);
     Status->Wrap = true;
+    StackPanel *Targets = P->Add<StackPanel>(Orientation::Horizontal, 8);
+    Button *DesktopTarget = Targets->Add<Button>("Desktop", ButtonStyle::Accent);
+    Button *LockTarget = Targets->Add<Button>("Lock screen", ButtonStyle::Standard);
+    DesktopTarget->Width = 136;
+    LockTarget->Width = 136;
     Grid *Cards = P->Add<Grid>();
     Cards->Columns.Push(GridLength::Stars(1));
     Cards->Columns.Push(GridLength::Stars(1));
     Cards->Rows.Push(GridLength::AutoSize());
     Cards->Rows.Push(GridLength::AutoSize());
+    Cards->Rows.Push(GridLength::AutoSize());
     Cards->ColumnSpacing = 8;
     Cards->RowSpacing = 8;
     for (uint32_t i = 0; i <= HZ_MAX_WALLPAPER; i++) {
-        WallpaperCard *Card = Cards->Add<WallpaperCard>(i, &Wallpaper_, Status);
+        WallpaperCard *Card = Cards->Add<WallpaperCard>(i, &Wallpaper_, &LockWallpaper_, &WallpaperTargetIsLock_, Status);
         Card->GridColumn = i % 2;
         Card->GridRow = i / 2;
     }
-    InfoCard *Colors = P->Add<InfoCard>("Colors");
-    Colors->Row("Mode")->SetText("Dark");
-    Colors->Row("Accent color")->SetText("Nexora orange");
-    Colors->Row("Transparency")->SetText("Wallpaper-backed surfaces (blur is unavailable)");
-    List_.Push(Page{"Personalization", Icon::Sun, P, "wallpaper background colors theme appearance", [this, Cards, Status]() {
+    DesktopTarget->OnClick = [this, DesktopTarget, LockTarget, Cards, Status]() {
+        WallpaperTargetIsLock_ = false;
+        DesktopTarget->Style = ButtonStyle::Accent;
+        LockTarget->Style = ButtonStyle::Standard;
+        Status->SetText("Choose the desktop wallpaper.");
+        Cards->Invalidate();
+    };
+    LockTarget->OnClick = [this, DesktopTarget, LockTarget, Cards, Status]() {
+        WallpaperTargetIsLock_ = true;
+        DesktopTarget->Style = ButtonStyle::Standard;
+        LockTarget->Style = ButtonStyle::Accent;
+        Status->SetText("Choose the lock-screen wallpaper.");
+        Cards->Invalidate();
+    };
+    List_.Push(Page{"Personalization", Icon::Sun, P,
+                    "wallpaper desktop lock screen background appearance", [this, Cards, Status]() {
                         uint32_t Now = 0;
-                        if (!CurrentWallpaper(Now)) {
-                            Status->Foreground = Theme::Accent;
-                            Status->SetText("The active wallpaper could not be queried.");
-                            return;
-                        }
-                        Status->SetText("");
-                        if (Now != Wallpaper_) {
+                        if (CurrentWallpaper(Now))
                             Wallpaper_ = Now;
-                            Cards->Invalidate();
+                        LockWallpaper_ = CurrentLockWallpaper();
+                        if (Wallpaper_ > HZ_MAX_WALLPAPER) {
+                            Status->Foreground = Theme::Accent;
+                            Status->SetText("The active desktop wallpaper could not be queried.");
+                        } else {
+                            Status->Foreground = Theme::TextSecondary;
+                            Status->SetText("");
                         }
+                        Cards->Invalidate();
                     }});
 }
 
@@ -667,7 +774,7 @@ void SettingsApp::AddNetwork()
                         Availability->SetText("DHCP may assign an address, gateway, and DNS server. DNS requests, routing, TCP, HTTP, TLS, and browser Internet access are not implemented.");
                     };
     Refresh->OnClick = Update;
-    List_.Push(Page{"Network", Icon::Info, P, "network ethernet adapter wifi internet ip dns dhcp", Update});
+    List_.Push(Page{"Network", Icon::Wifi, P, "network ethernet adapter wifi internet ip dns dhcp", Update});
 }
 
 void SettingsApp::AddTime()

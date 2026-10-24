@@ -173,6 +173,22 @@ void Painter::FillRect(const Rect &R, Color C)
     }
 }
 
+void Painter::DrawBitmap(const Rect &Destination, const uint32_t *Pixels, int32_t Width, int32_t Height)
+{
+    if (Destination.Empty() || !Pixels || Width <= 0 || Height <= 0)
+        return;
+    Rect Area = Destination.Intersect(Clip());
+    for (int32_t Y = Area.Y; Y < Area.Bottom(); Y++) {
+        int32_t SourceY = (int64_t)(Y - Destination.Y) * Height / Destination.Height;
+        uint32_t *Row = Canvas_.Pixels + (size_t)Y * Canvas_.Stride;
+        const uint32_t *Source = Pixels + (size_t)SourceY * Width;
+        for (int32_t X = Area.X; X < Area.Right(); X++) {
+            int32_t SourceX = (int64_t)(X - Destination.X) * Width / Destination.Width;
+            Row[X] = Source[SourceX] | 0xFF000000u;
+        }
+    }
+}
+
 void Painter::RoundRectCoverage(float X, float Y, float W, float H, float Radius, float Thickness, Color Top,
                                 Color Bottom)
 {
@@ -491,6 +507,27 @@ void Painter::DrawIcon(Icon Kind, const Rect &Box, Color C, float Stroke)
     case Icon::Person: /* head and shoulders */
         StrokeCircle(Ox + 8 * S, Oy + 5.2f * S, 2.7f * S, Stroke * S, C);
         Poly(3, 14, 3.5f, 11.5f, 5.5f, 9.8f, 10.5f, 9.8f, 12.5f, 11.5f, 13, 14);
+        break;
+    case Icon::Wifi:
+        Poly(2.2f, 6.5f, 3.5f, 5.4f, 5, 4.6f, 6.5f, 4.2f, 8, 4.1f, 9.5f, 4.2f,
+             11, 4.6f, 12.5f, 5.4f, 13.8f, 6.5f);
+        Poly(4.6f, 9, 5.8f, 8.1f, 7, 7.7f, 8, 7.6f, 9, 7.7f, 10.2f, 8.1f, 11.4f, 9);
+        Poly(7.1f, 11.4f, 8, 10.8f, 8.9f, 11.4f);
+        FillCircle(Ox + 8 * S, Oy + 13.3f * S, 0.75f * S, C);
+        break;
+    case Icon::Accessibility:
+        StrokeCircle(Ox + 8 * S, Oy + 3.3f * S, 1.6f * S, Stroke * S, C);
+        Poly(2.8f, 6.7f, 5.3f, 7.8f, 8, 8.1f, 10.7f, 7.8f, 13.2f, 6.7f);
+        Poly(8, 8.1f, 8, 11.3f, 5.2f, 14.2f);
+        Poly(8, 11.3f, 10.8f, 14.2f);
+        break;
+    case Icon::AppWindow:
+        Poly(2.1f, 3, 13.9f, 3, 13.9f, 13, 2.1f, 13, 2.1f, 3);
+        Poly(2.1f, 5.6f, 13.9f, 5.6f);
+        FillCircle(Ox + 4.1f * S, Oy + 4.3f * S, 0.55f * S, C);
+        FillCircle(Ox + 5.8f * S, Oy + 4.3f * S, 0.55f * S, C);
+        Poly(4.3f, 8, 11.7f, 8);
+        Poly(4.3f, 10.4f, 9.3f, 10.4f);
         break;
     case Icon::Nexora:
         Poly(4.25f, 4, 4.25f, 12, 11.75f, 4, 11.75f, 12);

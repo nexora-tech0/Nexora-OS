@@ -46,6 +46,8 @@ struct Shell {
     bool Locked = true;
     /* Quick settings state (visual only, except the wallpaper) */
     uint32_t Wallpaper = 0;
+    uint32_t LockWallpaper = HZ_LOCK_WALLPAPER_DEFAULT;
+    bool LockWallpaperApplied = false;
     bool NightLight = false, Focus = false, EnergySaver = false, Airplane = false;
     float Brightness = 80, Volume = 60;
     /* The switcher */
@@ -68,6 +70,9 @@ struct Shell {
     void LoadSettings();
     void SaveSettings();
     void SetWallpaper(uint32_t Index); /* applies, remembers and saves */
+    void SetLockWallpaper(uint32_t Index);
+    bool ShowLockWallpaper();
+    void RestoreDesktopWallpaper();
     const char *DisplayName() const { return UserName.Empty() ? "Guest" : UserName.CStr(); }
     const hz::apps::App *FindApp(const hz::String &Id) const;
     const hz::apps::App *AppForWindow(HWND Window) const;
