@@ -49,6 +49,7 @@ static const KSYSTEM_SERVICE ExpServiceTable[HzSysServiceCount] = {
     [HzSysCreatePipe] = {NtCreatePipe, 3, "CreatePipe"},
     [HzSysCreateProcessEx] = {NtCreateProcessEx, 5, "CreateProcessEx"},
     [HzSysOpenProcess] = {NtOpenProcess, 3, "OpenProcess"},
+    [HzSysResolveHostA] = {NtResolveHostA, 2, "ResolveHostA"},
 };
 
 void ExInitializeSystem(void)

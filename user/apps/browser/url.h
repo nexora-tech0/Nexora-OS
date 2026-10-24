@@ -2,7 +2,7 @@
 #include <stddef.h>
 
 namespace nexora::browser {
-enum class Scheme { Invalid, Http, Https };
+enum class Scheme { Invalid, File, Http, Https };
 
 struct Url {
     Scheme scheme = Scheme::Invalid;
@@ -20,5 +20,6 @@ enum class UrlError {
 
 UrlError ParseUrl(const char *input, Url *out);
 bool IsSecure(const Url &url);
+bool IsLocalFile(const Url &url);
 const char *SchemeName(Scheme scheme);
 }

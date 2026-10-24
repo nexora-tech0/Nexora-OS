@@ -29,6 +29,12 @@ The browser shell presents its current page area as a wrapped, scrollable surfac
 existing hzui easing for page-text transitions. This improves the native shell layout only; it does
 not add CSS layout or remote-page rendering.
 
+The kernel has bounded DNS A-query encoding/response parsing and a serialized DNS-over-UDP resolver
+using ARP next-hop resolution. Native apps can call `HzResolveHostA`; the Browser uses it to report
+whether a host resolves. The QEMU `dns-api` smoke case has resolved `example.com` through DHCP's DNS
+server. This is name resolution only: there is no application TCP stream API, HTTP client, HTTPS/TLS,
+or remote page renderer, so it does not provide web-page browsing yet.
+
 ## Engine selection
 
 Porting Chromium, WebKit, or Gecko is a substantial platform project. These engines depend on
@@ -62,7 +68,8 @@ To connect to the real OS profile:
 - [x] Keyboard shortcuts and downloads listing
 - [x] Build against the current Nexora OS tree
 - [ ] OS profile service integration
-- [ ] DNS and TCP APIs with tests
+- [x] DNS A lookup API with protocol self-tests and QEMU E1000 validation
+- [ ] TCP stream API with bounded buffers, timeouts, cancellation, and tests
 - [ ] TLS and certificate verification
 - [ ] Plain HTTP client with bounded response parsing and streaming downloads
 - [ ] CSS layout and composited page rendering

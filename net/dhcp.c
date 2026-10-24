@@ -5,6 +5,7 @@
  */
 #include "hal.h"
 #include "ke.h"
+#include "netdns.h"
 #include "packet.h"
 #include "netif.h"
 #include "ps.h"
@@ -401,6 +402,7 @@ STATUS NetStart(void)
     NET_INTERFACE *Interface = NetGetInterfaceList();
     if (!Interface)
         return STATUS_NO_SUCH_DEVICE;
+    NetDnsInitialize();
     ETHREAD *Thread = NULL;
     STATUS Status = PsCreateSystemThread(NetpDhcpWorker, Interface, 1, "DhcpClient", &Thread);
     if (HZ_SUCCESS(Status) && Thread)

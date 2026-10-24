@@ -27,6 +27,7 @@
 #include "ke.h"
 #include "mm.h"
 #include "netif.h"
+#include "netdns.h"
 #include "ob.h"
 #include "ps.h"
 #include "rtl.h"
@@ -326,8 +327,9 @@ static void KiPhase1Initialization(void *Context)
     IoReportVolumes();
     bool NetworkOk = NetRunProtocolSelfTests();
     bool DhcpTestsOk = NetDhcpRunSelfTests();
+    bool DnsTestsOk = NetDnsRunSelfTests();
     bool DhcpStartOk = true;
-    if (NetworkOk && DhcpTestsOk && NetGetInterfaceList()) {
+    if (NetworkOk && DhcpTestsOk && DnsTestsOk && NetGetInterfaceList()) {
         STATUS DhcpStatus = NetStart();
         DhcpStartOk = HZ_SUCCESS(DhcpStatus);
         if (!DhcpStartOk)
@@ -359,7 +361,7 @@ static void KiPhase1Initialization(void *Context)
     KiStartSystemThread(KiStatusThread, KI_THREAD_PRIORITY_DEFAULT + 1, "Status");
 
     bool AllOk = BreakpointOk && ClockOk && IoApicOk && MemoryOk && SchedulerOk && LanguagesOk && ProcessesOk &&
-                 FileSystemsOk && NetworkOk && DhcpTestsOk && DhcpStartOk && DesktopOk;
+                 FileSystemsOk && NetworkOk && DhcpTestsOk && DnsTestsOk && DhcpStartOk && DesktopOk;
     if (DisplayOk)
         InbvSetStatusText(AllOk ? HZ_MILESTONE " complete" : HZ_MILESTONE " complete with warnings (see log)");
     DbgPrint("[HZ] BOOT %s: %s kernel finished phase 1 (%llu ms after kernel entry)\n", AllOk ? "OK" : "DEGRADED",

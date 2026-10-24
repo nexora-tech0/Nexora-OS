@@ -61,6 +61,13 @@ STATUS NtCreatePipe(HANDLE *ReadEnd, HANDLE *WriteEnd, uint32_t Size);
 STATUS NtCreateProcessEx(const char *ImagePath, const char *CommandLine, const HZ_PROCESS_PARAMETERS *Parameters,
                          HANDLE *Process, uint32_t *ProcessId);
 STATUS NtOpenProcess(HANDLE *Process, ACCESS_MASK Access, uint32_t ProcessId);
+/* Synchronous IPv4 A-record lookup using the configured DNS server. */
+STATUS NtResolveHostA(const char *HostName, uint8_t Ipv4Address[4]);
+
+static inline STATUS HzResolveHostA(const char *HostName, uint8_t Ipv4Address[4])
+{
+    return NtResolveHostA(HostName, Ipv4Address);
+}
 
 /* ---- Runtime (user/lib/hzrt) ------------------------------------------------------------------- */
 

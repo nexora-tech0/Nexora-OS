@@ -63,9 +63,34 @@ UrlError ParseUrl(const char *input, Url *out)
     const size_t length = Length(input);
     if (length >= sizeof(out->path) + sizeof(out->host))
         return UrlError::TooLong;
+    const char *end = input + length;
     for (size_t i = 0; i < length; ++i)
         if (IsControlOrSpace((unsigned char)input[i]))
             return UrlError::InvalidCharacter;
+
+    if (EqualPrefix(input, "file:///", 8)) {
+        const char *Path = input + 8;
+        size_t PathLength = (size_t)(end - Path);
+        if (PathLength < 2 || !((Path[0] >= 'A' && Path[0] <= 'Z') || (Path[0] >= 'a' && Path[0] <= 'z')) ||
+            Path[1] != ':')
+            return UrlError::InvalidAuthority;
+        if (PathLength > sizeof(out->path) - 1)
+            return UrlError::TooLong;
+        out->scheme = Scheme::File;
+        for (size_t i = 0; i < PathLength; ++i) {
+            char C = Path[i];
+            if (C == '?' || C == '#')
+                return UrlError::InvalidCharacter;
+            if (C == '/')
+                C = '\\';
+            out->path[i] = C;
+        }
+        out->path[PathLength] = 0;
+        if (PathLength == 2)
+            out->path[PathLength++] = '\\';
+        out->valid = true;
+        return UrlError::None;
+    }
 
     const char *authority = nullptr;
     if (EqualPrefix(input, "https://", 8)) {
@@ -79,7 +104,6 @@ UrlError ParseUrl(const char *input, Url *out)
     } else {
         return UrlError::UnsupportedScheme;
     }
-    const char *end = input + length;
     const char *authorityEnd = authority;
     while (authorityEnd < end && *authorityEnd != '/' && *authorityEnd != '?' && *authorityEnd != '#')
         ++authorityEnd;
@@ -153,9 +177,15 @@ bool IsSecure(const Url &url)
     return url.valid && url.scheme == Scheme::Https;
 }
 
+bool IsLocalFile(const Url &url)
+{
+    return url.valid && url.scheme == Scheme::File;
+}
+
 const char *SchemeName(Scheme scheme)
 {
     switch (scheme) {
+    case Scheme::File: return "file";
     case Scheme::Http: return "http";
     case Scheme::Https: return "https";
     default: return "";

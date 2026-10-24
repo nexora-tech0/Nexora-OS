@@ -75,6 +75,7 @@ typedef uint32_t ACCESS_MASK;
  *                   const HZ_PROCESS_PARAMETERS *Parameters, HANDLE *Process, uint32_t *ProcessId)
  *                                                      standard handles for the new process (M9)
  *   OpenProcess(HANDLE *Process, ACCESS_MASK Access, uint32_t ProcessId)    (M9)
+ *   ResolveHostA(const char *HostName, uint8_t Ipv4Address[4])   resolve one DNS A record
  *
  * Window manager services (win32k) use numbers from HZ_WIN32K_SERVICE_BASE (uapi/hzuser.h).
  */
@@ -116,6 +117,7 @@ enum HZ_SYSTEM_SERVICE {
     HzSysCreatePipe,
     HzSysCreateProcessEx,
     HzSysOpenProcess,
+    HzSysResolveHostA,
     HzSysServiceCount
 };
 

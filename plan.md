@@ -22,37 +22,51 @@ NVMe, audio, accelerated graphics, and an additional general-purpose filesystem 
    DMA allocation/mapping contracts, interrupt registration/masking/teardown, and driver/device
    lifetime rules. Add unit tests for resource bounds and initialization failures.
    Candidate files: `io/driver.c`, `io/resource.c`, `include/driver.h`, and focused tests.
-3. **Complete networking.** Build on `NET_INTERFACE`, E1000, DHCP, and packet parsers. Add ARP,
-   IPv4 send/receive and routing, UDP checksums, DNS, TCP state/retransmission/timeouts, and a
-   bounded socket/user API. Add a second practical NIC target after the framework (VirtIO-net is
-   suitable for VM testing; physical NIC choice should be pinned to supported PCI IDs).
-   Candidate files: `net/arp.c`, `net/ipv4.c`, `net/udp.c`, `net/dns.c`, `net/tcp.c`,
+3. **Complete networking and browser HTTP.** Build on `NET_INTERFACE`, E1000, DHCP, and packet
+   parsers. Deliver in testable layers: ARP and IPv4 send/receive/routing; UDP checksums and DNS;
+   TCP connection state, retransmission, and timeouts; a bounded socket/user API; then a bounded
+   plain-HTTP client wired into browser navigation. Add a second practical NIC target after the
+   framework (VirtIO-net is suitable for VM testing; physical NIC choice must be pinned to tested
+   PCI IDs). Candidate files: `net/arp.c`, `net/ipv4.c`, `net/udp.c`, `net/dns.c`, `net/tcp.c`,
    `net/socket.c`, `drivers/net/virtio_net.c`, and `include/uapi` API definitions.
-   Gate: DHCP, DNS resolution, TCP loopback, and HTTP reachability tests; no claim of HTTPS until
-   TLS and certificate validation are separately implemented and tested.
-4. **USB xHCI and HID.** Add xHCI controller discovery, command/event/transfer rings, USB device
-   enumeration, hub handling as needed, and HID keyboard/mouse parsing. Preserve PS/2 fallback.
-   Candidate files: `drivers/usb/xhci.c`, `drivers/usb/usb.c`, `drivers/usb/hid.c` and headers.
-   Gate: QEMU/VirtualBox supported USB keyboard and mouse, hotplug/error recovery where supported.
-5. **NVMe storage.** Add an NVMe PCI controller driver with queue setup, DMA-safe buffers,
+   Gate each layer with protocol tests; final gate is DNS plus HTTP reachability through QEMU NAT
+   and VirtualBox NAT with bounded response handling. HTTPS remains unavailable until a TLS
+   implementation verifies certificate chains and hostnames against a managed trust store.
+4. **USB xHCI and HID.** Add xHCI PCI discovery, DMA-safe command/event/transfer rings, controller
+   reset and timeouts, USB device enumeration, hub handling, and USB HID keyboard/mouse parsing.
+   Preserve PS/2 fallback. Candidate files: `drivers/usb/xhci.c`, `drivers/usb/usb.c`,
+   `drivers/usb/hid.c` and headers. Gate: supported QEMU/VirtualBox xHCI keyboard and mouse
+   input, plus enumeration failure and recovery tests.
+5. **Bluetooth host and device profiles.** Build only after the USB host controller and transfer
+   APIs are stable. Add Bluetooth USB transport/controller detection, HCI command/event handling,
+   device discovery and pairing, then BLE L2CAP/SMP/ATT/GATT and HID-over-GATT keyboard/mouse.
+   Add Classic Bluetooth L2CAP/RFCOMM/profile support and an audio path (A2DP) only when the
+   kernel audio-stream interface exists. Candidate files: `drivers/bluetooth/usb.c`,
+   `bluetooth/hci.c`, `bluetooth/l2cap.c`, `bluetooth/smp.c`, `bluetooth/att.c`,
+   `bluetooth/gatt.c`, and profile modules plus focused protocol tests.
+   Gate: tested, explicitly listed USB adapter IDs; BLE scan/pair/GATT and HID input; and Classic
+   pairing/audio tests on actual supported hardware. Do not advertise universal Bluetooth or audio
+   support from controller detection alone.
+6. **NVMe storage.** Add an NVMe PCI controller driver with queue setup, DMA-safe buffers,
    timeouts/reset, and registration through the existing disk class path. Keep AHCI as fallback.
    Candidate file: `drivers/nvme/nvme.c` plus focused queue/identify tests.
    Gate: read-only identification first; then partition discovery and safe read/write tests on a
    disposable virtual disk.
-6. **Additional filesystem.** Implement ext2 read-only first through the existing filesystem
+7. **Additional filesystem.** Implement ext2 read-only first through the existing filesystem
    registration/mount interfaces; only add write support after corruption and recovery tests.
    Candidate files: `fs/ext2/ext2.c`, `fs/ext2/ext2dir.c`, and `fs/ext2/ext2.h`.
    Gate: mount/read/path tests and malformed-image fuzz/regression corpus; FAT32 stays supported.
-7. **Audio.** Add an HDA controller and codec discovery path, then a small kernel audio-stream API.
+8. **Audio.** Add an HDA controller and codec discovery path, then a small kernel audio-stream API.
    Candidate files: `drivers/audio/hda.c`, `include/audio.h`, and a targeted playback diagnostic.
    Gate: supported VirtualBox/QEMU device or explicitly selected real codec plays a known test tone.
-8. **Accelerated graphics.** Retain the UEFI framebuffer fallback. First choose and support a
+   Bluetooth A2DP depends on this API and is gated separately under Bluetooth.
+9. **Accelerated graphics.** Retain the UEFI framebuffer fallback. First choose and support a
    documented virtual GPU (VirtIO-GPU or VirtualBox VMSVGA); implement command validation,
    bounded buffers, synchronization, and display mode ownership before acceleration is exposed.
    Candidate files: `drivers/gpu/virtio_gpu.c` or `drivers/gpu/vmsvga.c`, `include/gfx.h`, and
    compositor integration. Generic Intel/AMD GPU support is explicitly outside this bounded
    target and would require separate per-device roadmaps.
-9. **Integration and release gate.** Run the full QEMU suite on one and multiple CPUs, then
+10. **Integration and release gate.** Run the full QEMU suite on one and multiple CPUs, then
    VirtualBox coverage for every selected device, including failure/recovery paths. Update
    architecture, progress, and user documentation from measured results; keep unimplemented
    capabilities explicit.

@@ -63,8 +63,9 @@ SERVICE NtUnmapViewOfSection            ; HzSysUnmapViewOfSection
 SERVICE NtCreatePipe                    ; HzSysCreatePipe
 SERVICE NtCreateProcessEx               ; HzSysCreateProcessEx
 SERVICE NtOpenProcess                   ; HzSysOpenProcess
+SERVICE NtResolveHostA                  ; HzSysResolveHostA
 
-%if HZ_SERVICE_NUMBER != 36
+%if HZ_SERVICE_NUMBER != 37
 %error "service stub count does not match HzSysServiceCount"
 %endif
 

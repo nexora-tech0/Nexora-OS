@@ -171,11 +171,19 @@ void TestBrowserUrls()
           "browser parses a URL with port and query");
     Check(ParseUrl("https://example.com?q=1", &Address) == UrlError::None && !strcmp(Address.path, "/?q=1"),
           "browser adds a slash before a query");
+    Check(ParseUrl("file:///C:/Users/Ada/page.html", &Address) == UrlError::None &&
+              IsLocalFile(Address) && !IsSecure(Address) && !strcmp(Address.path, "C:\\Users\\Ada\\page.html"),
+          "browser parses an absolute local file URL");
+    Check(ParseUrl("file:///C:/Users/A%20B/page.html", &Address) == UrlError::None &&
+              !strcmp(Address.path, "C:\\Users\\A%20B\\page.html"),
+          "browser preserves percent-escaped local path bytes for decoding");
     Check(ParseUrl("https://user@example.com/", &Address) == UrlError::InvalidAuthority &&
               ParseUrl("https://example.com:99999/", &Address) == UrlError::InvalidPort &&
               ParseUrl("https://example.com:999999999999999999999999/", &Address) == UrlError::InvalidPort &&
-              ParseUrl("file:///etc/passwd", &Address) == UrlError::UnsupportedScheme,
-          "browser rejects unsafe or unsupported URL forms");
+              ParseUrl("file:///etc/passwd", &Address) == UrlError::InvalidAuthority &&
+              ParseUrl("file://server/share/page.html", &Address) == UrlError::UnsupportedScheme &&
+              ParseUrl("file:///C:/private page.html", &Address) == UrlError::InvalidCharacter,
+          "browser rejects unsafe or malformed URL forms");
 }
 
 void TestBrowserHtml()

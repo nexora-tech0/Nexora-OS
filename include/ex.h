@@ -77,6 +77,7 @@ STATUS NtQueryUptime(const uint64_t *Args);
 STATUS NtQuerySystemInformation(const uint64_t *Args);
 STATUS NtShutdownSystem(const uint64_t *Args);
 STATUS NtQuerySystemTime(const uint64_t *Args);
+STATUS NtResolveHostA(const uint64_t *Args);
 
 /* Flushes volumes and powers off (HZ_SHUTDOWN_POWER_OFF) or restarts (HZ_SHUTDOWN_REBOOT). */
 HZ_NORETURN void ExShutdownSystem(uint32_t Action);

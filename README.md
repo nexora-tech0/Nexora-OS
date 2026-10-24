@@ -41,8 +41,12 @@ block-building game.
 - **Programs:** Notepad (word wrap, find, undo), Files (copy, cut, paste and delete of whole
   folders, with item context menus), Terminal (built-in commands, console programs, `> file`, `| more`, line wrapping),
   Calculator, Clock, Calendar, Stopwatch, System Information, Paint (mouse drawing and BMP export),
-  Browser (native shell with address entry, history, bookmarks, downloads listing and an initial
-  HTML text parser; remote page loading and CSS layout are not yet supported), Settings (wallpaper, account name and password, time zone), Task Manager (processes,
+  Browser (native shell with address entry, history, bookmarks, downloads listing and local
+  text/HTML file loading through absolute paths or file URLs; HTML uses a bounded text parser,
+  while remote page loading and CSS layout are not yet supported), Settings (searchable
+  Home and category navigation, wallpaper, account credentials, display/storage/network status,
+  time zone, About and diagnostics; sound controls, USB/Bluetooth, and display scaling are clearly
+  marked unavailable because their system APIs are not implemented), Task Manager (processes,
   per-processor load), Setup, which installs Nexora OS on a disk, and Blockyard. New native app
   source directories are discovered by the build automatically and checked against their manifests.
   The shell loads the app catalog from `C:\Nexora\Apps`.
@@ -134,14 +138,17 @@ Nexora currently runs its own statically linked PE32+ applications. It does not 
 general Windows application compatibility or a Linux ELF/syscall runtime; those require separate
 loader and API work and are not implied by the native app catalog. Files and Terminal can launch
 Nexora-compatible `.exe` programs, but Windows executables that import DLLs are not supported yet.
-The native Nexora Browser shell and a bounded HTML-to-text parser are included, but there is not yet
-a complete TCP/IP stack, HTTP client, or page layout renderer. The Intel E1000 driver can
-initialize VirtualBox's PRO/1000 MT Desktop adapter, and the bounded DHCPv4 client requests and
-reports an IPv4 address, gateway, and DNS server. DNS queries, ARP-based routing, TCP sockets,
-HTTPS/TLS, and the user-mode networking API are not implemented yet, so pages cannot be loaded.
+The native Nexora Browser shell can open local text and HTML files using an absolute path or a
+`file:///C:/...` URL; HTML is rendered as bounded text with scripts and styles disabled. The kernel
+provides a bounded DNS A-record lookup syscall for native apps, including ARP next-hop resolution
+and serialized DNS-over-UDP access through the configured interface. The Browser can resolve a
+host but does not yet fetch remote pages: application TCP connections, HTTP, and verified HTTPS/TLS
+are not implemented. The Intel E1000 driver can initialize VirtualBox's PRO/1000 MT Desktop
+adapter, and the bounded DHCPv4 client requests and reports an IPv4 address, gateway, and DNS server.
 Firefox also requires DLL loading and Windows API support that Nexora does not provide. The
 `network-interface` smoke case exercises the E1000 driver and DHCP handshake on QEMU user-mode NAT;
-it does not verify DNS or general Internet access.
+the `dns-api` smoke case also exercises a real DNS A lookup through the app-facing syscall. Neither
+test verifies HTTP/HTTPS page loading or general browser Internet access.
 
 On Windows, run these from a WSL2 shell in the checkout; `make vbox` drives the Windows
 VirtualBox through `VBoxManage.exe`. The VM logs COM1 to `serial-com1.log` in its VM folder.

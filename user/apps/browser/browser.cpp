@@ -6,11 +6,13 @@
  */
 #include "hzapps.h"
 #include "hzfile.h"
+#include "hzsys.h"
 #include "hzui.h"
 #include "html.h"
 #include "url.h"
 
 using namespace hzui;
+namespace BrowserUrl = nexora::browser;
 
 namespace {
 constexpr size_t MaxHistory = 300;
@@ -24,7 +26,8 @@ const char HomePage[] =
     "<h1>Welcome</h1>"
     "<p>A native browser shell for Nexora OS.</p>"
     "<p>The current page pipeline extracts headings, paragraphs, links and basic text entities.</p>"
-    "<p>Remote pages are not available yet. DNS, TCP, an HTTP client and a full layout engine remain to be built.</p>"
+    "<p>Open local text and HTML files with an absolute path or a file:/// URL. Remote pages are not available yet; "
+    "the OS still needs DNS transport, TCP, HTTP, and HTTPS support.</p>"
     "</body></html>";
 
 bool HasLineBreak(const char *s)
@@ -73,8 +76,29 @@ hz::String Normalize(const hz::String &Input)
 {
     if (Input.Empty() || HasLineBreak(Input.CStr()))
         return hz::String();
-    if (StartsWith(Input.CStr(), "https://") || StartsWith(Input.CStr(), "http://"))
+    if (StartsWith(Input.CStr(), "https://") || StartsWith(Input.CStr(), "http://") ||
+        StartsWith(Input.CStr(), "file:///"))
         return Input;
+
+    if (Input.Length() >= 3 &&
+        ((Input[0] >= 'A' && Input[0] <= 'Z') || (Input[0] >= 'a' && Input[0] <= 'z')) &&
+        Input[1] == ':' && (Input[2] == '\\' || Input[2] == '/')) {
+        hz::String Address("file:///");
+        for (const char *P = Input.CStr(); *P; ++P) {
+            if (*P == '\\')
+                Address.Append('/');
+            else if (*P == ' ')
+                Address.Append("%20");
+            else if (*P == '%' || *P == '#' || *P == '?') {
+                const char *Hex = "0123456789ABCDEF";
+                Address.Append('%');
+                Address.Append(Hex[((uint8_t)*P) >> 4]);
+                Address.Append(Hex[((uint8_t)*P) & 0x0F]);
+            } else
+                Address.Append(*P);
+        }
+        return Address;
+    }
 
     bool Domain = false;
     for (const char *p = Input.CStr(); *p; ++p) {
@@ -136,6 +160,54 @@ void EnsureProfile()
     EnsureDir(Downloads);
 }
 
+int HexDigit(char C)
+{
+    if (C >= '0' && C <= '9')
+        return C - '0';
+    if (C >= 'a' && C <= 'f')
+        return C - 'a' + 10;
+    if (C >= 'A' && C <= 'F')
+        return C - 'A' + 10;
+    return -1;
+}
+
+bool DecodeLocalPath(const char *UrlPath, hz::String &Path)
+{
+    Path.Clear();
+    for (size_t I = 0; UrlPath[I]; ++I) {
+        char C = UrlPath[I];
+        if (C == '%') {
+            int Hi = HexDigit(UrlPath[I + 1]), Lo = UrlPath[I + 1] ? HexDigit(UrlPath[I + 2]) : -1;
+            if (Hi < 0 || Lo < 0)
+                return false;
+            C = (char)((Hi << 4) | Lo);
+            I += 2;
+            if (!C || (uint8_t)C < 0x20 || (uint8_t)C == 0x7F)
+                return false;
+        }
+        Path.Append(C == '/' ? '\\' : C);
+    }
+    return Path.Length() >= 3 && Path[1] == ':' && Path[2] == '\\';
+}
+
+hz::String FileUrl(const hz::String &Path)
+{
+    hz::String Address("file:///");
+    const char *Hex = "0123456789ABCDEF";
+    for (const char *P = Path.CStr(); *P; ++P) {
+        uint8_t C = (uint8_t)*P;
+        if (C == '\\')
+            Address.Append('/');
+        else if (C == ' ' || C == '%' || C == '#' || C == '?') {
+            Address.Append('%');
+            Address.Append(Hex[C >> 4]);
+            Address.Append(Hex[C & 0x0F]);
+        } else
+            Address.Append(*P);
+    }
+    return Address;
+}
+
 enum class Page { Start, History, Bookmarks, Downloads };
 
 class Browser {
@@ -153,6 +225,9 @@ private:
     void Refresh();
     void UpdateButtons();
     void Status(const char *Text);
+    void ShowLocalFile(const hz::String &Address);
+    void SetLinks(const BrowserUrl::HtmlDocument &Document);
+    void OpenLink(size_t Index);
 
     Window *window_ = nullptr;
     TextBox *address_ = nullptr;
@@ -160,7 +235,11 @@ private:
     TextBlock *status_ = nullptr;
     TextBlock *heading_ = nullptr, *detail_ = nullptr;
     AnimatedPageText *items_ = nullptr;
+    ListView *links_ = nullptr;
+    BrowserUrl::HtmlDocument document_{};
+    hz::Vector<hz::String> linkTargets_, linkLabels_;
     hz::Vector<hz::String> history_, bookmarks_;
+    hz::String currentAddress_;
     size_t index_ = 0;
     bool hasHistory_ = false;
     Page page_ = Page::Start;
@@ -300,6 +379,7 @@ void Browser::Build()
     body->Rows.Push(GridLength::AutoSize());
     body->Rows.Push(GridLength::AutoSize());
     body->Rows.Push(GridLength::Stars(1));
+    body->Rows.Push(GridLength::Pixels(126));
     heading_ = body->Add<TextBlock>("Nexora Browser", FontRole::Display);
     heading_->Margin = Thickness(0, 0, 0, 8);
     detail_ = body->Add<TextBlock>("A calm, native starting point for the web.", FontRole::Body);
@@ -319,6 +399,20 @@ void Browser::Build()
     items_->CornerRadius = Theme::OverlayRadius;
     page->SetContent(items_);
 
+    links_ = body->Add<ListView>();
+    links_->GridRow = 3;
+    links_->ItemHeight = 30;
+    links_->SetItemCount(0);
+    links_->PaintItem = [this](Painter &P, const Rect &R, size_t Index) {
+        if (Index >= linkLabels_.Size() || Index >= linkTargets_.Size())
+            return;
+        P.DrawIcon(Icon::ChevronRight, Rect{R.X + 6, R.Y + (R.Height - 14) / 2, 14, 14}, Theme::Accent);
+        hz::String Text = hz::String::Format("%s  ·  %s", linkLabels_[Index].CStr(), linkTargets_[Index].CStr());
+        P.TextLine(GetFont(FontRole::Caption), Rect{R.X + 26, R.Y, R.Width - 32, R.Height}, Text.CStr(),
+                   Theme::TextPrimary);
+    };
+    links_->OnItemInvoked = [this](size_t Index) { OpenLink(Index); };
+
     Grid *footer = root->Add<Grid>();
     footer->GridRow = 3;
     footer->Padding = Thickness(16, 5, 16, 7);
@@ -335,10 +429,10 @@ void Browser::Status(const char *Text)
 void Browser::Go(const hz::String &Raw, bool Record)
 {
     hz::String Address = Normalize(Raw);
-    nexora::browser::Url Parsed;
-    if (Address.Empty() || nexora::browser::ParseUrl(Address.CStr(), &Parsed) != nexora::browser::UrlError::None) {
-        Status("Enter a valid HTTP or HTTPS address, for example https://example.com");
-        HzPrint("browser: rejected invalid web address");
+    BrowserUrl::Url Parsed;
+    if (Address.Empty() || BrowserUrl::ParseUrl(Address.CStr(), &Parsed) != BrowserUrl::UrlError::None) {
+        Status("Enter an HTTP address, file:///C:/... URL, or an absolute local path");
+        HzPrint("browser: rejected invalid address");
         return;
     }
     bool Stored = true;
@@ -355,16 +449,139 @@ void Browser::Go(const hz::String &Raw, bool Record)
         Stored = SaveLines(HistoryFile, history_);
     }
     address_->SetText(Address.CStr(), false);
+    currentAddress_ = Address;
+    if (BrowserUrl::IsLocalFile(Parsed)) {
+        ShowLocalFile(Address);
+        UpdateButtons();
+        return;
+    }
     page_ = Page::Start;
-    heading_->SetText("Network access not available");
-    detail_->SetText("The address was validated, but the network stack is not connected to browser navigation.");
-    items_->SetText("No remote page was loaded.\n\nNexora does not yet provide DNS resolution, TCP connections, or an HTTP client to this app. HTTPS also requires verified TLS support.");
+    linkTargets_.Clear();
+    linkLabels_.Clear();
+    links_->SetItemCount(0);
+    uint8_t AddressBytes[4] = {0};
+    STATUS ResolveStatus = HzResolveHostA(Parsed.host, AddressBytes);
+    heading_->SetText("Internet page loading unavailable");
+    if (HZ_SUCCESS(ResolveStatus)) {
+        detail_->SetText(hz::String::Format("DNS resolved %s to %u.%u.%u.%u.",
+                                             Parsed.host, AddressBytes[0], AddressBytes[1], AddressBytes[2],
+                                             AddressBytes[3]).CStr());
+        items_->SetText("DNS is working, but Nexora does not yet have an application TCP connection, HTTP client, or verified TLS implementation. No page request was sent.");
+        HzPrint("browser: DNS resolved %s to %u.%u.%u.%u; no page fetched", Parsed.host,
+                AddressBytes[0], AddressBytes[1], AddressBytes[2], AddressBytes[3]);
+    } else {
+        detail_->SetText(hz::String::Format("DNS lookup for %s failed (0x%08X).", Parsed.host,
+                                             (uint32_t)ResolveStatus).CStr());
+        items_->SetText("The operating system could not resolve this host. Check the network interface and DNS configuration. Remote page fetching also requires TCP, HTTP, and verified TLS, which are not available yet.");
+        HzPrint("browser: DNS lookup failed for %s (0x%08X)", Parsed.host, (uint32_t)ResolveStatus);
+    }
     items_->Reveal();
     window_->SetTitle(hz::String::Format("%s - Nexora Browser", Address.CStr()).CStr());
-    Status(Stored ? "Address saved · no network request was made"
-                  : "Address validated · profile is read-only; page not loaded");
-    HzPrint("browser: address validated; no page request");
+    Status(Stored ? (HZ_SUCCESS(ResolveStatus) ? "DNS resolved · page not loaded (TCP/TLS unavailable)"
+                                                : "DNS lookup failed · page not loaded")
+                  : "Not loaded · browser profile is read-only");
     UpdateButtons();
+}
+
+void Browser::SetLinks(const BrowserUrl::HtmlDocument &Document)
+{
+    linkTargets_.Clear();
+    linkLabels_.Clear();
+    for (size_t Index = 0; Index < Document.LinkCount; ++Index) {
+        if (!Document.Links[Index].Href[0])
+            continue;
+        linkLabels_.Push(hz::String(Document.Links[Index].Text[0] ? Document.Links[Index].Text
+                                                                  : Document.Links[Index].Href));
+        linkTargets_.Push(hz::String(Document.Links[Index].Href));
+    }
+    links_->SetItemCount(linkTargets_.Size());
+    links_->SetVisible(!linkTargets_.Empty());
+}
+
+void Browser::ShowLocalFile(const hz::String &Address)
+{
+    BrowserUrl::Url Parsed;
+    hz::String Path, Source;
+    if (BrowserUrl::ParseUrl(Address.CStr(), &Parsed) != BrowserUrl::UrlError::None ||
+        !BrowserUrl::IsLocalFile(Parsed) || !DecodeLocalPath(Parsed.path, Path)) {
+        heading_->SetText("Invalid local file address");
+        detail_->SetText("Use an absolute local path such as file:///C:/Users/Name/Documents/page.html.");
+        items_->SetText("");
+        SetLinks(BrowserUrl::HtmlDocument{});
+        Status("Invalid local file URL");
+        return;
+    }
+    STATUS ReadStatus = hz::fs::ReadAll(Path, Source, BrowserUrl::HtmlMaximumSource);
+    if (!HZ_SUCCESS(ReadStatus)) {
+        heading_->SetText("Local file could not be opened");
+        detail_->SetText(Path.CStr());
+        items_->SetText(hz::String::Format("%s (0x%08X).", hz::fs::StatusText(ReadStatus),
+                                           (uint32_t)ReadStatus).CStr());
+        SetLinks(BrowserUrl::HtmlDocument{});
+        Status("Local file open failed");
+        HzPrint("browser: local read failed for %s (0x%08X)", Path.CStr(), (uint32_t)ReadStatus);
+        return;
+    }
+    page_ = Page::Start;
+    currentAddress_ = Address;
+    address_->SetText(Address.CStr(), false);
+    bool Html = hz::fs::Extension(Path) == "html" || hz::fs::Extension(Path) == "htm";
+    if (!Html) {
+        items_->SetText(Source.CStr());
+        heading_->SetText(hz::fs::FileName(Path).CStr());
+        detail_->SetText("Local text file · no active content executed.");
+        SetLinks(BrowserUrl::HtmlDocument{});
+    } else {
+        if (!BrowserUrl::ParseHtml(Source.CStr(), Source.Length(), &document_)) {
+            heading_->SetText("HTML document is too large or invalid");
+            detail_->SetText(Path.CStr());
+            items_->SetText("Local HTML source is limited to 64 KiB.");
+            SetLinks(BrowserUrl::HtmlDocument{});
+            Status("HTML source exceeds the renderer limit");
+            return;
+        }
+        heading_->SetText(document_.Title[0] ? document_.Title : hz::fs::FileName(Path).CStr());
+        detail_->SetText(document_.UnsupportedContent
+                             ? "Local HTML · text-only rendering; styles, scripts, images, and embedded content are not executed."
+                             : "Local HTML · text-only rendering.");
+        items_->SetText(document_.Text);
+        SetLinks(document_);
+    }
+    items_->Foreground = Theme::TextPrimary;
+    items_->Reveal();
+    window_->SetTitle(hz::String::Format("%s - Nexora Browser", heading_->Text().CStr()).CStr());
+    Status("Local file loaded · active content disabled");
+    HzPrint("browser: local file loaded %s (%u bytes)", Path.CStr(), (uint32_t)Source.Length());
+    if (Html)
+        HzPrint("browser: local HTML parsed title=%s links=%u", heading_->Text().CStr(),
+                (uint32_t)linkTargets_.Size());
+}
+
+void Browser::OpenLink(size_t Index)
+{
+    if (Index >= linkTargets_.Size())
+        return;
+    const hz::String &Href = linkTargets_[Index];
+    if (StartsWith(Href.CStr(), "http://") || StartsWith(Href.CStr(), "https://") ||
+        StartsWith(Href.CStr(), "file:///")) {
+        Go(Href);
+        return;
+    }
+    BrowserUrl::Url Current;
+    if (BrowserUrl::ParseUrl(currentAddress_.CStr(), &Current) != BrowserUrl::UrlError::None ||
+        !BrowserUrl::IsLocalFile(Current)) {
+        Status("This link type is not supported");
+        return;
+    }
+    hz::String Base;
+    if (Href[0] == '/') {
+        Base = hz::String::Format("%c:\\", Current.path[0]);
+        Base.Append(Href.CStr() + 1);
+    } else {
+        Base = hz::fs::Parent(hz::String(Current.path));
+        Base = hz::fs::Resolve(Base, Href.CStr());
+    }
+    Go(FileUrl(Base));
 }
 
 void Browser::StartPage()
@@ -383,9 +600,10 @@ void Browser::StartPage()
     detail_->SetText("A minimal native browser shell. Enter an address to check its format.");
     items_->SetText(Document.Text);
     items_->Foreground = Theme::TextPrimary;
+    SetLinks(Document);
     items_->Reveal();
     window_->SetTitle("Nexora Browser");
-    Status("Ready · HTML text renderer active · network unavailable");
+    Status("Ready · local files and DNS lookup available · web page networking unavailable");
     UpdateButtons();
 }
 
@@ -504,6 +722,6 @@ extern "C" int main(int argc, char **argv)
         HzPrint("browser: failed to create window");
         return 1;
     }
-    HzPrint("browser: started; HTML text renderer ready; network unavailable");
+    HzPrint("browser: started; local renderer and DNS lookup ready; page networking unavailable");
     return RunMessageLoop();
 }
