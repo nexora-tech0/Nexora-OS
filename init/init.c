@@ -296,6 +296,22 @@ static void KiSessionThread(void *Context)
     }
 }
 
+static void KiInstallerThread(void *Context)
+{
+    (void)Context;
+    EPROCESS *Setup;
+    STATUS Status = PsCreateProcess("\\??\\C:\\Nexora\\System\\setup.exe", "setup.exe", 0, &Setup);
+    if (!HZ_SUCCESS(Status)) {
+        DbgPrintEx(DPFLTR_ERROR_LEVEL, "Installer: Setup could not start (0x%08X)\n", (uint32_t)Status);
+        return;
+    }
+    DbgPrint("Installer: Setup launched automatically\n");
+    KeWaitForSingleObject(Setup, NULL);
+    DbgPrintEx(Setup->ExitStatus == STATUS_SUCCESS ? DPFLTR_INFO_LEVEL : DPFLTR_WARNING_LEVEL,
+               "Installer: Setup exited (0x%08X)\n", (uint32_t)Setup->ExitStatus);
+    ObDereferenceObject(Setup);
+}
+
 static void KiStartSystemThread(KSTART_ROUTINE Routine, KPRIORITY Priority, const char *Name)
 {
     if (!HZ_SUCCESS(PsCreateSystemThread(Routine, NULL, Priority, Name, NULL)))
@@ -367,11 +383,13 @@ static void KiPhase1Initialization(void *Context)
     DbgPrint("[HZ] BOOT %s: %s kernel finished phase 1 (%llu ms after kernel entry)\n", AllOk ? "OK" : "DEGRADED",
              HZ_MILESTONE, (unsigned long long)(KeQueryUptimeMicroseconds() / 1000));
 
-    /* The desktop takes over the screen and the shell starts (hz.desktop=off keeps the boot
-       screen, for diagnostics). Without a shell image, the welcome program runs on its own. */
+    /* The installer ISO exposes Setup rather than launching the full desktop shell. */
     if (!BiCommandLineHasOption("hz.desktop=off")) {
         W32kShowDesktop();
-        KiStartSystemThread(KiSessionThread, KI_THREAD_PRIORITY_DEFAULT, "Session");
+        if (BiCommandLineHasOption("hz.installer=1"))
+            KiStartSystemThread(KiInstallerThread, KI_THREAD_PRIORITY_DEFAULT, "Installer");
+        else
+            KiStartSystemThread(KiSessionThread, KI_THREAD_PRIORITY_DEFAULT, "Session");
     }
 
     /* Power diagnostics run last, after a complete boot. */

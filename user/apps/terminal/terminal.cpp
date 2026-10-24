@@ -9,6 +9,7 @@
  */
 #include "console.h"
 #include "hzapps.h"
+#include "hzcrypto.h"
 #include "hzfile.h"
 #include "hzversion.h"
 #include "parse.h"
@@ -144,6 +145,15 @@ private:
     void Start(const CommandLine &C);
     void Volumes();
     void ShowHistory();
+    void HeadTail(const CommandLine &C, bool Tail);
+    void WordCount(const CommandLine &C);
+    void Grep(const CommandLine &C);
+    void Touch(const CommandLine &C);
+    void Move(const CommandLine &C);
+    void Stat(const CommandLine &C);
+    void PathPart(const CommandLine &C, bool Parent);
+    void LinuxHelp();
+    bool UnavailableLinuxCommand(const hz::String &Name);
 
     TerminalWindow *Main_ = nullptr;
     ConsoleView *View_ = nullptr;
@@ -386,7 +396,10 @@ void Terminal::Run(const hz::String &Text)
         else
             Error("The system cannot find the drive specified.");
     } else if (Name == "help" || Name == "?") {
-        Help();
+        if (C.Words.Size() > 1 && Lower(C.Words[1]) == "linux")
+            LinuxHelp();
+        else
+            Help();
     } else if (Name == "cls" || Name == "clear") {
         View_->Clear();
     } else if (Name == "ver") {
@@ -401,7 +414,7 @@ void Terminal::Run(const hz::String &Text)
         uint64_t Now = 0;
         NtQuerySystemTime(&Now);
         Line(hz::String::Format("%s UTC", hz::fs::FormatTime(Now).CStr()));
-    } else if (Name == "dir" || Name == "ls") {
+    } else if (Name == "dir" || Name == "ls" || Name == "vdir" || Name == "v") {
         Dir(C);
     } else if (Name == "cd" || Name == "chdir") {
         ChangeDirectory(C);
@@ -409,6 +422,8 @@ void Terminal::Run(const hz::String &Text)
         Type(C);
     } else if (Name == "copy" || Name == "cp") {
         CopyFile(C);
+    } else if (Name == "mv") {
+        Move(C);
     } else if (Name == "del" || Name == "erase" || Name == "rm") {
         DeleteFiles(C);
     } else if (Name == "mkdir" || Name == "md") {
@@ -419,6 +434,8 @@ void Terminal::Run(const hz::String &Text)
         RenameFile(C);
     } else if (Name == "mem") {
         Memory();
+    } else if (Name == "free") {
+        Memory();
     } else if (Name == "ps" || Name == "tasklist") {
         Processes();
     } else if (Name == "kill" || Name == "taskkill") {
@@ -427,13 +444,92 @@ void Terminal::Run(const hz::String &Text)
         Start(C);
     } else if (Name == "vol" || Name == "volumes") {
         Volumes();
+    } else if (Name == "df") {
+        Volumes();
+    } else if (Name == "pwd") {
+        Line(Cwd_);
+    } else if (Name == "head") {
+        HeadTail(C, false);
+    } else if (Name == "tail") {
+        HeadTail(C, true);
+    } else if (Name == "more") {
+        Error("Use '<command> | more' to page command output.");
+    } else if (Name == "wc") {
+        WordCount(C);
+    } else if (Name == "grep") {
+        Grep(C);
+    } else if (Name == "touch") {
+        Touch(C);
+    } else if (Name == "stat") {
+        Stat(C);
+    } else if (Name == "basename") {
+        PathPart(C, false);
+    } else if (Name == "dirname") {
+        PathPart(C, true);
+    } else if (Name == "sha256sum") {
+        if (C.Words.Size() != 2) {
+            Error("Use: sha256sum <file>");
+        } else {
+            hz::String File = Path(C.Words[1]), Data;
+            STATUS Status = hz::fs::ReadAll(File, Data);
+            if (!HZ_SUCCESS(Status))
+                FileError("Cannot read", File, Status);
+            else
+                Line(hz::String::Format("%s  %s", hz::crypto::Sha256Hex(Data.CStr(), Data.Length()).CStr(),
+                                        C.Words[1].CStr()));
+        }
+    } else if (Name == "uname") {
+        Line(C.Words.Size() > 1 && C.Words[1] == "-a"
+                 ? hz::String::Format("NexoraOS %s %s x86_64", HZ_VERSION_STRING, HZ_MILESTONE)
+                 : hz::String("NexoraOS"));
+    } else if (Name == "hostname") {
+        Line("NexoraOS");
+    } else if (Name == "whoami" || Name == "who" || Name == "users") {
+        hz::fs::Settings Settings;
+        STATUS Status = Settings.Load(hz::fs::SettingsPath("shell"));
+        if (!HZ_SUCCESS(Status) && !hz::fs::IsLiveSystem())
+            Line(hz::String::Format("Cannot read the account settings (0x%08X).", (uint32_t)Status));
+        else {
+            hz::String User = Settings.Get("UserName", "Guest");
+            Line(User.Empty() ? "Guest" : User);
+        }
+    } else if (Name == "id") {
+        Line("POSIX user and group IDs are not implemented; use whoami to display the Nexora account.");
+    } else if (Name == "which" || Name == "whereis") {
+        if (C.Words.Size() != 2) {
+            Error("Use: which <program>");
+        } else {
+            hz::String Image = FindProgram(C.Words[1]);
+            if (Image.Empty())
+                Line(hz::String::Format("%s: program not found.", C.Words[1].CStr()));
+            else
+                Line(Image);
+        }
+    } else if (Name == "true") {
+        /* A successful no-op, as in the standard utility. */
+    } else if (Name == "false") {
+        Line("false: Nexora Terminal does not expose POSIX exit statuses for built-ins.");
+    } else if (Name == "sudo" || Name == "su" || Name == "doas") {
+        Line("Privilege elevation is unavailable: Nexora OS has no POSIX users, groups, or sudo service.");
+    } else if (Name == "apt" || Name == "apt-get" || Name == "aptitude" || Name == "dpkg" ||
+               Name == "rpm" || Name == "dnf" || Name == "yum") {
+        Line("Package management is unavailable: this build has no package database or installer service.");
+    } else if (Name == "systemctl" || Name == "service" || Name == "cron" || Name == "crontab") {
+        Line("Linux services and scheduled jobs are unavailable: Nexora OS has no Linux service manager.");
+    } else if (Name == "curl" || Name == "wget" || Name == "ping" || Name == "ssh" || Name == "scp" ||
+               Name == "sftp" || Name == "ifconfig" || Name == "ifup" || Name == "ifdown" || Name == "iw" ||
+               Name == "ip" || Name == "nc" || Name == "netstat" || Name == "ss" || Name == "traceroute") {
+        Line("This network utility is unavailable: Nexora OS does not yet provide its required user-mode network tools.");
+    } else if (Name == "mount" || Name == "umount" || Name == "fdisk" || Name == "cfdisk" || Name == "mkfs" ||
+               Name == "dd" || Name == "chroot" || Name == "modprobe" || Name == "rmmod") {
+        Line("This privileged device or filesystem operation is unavailable in Nexora OS.");
     } else if (Name == "history") {
         ShowHistory();
-    } else if (Name == "lock" || Name == "shutdown" || Name == "restart") {
+    } else if (Name == "lock" || Name == "shutdown" || Name == "restart" || Name == "reboot") {
         /* The shell does these: shutting down asks the programs to close first. */
         HWND Shell = 0;
         uint64_t Request = Name == "lock" ? HZ_SHELL_REQUEST_LOCK : HZ_SHELL_REQUEST_SHUTDOWN;
-        uint64_t Detail = Name == "restart" ? HZ_SHUTDOWN_REBOOT : HZ_SHUTDOWN_POWER_OFF;
+        uint64_t Detail = Name == "restart" || Name == "reboot" ? HZ_SHUTDOWN_REBOOT : HZ_SHUTDOWN_POWER_OFF;
         if (HZ_SUCCESS(NtUserGetShellWindow(&Shell)) && Shell)
             NtUserPostMessage(Shell, HZ_WM_SHELLREQUEST, Request, Detail);
         else
@@ -445,7 +541,8 @@ void Terminal::Run(const hz::String &Text)
     } else {
         hz::String Image = FindProgram(C.Words[0]);
         if (Image.Empty()) {
-            Line(hz::String::Format("'%s' is not a command or a program.", C.Words[0].CStr()));
+            if (!UnavailableLinuxCommand(Name))
+                Line(hz::String::Format("'%s' is not a command or a program.", C.Words[0].CStr()));
         } else if (StartChild(Image, C)) {
             return; /* finishes when the program exits */
         }
@@ -462,25 +559,36 @@ void Terminal::Help()
         "  copy <from> <to>     copy a file",
         "  date                 the date and time (UTC)",
         "  del <file|pattern>   delete files (* and ? patterns)",
-        "  dir [path|pattern]   list a folder",
+        "  dir/ls [path]        list a folder (Linux ls alias)",
         "  echo <text>          print text",
         "  exit                 close the terminal",
-        "  help                 this list",
+        "  free                 physical memory use (alias for mem)",
+        "  grep [-i] <text> <file>  search text files for a literal string",
+        "  head/tail [-n N] <file>  show the first or last N lines",
+        "  help [linux]         this list or Linux command availability",
         "  history              commands typed so far (Up and Down recall them)",
         "  kill <pid or name>   end a process (by name: every one with that name)",
         "  lock                 lock the computer (the lock screen)",
         "  mem                  memory use",
         "  mkdir <path>         create a folder",
-        "  ps                   processes",
+        "  mv <from> <to>       move a file or folder",
+        "  ps                   processes (Linux ps alias)",
+        "  pwd                  print the current folder",
         "  ren <path> <name>    rename a file or folder",
         "  restart              restart (programs are asked to close first)",
         "  rmdir <path>         remove an empty folder",
+        "  sha256sum <file>     SHA-256 digest of a file",
         "  shutdown             shut down (programs are asked to close first)",
         "  start <program|file> start a program or open a file (no waiting; arguments follow)",
+        "  stat <path>          show file or folder metadata",
+        "  touch <file>         create an empty file if it does not exist",
         "  type <file>          print a text file",
+        "  uname/whoami         Nexora OS and account information",
         "  uptime               time since start-up",
         "  ver                  the Nexora OS version",
-        "  vol                  volumes and free space",
+        "  vol/df               volumes and free space",
+        "  wc <file>            count lines, words and bytes",
+        "  which <program>      locate an installed Nexora program",
         "Anything else runs as a program from the current folder or C:\\Nexora\\System;",
         "its output appears here. 'command > file' and '>> file' write the output to a file;",
         "'command | more' shows it a page at a time. Ctrl+C ends a running program.",
@@ -824,6 +932,242 @@ void Terminal::ShowHistory()
     const hz::Vector<hz::String> &History = View_->History();
     for (size_t i = 0; i < History.Size(); i++)
         Line(hz::String::Format("%4zu  %s", i + 1, History[i].CStr()));
+}
+
+void Terminal::HeadTail(const CommandLine &C, bool Tail)
+{
+    size_t Count = 10, FileIndex = 1;
+    if (C.Words.Size() > 1 && C.Words[1] == "-n") {
+        if (C.Words.Size() < 4) {
+            Error(Tail ? "Use: tail [-n count] <file>" : "Use: head [-n count] <file>");
+            return;
+        }
+        Count = 0;
+        for (size_t i = 0; i < C.Words[2].Length(); i++) {
+            char Digit = C.Words[2][i];
+            if (Digit < '0' || Digit > '9' || Count > 10000) {
+                Error("The line count must be between 0 and 10000.");
+                return;
+            }
+            Count = Count * 10 + (size_t)(Digit - '0');
+        }
+        if (Count > 10000) {
+            Error("The line count must be between 0 and 10000.");
+            return;
+        }
+        FileIndex = 3;
+    }
+    if (C.Words.Size() != FileIndex + 1) {
+        Error(Tail ? "Use: tail [-n count] <file>" : "Use: head [-n count] <file>");
+        return;
+    }
+    hz::String File = Path(C.Words[FileIndex]), Text;
+    STATUS Status = hz::fs::ReadAll(File, Text, 1024 * 1024);
+    if (!HZ_SUCCESS(Status)) {
+        FileError("Cannot read", File, Status);
+        return;
+    }
+    hz::Vector<hz::String> Lines;
+    size_t Start = 0;
+    for (size_t i = 0; i < Text.Length(); i++) {
+        if (Text[i] == '\n') {
+            Lines.Push(Text.Substring(Start, i - Start));
+            Start = i + 1;
+        }
+    }
+    if (Start < Text.Length())
+        Lines.Push(Text.Substring(Start));
+    size_t First = Tail && Lines.Size() > Count ? Lines.Size() - Count : 0;
+    size_t End = Tail ? Lines.Size() : hz::Min(Count, Lines.Size());
+    for (size_t i = First; i < End; i++)
+        Line(Lines[i]);
+}
+
+void Terminal::WordCount(const CommandLine &C)
+{
+    if (C.Words.Size() != 2) {
+        Error("Use: wc <file>");
+        return;
+    }
+    hz::String File = Path(C.Words[1]), Text;
+    STATUS Status = hz::fs::ReadAll(File, Text, 1024 * 1024);
+    if (!HZ_SUCCESS(Status)) {
+        FileError("Cannot read", File, Status);
+        return;
+    }
+    uint64_t Lines = 0, Words = 0;
+    bool InWord = false;
+    for (size_t i = 0; i < Text.Length(); i++) {
+        char Character = Text[i];
+        if (Character == '\n')
+            Lines++;
+        bool Space = Character == ' ' || Character == '\t' || Character == '\r' || Character == '\n';
+        if (!Space && !InWord)
+            Words++;
+        InWord = !Space;
+    }
+    Line(hz::String::Format("%llu %llu %zu %s", (unsigned long long)Lines, (unsigned long long)Words,
+                            Text.Length(), C.Words[1].CStr()));
+}
+
+void Terminal::Grep(const CommandLine &C)
+{
+    bool IgnoreCase = false, ShowNumbers = false;
+    size_t Index = 1;
+    while (Index < C.Words.Size() && C.Words[Index].Length() > 1 && C.Words[Index][0] == '-') {
+        hz::String Option = Lower(C.Words[Index]);
+        if (Option == "-i")
+            IgnoreCase = true;
+        else if (Option == "-n")
+            ShowNumbers = true;
+        else if (Option == "-in" || Option == "-ni") {
+            IgnoreCase = true;
+            ShowNumbers = true;
+        } else
+            break;
+        Index++;
+    }
+    if (C.Words.Size() < Index + 2) {
+        Error("Use: grep [-i] [-n] <text> <file>");
+        return;
+    }
+    const hz::String Pattern = C.Words[Index++];
+    for (; Index < C.Words.Size(); Index++) {
+        hz::String File = Path(C.Words[Index]), Text;
+        STATUS Status = hz::fs::ReadAll(File, Text, 1024 * 1024);
+        if (!HZ_SUCCESS(Status)) {
+            FileError("Cannot read", File, Status);
+            continue;
+        }
+        size_t Start = 0, LineNumber = 1, Matches = 0;
+        for (size_t i = 0; i <= Text.Length(); i++) {
+            if (i != Text.Length() && Text[i] != '\n')
+                continue;
+            hz::String Content = Text.Substring(Start, i - Start);
+            bool Match = IgnoreCase ? Content.ContainsIgnoreCase(Pattern.CStr())
+                                    : Content.Find(Pattern.CStr()) != hz::NotFound;
+            if (Match) {
+                Line(ShowNumbers ? hz::String::Format("%zu:%s", LineNumber, Content.CStr()) : Content);
+                Matches++;
+            }
+            Start = i + 1;
+            LineNumber++;
+        }
+        if (!Matches)
+            Line(hz::String::Format("No matches in %s.", C.Words[Index].CStr()));
+    }
+}
+
+void Terminal::Touch(const CommandLine &C)
+{
+    if (C.Words.Size() < 2) {
+        Error("Use: touch <file> [file ...]");
+        return;
+    }
+    for (size_t i = 1; i < C.Words.Size(); i++) {
+        hz::String File = Path(C.Words[i]);
+        bool Directory = false;
+        if (hz::fs::Exists(File, &Directory)) {
+            if (Directory)
+                Line(hz::String::Format("touch: %s is a folder.", C.Words[i].CStr()));
+            continue;
+        }
+        STATUS Status = hz::fs::WriteAll(File, "", 0);
+        if (!HZ_SUCCESS(Status))
+            FileError("Cannot create", File, Status);
+    }
+}
+
+void Terminal::Move(const CommandLine &C)
+{
+    if (C.Words.Size() != 3) {
+        Error("Use: mv <from> <to>");
+        return;
+    }
+    hz::String From = Path(C.Words[1]), To = Path(C.Words[2]);
+    bool Directory = false;
+    if (hz::fs::Exists(To, &Directory) && Directory)
+        To = hz::fs::Join(To, hz::fs::FileName(From).CStr());
+    STATUS Status = hz::fs::MoveTree(From, To);
+    if (!HZ_SUCCESS(Status))
+        FileError("Cannot move", From, Status);
+}
+
+void Terminal::Stat(const CommandLine &C)
+{
+    if (C.Words.Size() != 2) {
+        Error("Use: stat <path>");
+        return;
+    }
+    hz::String File = Path(C.Words[1]);
+    hz::fs::Entry Entry;
+    STATUS Status = hz::fs::Stat(File, Entry);
+    if (!HZ_SUCCESS(Status)) {
+        FileError("Cannot inspect", File, Status);
+        return;
+    }
+    Line(hz::String::Format("  File: %s", File.CStr()));
+    Line(hz::String::Format("  Type: %s", Entry.Directory ? "directory" : "file"));
+    if (!Entry.Directory)
+        Line(hz::String::Format("  Size: %llu bytes", (unsigned long long)Entry.Size));
+    Line(hz::String::Format("Modify: %s", hz::fs::FormatTime(Entry.Modified).CStr()));
+}
+
+void Terminal::PathPart(const CommandLine &C, bool Parent)
+{
+    if (C.Words.Size() != 2) {
+        Error(Parent ? "Use: dirname <path>" : "Use: basename <path>");
+        return;
+    }
+    hz::String File = Path(C.Words[1]);
+    Line(Parent ? hz::fs::Parent(File) : hz::fs::FileName(File));
+}
+
+void Terminal::LinuxHelp()
+{
+    Line("Linux A-Z command names are not a Linux compatibility layer.");
+    Line("Native Nexora commands and aliases: cat, cd, clear, cp, df, free, grep, head, history,");
+    Line("kill, ls, mkdir, more, mv, ps, pwd, rm, rmdir, sha256sum, stat, tail, touch, uname,");
+    Line("uptime, wc, which, who, whoami. These use Nexora OS paths, APIs, and permissions.");
+    Line("sudo/su, package managers, Linux services, POSIX shell syntax, and device/network");
+    Line("administration are unavailable; use 'help' for supported Nexora commands.");
+}
+
+bool Terminal::UnavailableLinuxCommand(const hz::String &Name)
+{
+    static const char *const LinuxCommandNames[] = {
+        "&", "alias", "apropos", "apt", "apt-get", "aptitude", "aspell", "at", "awk", "base32", "base64",
+        "bash", "bc", "bg", "bind", "break", "builtin", "bzip2", "cal", "caller", "case", "cfdisk", "chattr",
+        "chgrp", "chmod", "chown", "chpasswd", "chroot", "chkconfig", "cksum", "clear_console", "cmp", "comm",
+        "command", "continue", "cpio", "cron", "crontab", "csplit", "curl", "cut", "dc", "dd", "ddrescue",
+        "ddrescuelog", "declare", "diff", "diff3", "dig", "dircolors", "dirs", "dos2unix", "dmesg", "dpkg",
+        "du", "eject", "enable", "env", "ethtool", "eval", "exec", "expand", "export", "expr", "fdformat",
+        "fdisk", "fg", "file", "find", "fmt", "fold", "for", "format", "fsck", "ftp", "function", "fuser",
+        "gawk", "getopts", "getfacl", "groupadd", "groupdel", "groupmod", "groups", "gzip", "hash", "htop",
+        "iconv", "if", "ifconfig", "ifdown", "ifup", "import", "install", "iostat", "ip", "iw", "jobs", "join",
+        "killall", "klist", "less", "let", "link", "ln", "local", "locate", "login", "logname", "logout", "look",
+        "lpc", "lpr", "lprint", "lprintd", "lprintq", "lprm", "lsattr", "lsblk", "lsof", "lspci", "make", "man",
+        "mandoc", "mapfile", "md5sum", "cal", "mkfifo", "mkfile", "mkisofs", "mknod", "mktemp", "modprobe", "most",
+        "mtools", "mtr", "mmv", "nc", "netstat", "nft", "nice", "nl", "nohup", "notify-send", "nslookup", "op",
+        "open", "openssl", "passwd", "paste", "pathchk", "perf", "ping", "pgrep", "pkill", "popd", "pr", "printcap",
+        "printenv", "printf", "pushd", "pv", "quota", "quotacheck", "ram", "rar", "rcp", "read", "readarray",
+        "readonly", "reboot", "renice", "remsync", "return", "rev", "rg", "rmmod", "rsync", "screen", "scp",
+        "sdiff", "sed", "select", "seq", "set", "setfacl", "shift", "shopt", "shuf", "sleep", "slocate", "sntp",
+        "sort", "source", "split", "ss", "ssh", "strace", "sum", "suspend", "sync", "tabs", "tac", "tar", "tee",
+        "test", "times", "timeout", "tmux", "top", "tput", "traceroute", "trap", "tr", "tsort", "tty", "ulimit",
+        "umask", "umount", "unexpand", "uniq", "units", "unix2dos", "unrar", "unset", "unshar", "until", "useradd",
+        "userdel", "usermod", "uuencode", "uudecode", "uuidgen", "vi", "vmstat", "w", "wait", "watch", "wget",
+        "wl-copy", "wl-paste", "while", "write", "xargs", "xclip", "xdg-open", "xxd", "xz", "yes", "zip", ".",
+        "!!", "#",
+    };
+    for (const char *Command : LinuxCommandNames)
+        if (Name == Command) {
+            Line(hz::String::Format("'%s' is listed in the Linux command reference but is not implemented in Nexora OS.",
+                                    Name.CStr()));
+            Line("This build has no Linux userspace/ELF ABI or compatible subsystem for that command.");
+            return true;
+        }
+    return false;
 }
 
 /* ---- Programs ----------------------------------------------------------------------------------- */

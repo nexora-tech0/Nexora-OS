@@ -84,15 +84,29 @@ CASES = {
                    "welcome: moved to ("],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:"],
     },
+    "control-center-reference": {
+        "entry": None,
+        "disk": False,
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("welcome: desktop windows created",
+                     ["sleep 2", "screenshot:top-dock-dark.png", "sendkey meta_l"]),
+                    ("shell: start opened",
+                     ["sleep 2", "screenshot:taskbar-dock-dark.png", "sendkey esc", "sleep 1",
+                      "mouse_move 587 -376", "mouse_button 1", "mouse_button 0"]),
+                    ("shell: quick settings opened",
+                     ["sleep 2", "screenshot:control-center-dark.png"])],
+        "expect": ["shell: unlocked", "shell: ready", "welcome: desktop windows created", "shell: start opened",
+                   "shell: quick settings opened"],
+        "fail": ["*** STOP", "ERROR:"],
+        "timeout": 150.0,
+    },
     "shell": {
         "entry": None,
         "disk": False,
         # Unlock, open Start with the logo key, search "clo" and press Enter (Clock starts), Alt+Tab
-        # back to Welcome. The taskbar's middle group is Start, Welcome, Clock (44 px buttons, 4 px
-        # apart, centred): Clock's button is at (560, 744), 48 right and 360 down from the screen
-        # centre where the cursor starts. Clicking it activates Clock, then minimizes it, then
-        # restores it. The quick settings button is at (888, 744); its second wallpaper swatch is
-        # 68 left and 122 up from there.
+        # back to Welcome. At 1280x800, the taskbar's middle group is Start, Welcome, Clock; then
+        # activate, minimize and restore Clock. Open Control Center from the top dock and select
+        # its second wallpaper preview.
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
                     ("welcome: desktop windows created", ["sendkey meta_l"]),
                     ("shell: start opened", ["sendkey c", "sendkey l", "sendkey o", "sendkey ret"]),
@@ -100,8 +114,10 @@ CASES = {
                     ("shell: switched to Welcome", ["mouse_move 48 360", "mouse_button 1", "mouse_button 0"]),
                     ("shell: activated Clock", ["mouse_button 1", "mouse_button 0"]),
                     ("shell: minimized Clock", ["mouse_button 1", "mouse_button 0"]),
-                    ("shell: restored Clock", ["mouse_move 328 0", "mouse_button 1", "mouse_button 0"]),
-                    ("shell: quick settings opened", ["mouse_move -68 -122", "mouse_button 1", "mouse_button 0"])],
+                    ("shell: restored Clock", ["mouse_move 328 0", "mouse_button 1", "mouse_button 0",
+                                               "mouse_move 128 16", "mouse_button 1", "mouse_button 0"]),
+                    ("shell: quick settings opened", ["mouse_move -8 -746", "mouse_button 1", "mouse_button 0",
+                                                       "mouse_move -146 120", "mouse_button 1", "mouse_button 0"])],
         "expect": ["shell: unlocked", "shell: launched welcome.exe", "shell: start opened", "shell: launched clock.exe",
                    "clock: started", "shell: switched to Welcome", "shell: activated Clock", "shell: minimized Clock",
                    "shell: restored Clock", "shell: quick settings opened", "shell: wallpaper 1"],
@@ -171,6 +187,33 @@ CASES = {
         "timeout": 240.0,  # about 40 s of typing through the QEMU monitor
         "disk_files": {"::/smoke.txt": "Hello from the smoke test", "::/out.txt": "piped\n"},
     },
+    "terminal-linux": {
+        "entry": None,
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("welcome: desktop windows created", ["sendkey meta_l"]),
+                    ("shell: start opened", ["type:terminal", "sendkey ret"]),
+                    ("terminal: started", ["type:touch linux-test.txt\n",
+                                           "type:echo hello linux > linux-test.txt\n"]),
+                    ("terminal: wrote 12 bytes to D:\\linux-test.txt",
+                     ["type:pwd\n", "type:uname -a\n", "type:whoami\n", "type:free\n", "type:df\n",
+                      "type:wc linux-test.txt\n"]),
+                    ("terminal| 1 2 12 linux-test.txt",
+                     ["type:head -n 1 linux-test.txt\n", "type:tail -n 1 linux-test.txt\n",
+                      "type:grep -n linux linux-test.txt\n"]),
+                    ("terminal| 1:hello linux",
+                     ["type:sha256sum linux-test.txt\n", "type:mv linux-test.txt moved.txt\n",
+                      "type:stat moved.txt\n", "type:rm moved.txt\n", "type:sudo id\n"]),
+                    ("Privilege elevation is unavailable",
+                     ["type:apt update\n"])],
+        "expect": ["shell: launched terminal.exe", "terminal: started", "terminal: wrote 12 bytes to D:\\linux-test.txt",
+                   "terminal| D:\\", "terminal| NexoraOS 1.1.0 M12 x86_64", "terminal| Guest",
+                   "terminal| Physical memory:", "terminal| Drive  Label", "terminal| 1 2 12 linux-test.txt",
+                   "terminal| hello linux", "terminal| 1:hello linux", "terminal|  ", "terminal|   File: D:\\moved.txt",
+                   "terminal| Privilege elevation is unavailable",
+                   "Package management is unavailable"],
+        "fail": ["*** STOP", "ERROR:", "crashed"],
+        "timeout": 180.0,
+    },
     "network-interface": {
         "entry": None,
         "disk": False,
@@ -179,16 +222,85 @@ CASES = {
                     ("welcome: desktop windows created", ["sendkey meta_l"]),
                     ("shell: start opened", ["type:settings", "sendkey ret"]),
                     ("settings: Home", ["type:network", "sendkey tab", "sendkey down", "sendkey ret"]),
-                    ("settings: Network", ["sendkey shift-tab", "sendkey ctrl-a", "type:storage",
+                    ("settings: Network & Internet", ["sendkey shift-tab", "sendkey ctrl-a", "type:storage",
                                            "sendkey tab", "sendkey down", "sendkey ret"]),
-                    ("settings: Storage", ["sendkey shift-tab", "sendkey ctrl-a", "type:home",
+                    ("settings: System", ["sendkey shift-tab", "sendkey ctrl-a", "type:apps",
+                                           "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Apps", ["sendkey shift-tab", "sendkey ctrl-a", "type:home",
                                            "sendkey tab", "sendkey down", "sendkey ret"])],
         "expect": ["Network: interface eth0 registered", "E1000: ", "up link", "Network protocol self-tests: ",
                    "passed", "DHCP self-tests: 6/6 passed", "DHCP: eth0 configured", "usertest: ",
-                   "checks, 0 failed", "shell: ready", "settings: Home", "settings: Network",
-                   "settings: Storage"],
+                   "checks, 0 failed", "shell: ready", "settings: Home", "settings: Network & Internet",
+                   "settings: System", "settings: Apps"],
         "fail": ["*** STOP", "ERROR:"],
         "timeout": 120.0,
+    },
+    "settings-visual": {
+        "entry": None,
+        "disk": False,
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("welcome: desktop windows created",
+                     ["screenshot:desktop-dock.png", "mouse_move 508 -370", "mouse_button 1", "mouse_button 0"]),
+                    ("shell: quick settings opened",
+                     ["sleep 1", "screenshot:control-center.png", "mouse_move -158 160",
+                      "mouse_button 1", "mouse_button 0"]),
+                    ("shell: wallpaper 1", ["sleep 1", "screenshot:control-center-wallpaper-selected.png",
+                                            "sendkey esc", "sendkey meta_l", "type:settings", "sendkey ret"]),
+                    ("settings: Home",
+                     ["sleep 1", "screenshot:settings-home.png", "type:system", "sendkey tab", "sendkey down",
+                      "sendkey ret"]),
+                    ("settings: System",
+                     ["sleep 1", "screenshot:settings-system.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:personalization", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Personalization",
+                     ["sleep 1", "screenshot:settings-personalization.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:network", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Network & Internet",
+                     ["sleep 1", "screenshot:settings-network.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:devices", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Devices",
+                     ["sleep 1", "screenshot:settings-devices.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:apps", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Apps",
+                     ["sleep 1", "screenshot:settings-apps.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:accounts", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Accounts",
+                     ["sleep 1", "screenshot:settings-accounts.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:privacy", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Privacy & Security",
+                     ["sleep 1", "screenshot:settings-privacy-security.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:accessibility", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Accessibility",
+                     ["sleep 1", "screenshot:settings-accessibility.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:date", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Date & Language",
+                     ["sleep 1", "screenshot:settings-date-language.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:updates", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Updates & Recovery",
+                     ["sleep 1", "screenshot:settings-updates-recovery.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:about", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: About Nexora OS",
+                     ["sleep 1", "screenshot:settings-about.png", "sendkey shift-tab", "sendkey ctrl-a",
+                      "type:home", "sendkey tab", "sendkey down", "sendkey ret"]),
+                    ("settings: Home",
+                     ["sleep 2", "screenshot:settings-home.png", "sendkey alt-f4", "sleep 2",
+                      "mouse_move 158 -160", "mouse_button 1", "mouse_button 0", "sleep 1",
+                      "screenshot:control-center-reopened.png", "mouse_button 1", "mouse_button 0", "sleep 1",
+                      "screenshot:control-center-toggled-closed.png", "mouse_button 1", "mouse_button 0", "sleep 1",
+                      "screenshot:control-center-reopened-after-toggle.png", "mouse_move 52 670",
+                      "mouse_button 1", "mouse_button 0", "sleep 1",
+                      "screenshot:control-center-dismissed-outside.png", "mouse_move -52 -670",
+                      "mouse_button 1", "mouse_button 0", "sleep 1",
+                      "screenshot:control-center-reopened-after-outside.png", "sendkey esc", "sleep 1",
+                      "screenshot:control-center-dismissed-escape.png"])],
+        "expect": ["shell: unlocked", "shell: quick settings opened", "shell: wallpaper 1",
+                   "settings: Home", "settings: System", "settings: Personalization", "settings: Network & Internet",
+                   "settings: Devices", "settings: Apps", "settings: Accounts", "settings: Privacy & Security",
+                   "settings: Accessibility", "settings: Date & Language", "settings: Updates & Recovery",
+                   "settings: About Nexora OS"],
+        "expect_counts": {"shell: quick settings opened": 4},
+        "fail": ["*** STOP", "ERROR:"],
+        "timeout": 360.0,
     },
     "catalog-apps": {
         "entry": None,
@@ -256,19 +368,16 @@ CASES = {
     "install": {
         "entry": None,
         "disk": "empty:384",
-        # Setup from Start by keyboard: Enter (welcome), Enter (the first eligible disk), Space
-        # (agree to erase) and Enter (install).
-        "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l"]),
-                    ("shell: start opened", ["type:install", "sendkey ret"]),
-                    ("setup: started", ["sleep 1", "sendkey ret"]),
+        # Setup starts automatically from the install-media boot entry.
+        "actions": [("setup: started", ["sleep 1", "sendkey ret"]),
                     ("setup: disk 0 ", ["sleep 1", "sendkey ret"]),
-                    ("setup: chose disk 0", ["sleep 1", "sendkey spc", "sendkey ret"])],
-        "expect": ["[HZ] BOOT OK", "Ramdisk: ", "at \\Device\\Ramdisk1", "shell: 15 programs installed",
+                    ("setup: chose disk 0", ["sleep 1", "type:ERASE", "sendkey ret"])],
+        "expect": ["[HZ] BOOT OK", "Ramdisk: ", "at \\Device\\Ramdisk1", "Installer: Setup launched automatically",
                    "setup: disk 0 'QEMU HARDDISK', 384 MB: empty", "setup: installing on disk 0",
                    "Disk: Harddisk0 partition table read again: GPT, 2 partition(s)", "setup: partitioned disk 0",
                    "setup: formatted partition 1 as FAT32 'EFI'", "setup: formatted partition 2 as FAT32 'NEXORAOS'",
-                   "setup: boot loader, kernel and system image written", "setup: copied ",
+                   "setup: boot loader, kernel and system image written", "setup: read-back verification passed",
+                   "setup: copied ",
                    "setup: done; Nexora OS is installed on disk 0"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "setup: failed", "FAIL"],
         "timeout": 360.0,
@@ -577,9 +686,9 @@ def log(msg):
 
 
 def build_iso(case):
-    """Returns the ISO path for a case, building a variant ISO for diagnostic entries."""
+    """Builds installer media for install tests and a test-only live desktop for other cases."""
     entry = CASES[case]["entry"]
-    if entry is None:
+    if entry is None and case == "install":
         subprocess.run(["make", "--no-print-directory", "iso"], cwd=ROOT, check=True)
         return os.path.join("build", "nexora-os.iso")
 
@@ -587,11 +696,35 @@ def build_iso(case):
     conf = os.path.join(TEST_DIR, f"{case}.conf")
     with open(os.path.join(ROOT, "boot", "limine.conf"), encoding="utf-8") as f:
         lines = f.read().splitlines()
-    out = [f"default_entry: {entry}"]
-    for line in lines:
-        if line.startswith("timeout:"):
-            line = "timeout: 0"
-        out.append(line)
+    if entry is None:
+        entry = "/Nexora OS (Live desktop, automated test only)"
+        out = [f"default_entry: {entry}"]
+        for line in lines:
+            if line.startswith("default_entry:"):
+                continue
+            if line.startswith("timeout:"):
+                line = "timeout: 0"
+            out.append(line)
+        out.extend([
+            "",
+            entry,
+            "    protocol: limine",
+            "    path: ${KERNEL}",
+            "    module_path: ${RAMDISK}",
+            "    module_string: ramdisk",
+            "    module_path: ${SYMBOLS}",
+            "    module_string: symbols",
+            "    module_path: ${INSTALL}",
+            "    module_string: install",
+        ])
+    else:
+        out = [f"default_entry: {entry}"]
+        for line in lines:
+            if line.startswith("default_entry:"):
+                continue
+            if line.startswith("timeout:"):
+                line = "timeout: 0"
+            out.append(line)
     with open(os.path.join(ROOT, conf), "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(out) + "\n")
 
@@ -832,6 +965,12 @@ def run_case(case, timeout):
                 for command in pending_actions.pop(0)[1]:
                     if command.startswith("sleep "):
                         time.sleep(float(command[6:]))
+                    elif command.startswith("screenshot:"):
+                        name = command[len("screenshot:"):]
+                        if os.path.basename(name) != name or not name.endswith(".png"):
+                            raise ValueError(f"invalid screenshot name: {name!r}")
+                        monitor_command(mon, f"screendump {ppm}")
+                        ppm_to_png(ppm, os.path.join(ROOT, TEST_DIR, name))
                     elif command.startswith("type:"):
                         for ch in command[5:]:
                             name = KEY_NAMES.get(ch, ("shift-" + ch.lower()) if ch.isupper() else ch)
@@ -842,7 +981,8 @@ def run_case(case, timeout):
             if bad:
                 reason = f"unexpected serial output: {bad[0]!r}"
                 break
-            if all(m in text for m in expected) and not spec.get("exit_ok"):
+            counts_met = all(text.count(marker) >= count for marker, count in spec.get("expect_counts", {}).items())
+            if all(m in text for m in expected) and counts_met and not spec.get("exit_ok"):
                 ok = True
                 break
             time.sleep(0.5)

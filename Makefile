@@ -135,7 +135,7 @@ HZUSER_OBJS := $(UOBJ)/user/lib/hzuser/hzusersys.asm.obj $(UOBJ)/user/lib/hzuser
 HZUSER_LIB := $(BUILD)/user/hzuser.lib
 # hzui, the C++ UI toolkit over hzuser.
 HZUI_OBJS := $(patsubst %,$(UOBJ)/user/lib/hzui/%.cpp.obj,painter element window controls textbox listview menu \
-    editor dialogs)
+    editor dialogs wallpaper)
 HZUI_LIB := $(BUILD)/user/hzui.lib
 USER_PROGRAMS := hello usertest crash fstest wintest uitest welcome apptest
 UI_FONTS := third_party/inter/Inter-Regular.ttf third_party/inter/Inter-SemiBold.ttf \

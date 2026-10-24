@@ -1,13 +1,13 @@
 /*
  * Nexora OS - user/shell/flyouts.cpp
- * The Start menu (search, pinned programs, the user and the power menu) and quick settings
- * (toggles, brightness and volume, the wallpaper). Both are activated Mica popups above the
- * taskbar that close when they lose activation or on Escape.
+ * The Start menu and Control Center. Both are activated Mica popups that close when they lose
+ * activation or on Escape.
  */
 #include "shell.h"
 #include "taskbar.h"
 #include "hzfile.h"
 #include "hzversion.h"
+#include "hzwallpaper.h"
 
 namespace shell {
 
@@ -221,127 +221,94 @@ public:
     }
 };
 
-/* ---- Quick settings ------------------------------------------------------------------------------ */
-
-class ToggleTile final : public Element {
-public:
-    ToggleTile(const char *Label, Icon Glyph, bool *State) : Label_(Label), Glyph_(Glyph), State_(State)
-    {
-        Height = 64;
-        Focusable = true;
-    }
-
-    void Paint(Painter &P) override
-    {
-        const Rect &B = Bounds();
-        bool On = *State_;
-        Color Fill = On ? (IsPressed() ? Theme::AccentPressed : (IsHovered() ? Theme::AccentHover : Theme::Accent))
-                        : (IsPressed() ? Theme::ControlFillPressed : (IsHovered() ? Theme::ControlFillHover : Theme::ControlFill));
-        P.FillRoundRect(B, Theme::ControlRadius, Fill);
-        if (!On)
-            P.StrokeRoundRect(B, Theme::ControlRadius, 1, Theme::ControlStroke);
-        Color Ink = On ? Theme::TextOnAccent : Theme::TextPrimary;
-        P.DrawIcon(Glyph_, Rect{B.X + 12, B.Y + 10, 18, 18}, Ink);
-        P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 12, B.Y + 36, B.Width - 20, 18}, Label_, Ink);
-    }
-
-    void PaintOverlay(Painter &P) override
-    {
-        if (ShowsFocusRing())
-            P.FocusRing(Bounds(), Theme::ControlRadius);
-    }
-
-    void OnPointerEnter() override { Invalidate(); }
-    void OnPointerLeave() override { Invalidate(); }
-
-    void OnPointerDown(PointerEvent &E) override
-    {
-        if (E.Button == HZ_MOUSE_LEFT)
-            E.Handled = true;
-    }
-
-    void OnPointerUp(PointerEvent &E) override
-    {
-        if (Bounds().Contains(E.Position))
-            Toggle();
-    }
-
-    void OnKeyDown(KeyEvent &E) override
-    {
-        if (E.Key == HZ_VK_SPACE || E.Key == HZ_VK_RETURN) {
-            E.Handled = true;
-            Toggle();
-        }
-    }
-
-private:
-    void Toggle()
-    {
-        *State_ = !*State_;
-        HzPrint("shell: %s %s", Label_, *State_ ? "on" : "off");
-        Invalidate();
-        if (g_Shell.Bar && g_Shell.Bar->Content())
-            g_Shell.Bar->Content()->Invalidate();
-    }
-
-    const char *Label_;
-    Icon Glyph_;
-    bool *State_;
-};
-
-class IconView final : public Element {
-public:
-    explicit IconView(Icon Glyph) : Glyph_(Glyph)
-    {
-        Width = 20;
-        Height = 20;
-        VerticalAlignment = Align::Center;
-        HitTestVisible = false;
-    }
-    void Paint(Painter &P) override { P.DrawIcon(Glyph_, Bounds().Deflate(Thickness(2)), Theme::TextSecondary); }
-
-private:
-    Icon Glyph_;
-};
+/* ---- Control Center ----------------------------------------------------------------------------- */
 
 /* Compact fallback tints for the quick-settings wallpaper picker. */
 struct Swatch {
     Color Top, Middle, Bottom, Glow;
-    const char *Name;
 };
-const Swatch kSwatches[HZ_MAX_WALLPAPER + 1] = {
-    {0xFF153D2C, 0xFF285840, 0xFF102A36, 0xFF85D7A6, "Mountain falls"},
-    {0xFF24455D, 0xFF356D89, 0xFF162B42, 0xFF8DD2E8, "Coastal cliffs"},
-    {0xFF272638, 0xFF56516A, 0xFF242C42, 0xFFE4A68A, "City at dusk"},
-    {0xFF344332, 0xFF65744A, 0xFF273841, 0xFFD7BA79, "Red fox"},
-    {0xFF25334A, 0xFF56677B, 0xFF28394B, 0xFFE9C4B0, "Coastal lock screen"},
+const Swatch kFallbackSwatches[hz::wallpaper::Count] = {
+    {0xFF153D2C, 0xFF285840, 0xFF102A36, 0xFF85D7A6},
+    {0xFF24455D, 0xFF356D89, 0xFF162B42, 0xFF8DD2E8},
+    {0xFF272638, 0xFF56516A, 0xFF242C42, 0xFFE4A68A},
+    {0xFF344332, 0xFF65744A, 0xFF273841, 0xFFD7BA79},
+    {0xFF25334A, 0xFF56677B, 0xFF28394B, 0xFFE9C4B0},
 };
 
 class WallpaperSwatch final : public Element {
 public:
-    explicit WallpaperSwatch(uint32_t Index) : Index_(Index)
+    WallpaperSwatch(uint32_t Index, int32_t SwatchWidth) : Index_(Index)
     {
-        Width = 56;
-        Height = 48;
+        Width = SwatchWidth;
+        ImageHeight_ = HZ_MAX(1, HZ_MIN(35, HZ_MAX(1, SwatchWidth - 6) * 9 / 16));
+        Height = ImageHeight_ + 44;
         Focusable = true;
-        ToolTip = kSwatches[Index].Name;
+        const hz::wallpaper::Info *Info = hz::wallpaper::GetInfo(Index);
+        if (!Info)
+            return;
+        ToolTip = Info->Name;
+        STATUS LoadStatus = hz::wallpaper::LoadPreview(Index, &Preview_, &PreviewWidth_, &PreviewHeight_);
+        if (!HZ_SUCCESS(LoadStatus))
+            HzPrint("shell: cannot load wallpaper preview %u (0x%08X)", Index, (uint32_t)LoadStatus);
     }
+
+    ~WallpaperSwatch() override { free(Preview_); }
 
     void Paint(Painter &P) override
     {
         const Rect &B = Bounds();
-        const Swatch &S = kSwatches[Index_];
-        Rect Inner = B.Deflate(Thickness(3));
-        P.FillVerticalGradient(Rect{Inner.X, Inner.Y, Inner.Width, Inner.Height * 6 / 10}, 0, S.Top, S.Middle);
-        P.FillVerticalGradient(Rect{Inner.X, Inner.Y + Inner.Height * 6 / 10, Inner.Width, Inner.Height - Inner.Height * 6 / 10},
-                               0, S.Middle, S.Bottom);
-        P.PushClip(Inner);
-        P.FillCircle(Inner.X + Inner.Width / 2.0f, (float)Inner.Bottom() + 10, 24, ScaleAlpha(S.Glow, 0.55f));
+        if (Index_ >= hz::wallpaper::Count)
+            return;
+        const Swatch &S = kFallbackSwatches[Index_];
+        const hz::wallpaper::Info *Info = hz::wallpaper::GetInfo(Index_);
+        if (!Info)
+            return;
+        Rect Image{B.X + 3, B.Y + 3, B.Width - 6, ImageHeight_};
+        P.FillRoundRect(B, Theme::ControlRadius, g_Shell.Wallpaper == Index_ ? Theme::ControlFillHover : Theme::ControlFill);
+        P.PushClip(Image);
+        if (Preview_) {
+            P.DrawBitmap(Image, Preview_, PreviewWidth_, PreviewHeight_);
+        } else {
+            P.FillVerticalGradient(Rect{Image.X, Image.Y, Image.Width, Image.Height * 6 / 10}, 0, S.Top, S.Middle);
+            P.FillVerticalGradient(Rect{Image.X, Image.Y + Image.Height * 6 / 10, Image.Width,
+                                        Image.Height - Image.Height * 6 / 10},
+                                   0, S.Middle, S.Bottom);
+            P.FillCircle(Image.X + Image.Width / 2.0f, (float)Image.Bottom() + 10, 24, ScaleAlpha(S.Glow, 0.55f));
+        }
         P.PopClip();
         if (g_Shell.Wallpaper == Index_)
-            P.StrokeRoundRect(B, 6, 2, Theme::Accent);
+            P.StrokeRoundRect(B, Theme::ControlRadius, 2, Theme::Accent);
         else if (IsHovered())
-            P.StrokeRoundRect(B, 6, 1, Theme::ControlStrongStroke);
+            P.StrokeRoundRect(B, Theme::ControlRadius, 1, Theme::ControlStrongStroke);
+        char Lines[3][32] = {};
+        size_t LineCount = 1;
+        size_t MaxChars = HZ_MAX(1, (B.Width - 4) / 6);
+        for (const char *Word = Info->Name; *Word;) {
+            while (*Word == ' ')
+                Word++;
+            if (!*Word)
+                break;
+            const char *End = Word;
+            while (*End && *End != ' ')
+                End++;
+            size_t WordLength = (size_t)(End - Word);
+            char *Line = Lines[LineCount - 1];
+            size_t CurrentLength = strlen(Line);
+            if (CurrentLength && CurrentLength + 1 + WordLength > MaxChars && LineCount < 3) {
+                Line = Lines[LineCount++];
+                CurrentLength = 0;
+            }
+            if (CurrentLength && CurrentLength + 1 < sizeof(Lines[0]))
+                Line[CurrentLength++] = ' ';
+            size_t CopyLength = HZ_MIN(WordLength, sizeof(Lines[0]) - CurrentLength - 1);
+            memcpy(Line + CurrentLength, Word, CopyLength);
+            Line[CurrentLength + CopyLength] = 0;
+            Word = End;
+        }
+        for (size_t Line = 0; Line < LineCount; Line++)
+            P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 2, B.Y + ImageHeight_ + 2 + (int32_t)Line * 13,
+                                                        B.Width - 4, 13},
+                       Lines[Line], Theme::TextPrimary, Align::Center);
     }
 
     void PaintOverlay(Painter &P) override
@@ -385,12 +352,173 @@ private:
     }
 
     uint32_t Index_;
+    uint32_t *Preview_ = nullptr;
+    int32_t PreviewWidth_ = 0, PreviewHeight_ = 0;
+    int32_t ImageHeight_ = 0;
 };
 
 TextBlock *Heading(Element *Parent, const char *Text)
 {
     TextBlock *T = Parent->Add<TextBlock>(Text, FontRole::BodyStrong);
     return T;
+}
+
+StackPanel *ControlCard(Element *Parent, const char *Title)
+{
+    StackPanel *Card = Parent->Add<StackPanel>(Orientation::Vertical, 8);
+    Card->Padding = Thickness(12);
+    Card->Background = 0xB02B2E37;
+    Card->BorderColor = 0x32FFFFFF;
+    Card->CornerRadius = 16;
+    Heading(Card, Title);
+    return Card;
+}
+
+class ControlGlyph final : public Element {
+public:
+    explicit ControlGlyph(Icon Glyph, bool Available = true) : Glyph_(Glyph), Available_(Available)
+    {
+        Width = Height = 38;
+        VerticalAlignment = Align::Center;
+        Background = Available ? 0xFF566BD0 : 0xFF454852;
+        CornerRadius = 19;
+        HitTestVisible = false;
+    }
+
+    void Paint(Painter &P) override
+    {
+        Element::Paint(P);
+        const Rect &B = Bounds();
+        P.DrawIcon(Glyph_, Rect{B.X + 10, B.Y + 10, B.Width - 20, B.Height - 20},
+                   Available_ ? 0xFFF5F6FA : 0xFF999CA5);
+    }
+
+private:
+    Icon Glyph_;
+    bool Available_;
+};
+
+StackPanel *ControlStatusRow(Element *Parent, Icon Glyph, const char *Title, const char *Detail, bool Available = true)
+{
+    StackPanel *Row = Parent->Add<StackPanel>(Orientation::Horizontal, 10);
+    Row->Padding = Thickness(7, 5);
+    Row->Background = 0x1CFFFFFF;
+    Row->CornerRadius = 13;
+    Row->Add<ControlGlyph>(Glyph, Available);
+    StackPanel *Text = Row->Add<StackPanel>(Orientation::Vertical, 1);
+    Text->VerticalAlignment = Align::Center;
+    Text->Add<TextBlock>(Title, FontRole::BodyStrong);
+    TextBlock *Description = Text->Add<TextBlock>(Detail, FontRole::Caption);
+    Description->Foreground = Theme::TextSecondary;
+    Description->Wrap = true;
+    return Row;
+}
+
+class QuickAction final : public Element {
+public:
+    QuickAction(const char *Title, Icon Glyph, hz::Function<void()> Action)
+        : Title_(Title), Glyph_(Glyph), Action_(hz::Move(Action))
+    {
+        Width = 58;
+        Height = 68;
+        Focusable = true;
+        ToolTip = Title;
+    }
+
+    void Paint(Painter &P) override
+    {
+        const Rect &B = Bounds();
+        float Hover = Hover_.Value();
+        float Radius = 22.0f + Hover * 2.0f;
+        float CenterX = B.X + B.Width / 2.0f;
+        float CenterY = B.Y + 23.0f;
+        P.FillCircle(CenterX, CenterY, Radius, MixColors(0xFF424651, 0xFF5A6272, Hover));
+        P.StrokeCircle(CenterX, CenterY, Radius, 1.0f, 0x26FFFFFF);
+        P.DrawIcon(Glyph_, Rect{(int32_t)CenterX - 8, (int32_t)CenterY - 8, 16, 16}, 0xFFF1F2F6);
+        P.TextLine(GetFont(FontRole::Caption), Rect{B.X - 4, B.Y + 48, B.Width + 8, 18}, Title_.CStr(),
+                   Theme::TextSecondary, Align::Center);
+    }
+
+    void PaintOverlay(Painter &P) override
+    {
+        if (ShowsFocusRing())
+            P.FocusRing(Bounds(), 10);
+    }
+
+    void OnPointerEnter() override
+    {
+        Hover_.To(1.0f, Motion::HoverEnterMs);
+        StartAnimation();
+    }
+
+    void OnPointerLeave() override
+    {
+        Hover_.To(0.0f, Motion::HoverLeaveMs);
+        StartAnimation();
+    }
+
+    void OnPointerDown(PointerEvent &E) override
+    {
+        if (E.Button == HZ_MOUSE_LEFT)
+            E.Handled = true;
+    }
+
+    void OnPointerUp(PointerEvent &E) override
+    {
+        if (E.Button == HZ_MOUSE_LEFT && Bounds().Contains(E.Position) && Action_)
+            Action_();
+    }
+
+    void OnKeyDown(KeyEvent &E) override
+    {
+        if ((E.Key == HZ_VK_RETURN || E.Key == HZ_VK_SPACE) && Action_) {
+            E.Handled = true;
+            Action_();
+        }
+    }
+
+    bool Animate() override
+    {
+        Invalidate();
+        return Hover_.Running();
+    }
+
+private:
+    hz::String Title_;
+    Icon Glyph_;
+    hz::Function<void()> Action_;
+    Transition Hover_;
+};
+
+hz::String NetworkStatus()
+{
+    HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION Interfaces[HZ_MAX_NETWORK_INTERFACES] = {};
+    uint32_t Returned = 0;
+    STATUS Status = NtQuerySystemInformation(HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION_CLASS, Interfaces,
+                                             sizeof(Interfaces), &Returned);
+    if (!HZ_SUCCESS(Status))
+        return hz::String::Format("Status unavailable (0x%08X)", (uint32_t)Status);
+    if (Returned > sizeof(Interfaces) || Returned % sizeof(Interfaces[0])) {
+        HzPrint("shell: malformed network information length %u", Returned);
+        return "Adapter information unavailable";
+    }
+    uint32_t Count = Returned / sizeof(Interfaces[0]);
+    if (!Count)
+        return "No supported adapter detected";
+    const HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION &Interface = Interfaces[0];
+    return hz::String::Format("%s - %s", Interface.Name, Interface.LinkUp ? "Connected" : "Disconnected");
+}
+
+void ChangeWallpaper(int Direction)
+{
+    if (!hz::wallpaper::Count)
+        return;
+    uint32_t Current = g_Shell.Wallpaper % hz::wallpaper::Count;
+    uint32_t Next = Direction < 0 ? (Current + hz::wallpaper::Count - 1) % hz::wallpaper::Count
+                                 : (Current + 1) % hz::wallpaper::Count;
+    g_Shell.SetWallpaper(Next);
+    if (g_Shell.Wallpaper == Next)
+        HzPrint("shell: wallpaper %u", Next);
 }
 
 }  // namespace
@@ -494,59 +622,65 @@ Window *CreateStartMenu()
 
 Window *CreateQuickSettings()
 {
-    const int32_t Width = 360, Height = 396;
-    Flyout *Quick = new Flyout("Quick settings", Width, Height, &g_Shell.Quick);
-    StackPanel *Root = new StackPanel(Orientation::Vertical, 12);
-    Root->Padding = Thickness(16);
+    const Rect &S = g_Shell.Screen;
+    const int32_t Width = HZ_MIN(660, HZ_MAX(1, S.Width - 24));
+    const int32_t Height = HZ_MIN(530, HZ_MAX(1, g_Shell.Work.Height));
+    Flyout *Quick = new Flyout("Control Center", Width, Height, &g_Shell.Quick);
+    Grid *Root = new Grid();
+    Root->Columns.Push(GridLength::Stars(1));
+    Root->Columns.Push(GridLength::Stars(1));
+    Root->Rows.Push(GridLength::Stars(1));
+    Root->Rows.Push(GridLength::AutoSize());
+    Root->ColumnSpacing = 10;
+    Root->RowSpacing = 10;
+    Root->Padding = Thickness(14);
 
-    Grid *Toggles = Root->Add<Grid>();
-    Toggles->Columns.Push(GridLength::Stars(1));
-    Toggles->Columns.Push(GridLength::Stars(1));
-    Toggles->Rows.Push(GridLength::AutoSize());
-    Toggles->Rows.Push(GridLength::AutoSize());
-    Toggles->ColumnSpacing = 8;
-    Toggles->RowSpacing = 8;
-    struct {
-        const char *Label;
-        Icon Glyph;
-        bool *State;
-    } const Tiles[4] = {{"Night light", Icon::Moon, &g_Shell.NightLight},
-                        {"Focus", Icon::Clock, &g_Shell.Focus},
-                        {"Energy saver", Icon::Leaf, &g_Shell.EnergySaver},
-                        {"Airplane mode", Icon::Plane, &g_Shell.Airplane}};
-    for (int i = 0; i < 4; i++) {
-        ToggleTile *Tile = Toggles->Add<ToggleTile>(Tiles[i].Label, Tiles[i].Glyph, Tiles[i].State);
-        Tile->GridColumn = (uint8_t)(i % 2);
-        Tile->GridRow = (uint8_t)(i / 2);
-    }
+    StackPanel *Left = Root->Add<StackPanel>(Orientation::Vertical, 10);
+    Left->GridColumn = 0;
+    StackPanel *Network = ControlCard(Left, "Network");
+    ControlStatusRow(Network, Icon::Wifi, "Ethernet", NetworkStatus().CStr());
+    ControlStatusRow(Network, Icon::Globe, "Bluetooth", "Not available in this build", false);
 
-    struct {
-        Icon Glyph;
-        float *Value;
-        const char *Tip;
-    } const Sliders[2] = {{Icon::Sun, &g_Shell.Brightness, "Brightness"}, {Icon::Volume, &g_Shell.Volume, "Volume"}};
-    for (const auto &S : Sliders) {
-        Grid *Row = Root->Add<Grid>();
-        Row->Columns.Push(GridLength::Pixels(28));
-        Row->Columns.Push(GridLength::Stars(1));
-        Row->Add<IconView>(S.Glyph);
-        Slider *Bar = Row->Add<Slider>(0, 100, *S.Value);
-        Bar->GridColumn = 1;
-        Bar->ToolTip = S.Tip;
-        float *Value = S.Value;
-        Bar->OnValueChanged = [Value](float V) { *Value = V; };
-    }
+    StackPanel *Devices = ControlCard(Left, "Audio & display");
+    ControlStatusRow(Devices, Icon::Volume, "Volume", "Audio controls are not implemented", false);
+    ControlStatusRow(Devices, Icon::Sun, "Brightness", "Display brightness is not adjustable", false);
 
-    Heading(Root, "Wallpaper");
-    StackPanel *Swatches = Root->Add<StackPanel>(Orientation::Horizontal, 8);
-    for (uint32_t i = 0; i <= HZ_MAX_WALLPAPER; i++)
-        Swatches->Add<WallpaperSwatch>(i);
-    TextBlock *Footer = Root->Add<TextBlock>("Nexora OS " HZ_VERSION_STRING " (" HZ_MILESTONE ")", FontRole::Caption);
-    Footer->Foreground = Theme::TextTertiary;
+    StackPanel *Right = Root->Add<StackPanel>(Orientation::Vertical, 10);
+    Right->GridColumn = 1;
+    StackPanel *Focus = ControlCard(Right, "Focus");
+    ControlStatusRow(Focus, Icon::Moon, "Focus mode", "Not available in this build", false);
+
+    StackPanel *Actions = ControlCard(Right, "Quick actions");
+    StackPanel *ActionRow = Actions->Add<StackPanel>(Orientation::Horizontal, 4);
+    ActionRow->HorizontalAlignment = Align::Center;
+    ActionRow->Add<QuickAction>("Previous", Icon::ChevronLeft, []() { ChangeWallpaper(-1); });
+    ActionRow->Add<QuickAction>("Next", Icon::ChevronRight, []() { ChangeWallpaper(1); });
+    ActionRow->Add<QuickAction>("Settings", Icon::Settings, []() {
+        if (g_Shell.Quick)
+            static_cast<Flyout *>(g_Shell.Quick)->Dismiss();
+        if (const hz::apps::App *Settings = g_Shell.FindApp(hz::String("settings")))
+            g_Shell.Launch(*Settings);
+        else
+            HzPrint("shell: Settings is not installed");
+    });
+    ActionRow->Add<QuickAction>("Lock", Icon::Person, []() { g_Shell.LockNow(); });
+    TextBlock *PowerInfo = Actions->Add<TextBlock>("Battery and power status unavailable", FontRole::Caption);
+    PowerInfo->Foreground = Theme::TextTertiary;
+
+    StackPanel *Wallpaper = ControlCard(Root, "Desktop wallpaper");
+    Wallpaper->GridRow = 1;
+    Wallpaper->GridColumnSpan = 2;
+    StackPanel *Swatches = Wallpaper->Add<StackPanel>(Orientation::Horizontal, 6);
+    int32_t SwatchWidth = HZ_MIN(88, HZ_MAX(38, (Width - 58 - 24) / (int32_t)hz::wallpaper::Count));
+    for (uint32_t i = 0; i < hz::wallpaper::Count; i++)
+        Swatches->Add<WallpaperSwatch>(i, SwatchWidth);
+    TextBlock *Hint = Wallpaper->Add<TextBlock>("Choose a wallpaper to apply it to the desktop.", FontRole::Caption);
+    Hint->Foreground = Theme::TextSecondary;
 
     Quick->SetContent(Root);
-    const Rect &S = g_Shell.Screen;
-    if (!Quick->ShowAt(S.Width - Width - 12, g_Shell.Work.Bottom() - 12 - Height)) {
+    int32_t X = HZ_MAX(0, S.Width - Width - 12);
+    int32_t Y = HZ_MIN(kTopDockTop + kTopDockHeight + 8, S.Height - kTaskbarHeight - Height);
+    if (!Quick->ShowAt(X, Y)) {
         g_Shell.Quick = nullptr;
         delete Quick;
         return nullptr;

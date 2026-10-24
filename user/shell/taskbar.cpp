@@ -1,7 +1,6 @@
 /*
  * Nexora OS - user/shell/taskbar.cpp
- * The taskbar (Start button and one button per app window in the middle, quick settings and the
- * clock on the right) and the Alt+Tab switcher.
+ * The top dock, bottom taskbar (Start button and one button per app window), and Alt+Tab switcher.
  */
 #include "taskbar.h"
 
@@ -13,13 +12,13 @@ enum class TaskKind : uint8_t { Start, App, PinnedApp, Quick };
 
 class TaskButton final : public Element {
 public:
-    TaskButton(TaskKind Kind, HWND Window, const char *Title, const char *AppId = "")
-        : Kind_(Kind), Window_(Window), Title_(Title), AppId_(AppId)
+    TaskButton(TaskKind Kind, HWND Window, const char *Title, const char *AppId = "", bool Compact = false)
+        : Kind_(Kind), Window_(Window), Title_(Title), AppId_(AppId), Compact_(Compact)
     {
-        Width = Kind == TaskKind::Quick ? 72 : 44;
-        Height = 40;
+        Width = Kind == TaskKind::Quick ? (Compact ? 28 : 72) : 44;
+        Height = Compact ? 24 : 40;
         VerticalAlignment = Align::Center;
-        ToolTip = Kind == TaskKind::Start ? "Start" : (Kind == TaskKind::Quick ? "Quick settings" : Title);
+        ToolTip = Kind == TaskKind::Start ? "Start" : (Kind == TaskKind::Quick ? "Control Center" : Title);
     }
 
     void Paint(Painter &P) override
@@ -44,8 +43,11 @@ public:
         Color BaseFill = Active || Open ? Theme::ControlFill : 0;
         Color Fill = IsPressed() ? Theme::SubtleFillPressed
                                  : MixColors(BaseFill, Theme::ControlFillHover, Hover_.Value());
+        if (Compact_)
+            Fill = IsPressed() ? 0x30000000 : ScaleAlpha(0x30000000, Hover_.Value());
         if (Fill)
             P.FillRoundRect(B, Theme::ControlRadius, Fill);
+        int32_t IconSize = Compact_ ? 15 : 18;
         int32_t Cy = B.Y + (B.Height - 24) / 2 - ((Kind_ == TaskKind::App || Kind_ == TaskKind::PinnedApp) ? 2 : 0);
         switch (Kind_) {
         case TaskKind::Start:
@@ -63,8 +65,9 @@ public:
             }
             break;
         case TaskKind::Quick:
-            P.DrawIcon(Icon::Volume, Rect{B.X + 14, B.Y + 12, 16, 16}, Theme::TextPrimary);
-            P.DrawIcon(g_Shell.Airplane ? Icon::Plane : Icon::Sun, Rect{B.X + 42, B.Y + 12, 16, 16}, Theme::TextPrimary);
+            P.DrawIcon(Icon::Settings, Rect{B.X + (B.Width - IconSize) / 2, B.Y + (B.Height - IconSize) / 2,
+                                            IconSize, IconSize},
+                       Compact_ ? 0xFFE4E8F0 : Theme::TextPrimary);
             break;
         }
     }
@@ -153,7 +156,7 @@ private:
             if (const hz::apps::App *Settings = g_Shell.FindApp(hz::String("settings")))
                 Items.Push(MenuItem::Make("Open Settings", [Program = *Settings]() { g_Shell.Launch(Program); }));
         } else {
-            Items.Push(MenuItem::Make("Open quick settings", []() { g_Shell.ToggleQuick(); }));
+            Items.Push(MenuItem::Make("Open Control Center", []() { g_Shell.ToggleQuick(); }));
         }
         ShowMenu(Owner, Screen, hz::Move(Items));
     }
@@ -162,6 +165,7 @@ private:
     HWND Window_;
     hz::String Title_;
     hz::String AppId_;
+    bool Compact_;
     Transition Hover_;
     Transition ActiveIndicator_;
     bool ActiveInitialized_ = false, WasActive_ = false;
@@ -197,6 +201,74 @@ private:
     char Tip_[64] = "";
 };
 
+class DockStatus final : public Element {
+public:
+    DockStatus()
+    {
+        Width = 78;
+        Height = 28;
+        VerticalAlignment = Align::Center;
+        Background = 0x523D424F;
+        BorderColor = 0x32FFFFFF;
+        CornerRadius = 14;
+        HitTestVisible = false;
+        ToolTip = "Network and accessibility indicators";
+    }
+
+    void Paint(Painter &P) override
+    {
+        const Rect &B = Bounds();
+        const Color Ink = 0xFFE4E8F0;
+        P.DrawIcon(Icon::Wifi, Rect{B.X + 8, B.Y + 7, 14, 14}, Ink);
+        P.DrawIcon(Icon::Accessibility, Rect{B.X + 33, B.Y + 7, 14, 14}, Ink);
+        P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 55, B.Y + 4, 15, B.Height - 8}, "A", Ink, Align::Center);
+    }
+};
+
+class DockPages final : public Element {
+public:
+    DockPages()
+    {
+        Width = 30;
+        Height = 16;
+        VerticalAlignment = Align::Center;
+        HitTestVisible = false;
+        ToolTip = "Nexora OS desktop";
+    }
+
+    void Paint(Painter &P) override
+    {
+        const Rect &B = Bounds();
+        P.FillCircle(B.X + 5.0f, B.Y + 8.0f, 2.2f, 0xFF9AA8FF);
+        P.FillCircle(B.X + 15.0f, B.Y + 8.0f, 2.2f, 0x77717A90);
+        P.FillCircle(B.X + 25.0f, B.Y + 8.0f, 2.2f, 0x77717A90);
+    }
+};
+
+class DockClock final : public Element {
+public:
+    DockClock()
+    {
+        Width = 142;
+        Height = 28;
+        VerticalAlignment = Align::Center;
+        HitTestVisible = false;
+    }
+
+    void Paint(Painter &P) override
+    {
+        uint64_t Now = 0;
+        NtQuerySystemTime(&Now);
+        hz::fs::CivilTime T = hz::fs::ToCivil(Now, g_Shell.UtcOffset);
+        char Text[40], Weekday[4];
+        memcpy(Weekday, hz::fs::WeekdayNames[T.Weekday], 3);
+        Weekday[3] = 0;
+        HzFormat(Text, sizeof(Text), "%02u:%02u   %s, %u %s", T.Hour, T.Minute, Weekday,
+                 T.Day, hz::fs::MonthNames[(T.Month - 1) % 12]);
+        P.TextLine(GetFont(FontRole::Caption), Bounds(), Text, 0xFFE4E8F0, Align::Center);
+    }
+};
+
 }  // namespace
 
 Taskbar::Taskbar(int32_t ScreenWidth)
@@ -218,6 +290,48 @@ Taskbar::Taskbar(int32_t ScreenWidth)
     Tray->Add<TaskButton>(TaskKind::Quick, (HWND)0, "");
     Clock_ = Tray->Add<ClockView>();
     SetContent(Root);
+}
+
+TopDock::TopDock(int32_t ScreenWidth)
+    : Window("Nexora Dock", ScreenWidth - 40, kTopDockHeight,
+             HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_MICA | HZ_WS_NOFRAME)
+{
+    Grid *Root = new Grid();
+    Root->Columns.Push(GridLength::Stars(1));
+    Root->Columns.Push(GridLength::AutoSize());
+    Root->Columns.Push(GridLength::Stars(1));
+    Root->Padding = Thickness(12, 0);
+    Root->CornerRadius = 20;
+
+    DockStatus *Status = Root->Add<DockStatus>();
+    Status->VerticalAlignment = Align::Center;
+
+    StackPanel *Brand = Root->Add<StackPanel>(Orientation::Horizontal, 6);
+    Brand->GridColumn = 1;
+    Brand->VerticalAlignment = Align::Center;
+    Brand->Add<DockPages>();
+    TextBlock *Name = Brand->Add<TextBlock>("Nexora OS", FontRole::BodyStrong);
+    Name->VerticalAlignment = Align::Center;
+    Name->Foreground = 0xFFF3F4F7;
+
+    StackPanel *Tray = Root->Add<StackPanel>(Orientation::Horizontal, 5);
+    Tray->GridColumn = 2;
+    Tray->HorizontalAlignment = Align::End;
+    Tray->VerticalAlignment = Align::Center;
+    Tray->Padding = Thickness(7, 0);
+    Tray->Background = 0x523D424F;
+    Tray->BorderColor = 0x32FFFFFF;
+    Tray->CornerRadius = 16;
+    Clock_ = Tray->Add<DockClock>();
+    Tray->Add<TaskButton>(TaskKind::Quick, (HWND)0, "", "", true);
+    SetContent(Root);
+}
+
+void TopDock::OnPaint(Painter &P)
+{
+    Window::OnPaint(P);
+    if (!ClockTimer_ && IsOpen())
+        ClockTimer_ = SetTimer(1000, [this]() { Clock_->Invalidate(); });
 }
 
 int64_t Taskbar::HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam)
@@ -243,7 +357,7 @@ void Taskbar::OnContextMenu(Point Screen)
 {
     hz::Vector<MenuItem> Items;
     Items.Push(MenuItem::Make("Open Start", []() { g_Shell.ToggleStart(); }));
-    Items.Push(MenuItem::Make("Quick settings", []() { g_Shell.ToggleQuick(); }));
+    Items.Push(MenuItem::Make("Control Center", []() { g_Shell.ToggleQuick(); }));
     if (const hz::apps::App *Settings = g_Shell.FindApp(hz::String("settings")))
         Items.Push(MenuItem::Make("Open Settings", [Program = *Settings]() { g_Shell.Launch(Program); }));
     ShowMenu(this, Screen, hz::Move(Items));

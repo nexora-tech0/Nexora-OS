@@ -1,7 +1,7 @@
 /*
  * Nexora OS - user/shell/taskbar.h
- * The taskbar: a frameless, topmost, never-activated Mica strip along the bottom of the screen.
- * It is the window win32k sends shell notifications to.
+ * The top dock and bottom taskbar are frameless, topmost, never-activated Mica surfaces. The
+ * taskbar is the window win32k sends shell notifications to.
  */
 #ifndef SHELL_TASKBAR_H
 #define SHELL_TASKBAR_H
@@ -23,6 +23,18 @@ protected:
 
 private:
     StackPanel *Apps_;
+    Element *Clock_;
+    uint64_t ClockTimer_ = 0;
+};
+
+class TopDock final : public Window {
+public:
+    explicit TopDock(int32_t ScreenWidth);
+
+protected:
+    void OnPaint(Painter &P) override;
+
+private:
     Element *Clock_;
     uint64_t ClockTimer_ = 0;
 };

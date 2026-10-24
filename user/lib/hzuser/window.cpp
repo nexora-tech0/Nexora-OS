@@ -126,17 +126,6 @@ void DrawCaptionButton(WindowEntry *E, HZ_CANVAS *C, uint32_t Button, uint32_t G
     }
 }
 
-void DrawLogo(HZ_CANVAS *C, int32_t X, int32_t Y)
-{
-    /* 16x16: a rounded tile with a setting sun on the horizon. */
-    HzFillRoundRect(C, HZ_RECT{X, Y, X + 16, Y + 16}, 4, 0xFF2F4FD8);
-    HZ_RECT SavedClip = C->Clip;
-    C->Clip.Bottom = HZ_MIN(C->Clip.Bottom, Y + 10);
-    HzFillRoundRect(C, HZ_RECT{X + 4, Y + 5, X + 12, Y + 13}, 4, 0xFFFFB04A);
-    C->Clip = SavedClip;
-    HzDrawLine(C, X + 2.5, Y + 10.5, X + 13.5, Y + 10.5, 1.25, 0xFFFFFFFF);
-}
-
 void DrawCaption(WindowEntry *E, HZ_CANVAS *C)
 {
     int32_t Width = C->Width;
@@ -145,15 +134,13 @@ void DrawCaption(WindowEntry *E, HZ_CANVAS *C)
         return;
     HzFillRect(C, Caption, (E->Style & HZ_WS_MICA) ? 0x00000000 : kCaptionOpaque);
     uint32_t Text = E->Active ? kTextActive : kTextInactive;
-    DrawLogo(C, 12, (HZ_CAPTION_HEIGHT - 16) / 2);
-
     HZ_WINDOW_INFO Info;
     HZ_FONT *Font = HzGetFont(HZ_FONT_CAPTION);
     if (Font && HZ_SUCCESS(NtUserGetWindowInfo(E->Handle, &Info))) {
         HZ_RECT SavedClip = C->Clip;
         C->Clip.Right = HZ_MIN(C->Clip.Right, Width - CaptionButtonCount(E) * HZ_CAPTION_BUTTON_WIDTH - 8);
         int32_t Baseline = (HZ_CAPTION_HEIGHT - HzFontLineHeight(Font)) / 2 + HzFontAscent(Font);
-        HzDrawText(C, Font, 38, Baseline, Info.Title, Text);
+        HzDrawText(C, Font, 12, Baseline, Info.Title, Text);
         C->Clip = SavedClip;
     }
 

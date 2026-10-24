@@ -1,14 +1,9 @@
 /*
  * Nexora OS - user/apps/setup/setup.cpp
  * Setup, in two modes:
- *   - "setup.exe" (the live system, Start's "Install Nexora OS"): a wizard that installs Nexora OS
- *     on a disk. It lists the disks (\Device\HarddiskN\DR0, IOCTL_DISK_GET_INFO), and after a
- *     confirmation a worker thread writes a GPT (installer.cpp), has the kernel read it again
- *     (IOCTL_DISK_UPDATE_PARTITIONS), formats both partitions as FAT32, copies the install image
- *     (\Device\Ramdisk1: boot loader, kernel, symbols) and the live image itself (\Device\Ramdisk0
- *     as boot\ramdisk.tar) to the EFI system partition with a limine.conf naming the system
- *     partition, and copies C:\Nexora to the system partition (without Setup's own manifest),
- *     marking it for first-boot setup. Progress arrives in the window as messages.
+ *   - "setup.exe" (the live system, Start's "Install Nexora OS"): a wizard that inspects the
+ *     target disk and its partitions, requires typing ERASE, revalidates the selected disk before
+ *     writes, and reads back raw-sector and copied-file writes before reporting success.
  *   - "setup.exe firstboot" (started by the shell on an installed system's first boot): the user
  *     name, an optional password (M11: a salted hash, hzcrypto.h) and a wallpaper, saved to
  *     C:\Nexora\Settings\shell.ini, and C:\Users\<name>\Documents.
@@ -35,6 +30,8 @@ constexpr uint32_t kChunk = 64 * 1024;
 struct DiskEntry {
     uint32_t Number = 0;
     HZ_DISK_INFORMATION Info = {};
+    hz::Vector<HZ_PARTITION_INFORMATION> Partitions;
+    bool PartitionsValid = true;
     bool Eligible = false;
     hz::String Reason; /* why it cannot be used, or what will happen */
 };
@@ -42,6 +39,48 @@ struct DiskEntry {
 hz::String DiskPath(uint32_t Number)
 {
     return hz::String::Format("\\Device\\Harddisk%u\\DR0", Number);
+}
+
+hz::String PartitionPath(uint32_t Disk, uint32_t Partition)
+{
+    return hz::String::Format("\\Device\\Harddisk%u\\Partition%u", Disk, Partition);
+}
+
+STATUS ReadPartitions(uint32_t Number, uint32_t Count, hz::Vector<HZ_PARTITION_INFORMATION> &Out)
+{
+    Out.Clear();
+    if (Count > 128)
+        return STATUS_DEVICE_DATA_ERROR;
+    for (uint32_t N = 1; N <= Count; N++) {
+        HANDLE Partition;
+        hz::String Path = PartitionPath(Number, N);
+        STATUS Status = NtCreateFile(&Partition, FILE_READ_DATA, Path.CStr(), FILE_OPEN, 0, nullptr);
+        if (!HZ_SUCCESS(Status))
+            return Status;
+        HZ_PARTITION_INFORMATION Info = {};
+        uint32_t Returned = 0;
+        Status = NtDeviceIoControlFile(Partition, IOCTL_DISK_GET_PARTITION_INFO, nullptr, 0, &Info, sizeof(Info), &Returned);
+        NtClose(Partition);
+        if (!HZ_SUCCESS(Status))
+            return Status;
+        if (Returned != sizeof(Info) || Info.Number != N)
+            return STATUS_DEVICE_DATA_ERROR;
+        Out.Push(Info);
+    }
+    return STATUS_SUCCESS;
+}
+
+bool SamePartition(const HZ_PARTITION_INFORMATION &A, const HZ_PARTITION_INFORMATION &B)
+{
+    return A.StartingOffset == B.StartingOffset && A.Length == B.Length && A.Number == B.Number && A.Style == B.Style &&
+           memcmp(A.TypeGuid, B.TypeGuid, sizeof(A.TypeGuid)) == 0 && memcmp(A.UniqueGuid, B.UniqueGuid, sizeof(A.UniqueGuid)) == 0 &&
+           memcmp(A.Name, B.Name, sizeof(A.Name)) == 0;
+}
+
+bool SameDisk(const HZ_DISK_INFORMATION &A, const HZ_DISK_INFORMATION &B)
+{
+    return A.DiskNumber == B.DiskNumber && A.SectorCount == B.SectorCount && A.BytesPerSector == B.BytesPerSector &&
+           A.Style == B.Style && A.PartitionCount == B.PartitionCount && memcmp(A.Model, B.Model, sizeof(A.Model)) == 0;
 }
 
 hz::Vector<DiskEntry> ListDisks()
@@ -56,10 +95,14 @@ hz::Vector<DiskEntry> ListDisks()
         uint32_t Returned = 0;
         STATUS Status = NtDeviceIoControlFile(Disk, IOCTL_DISK_GET_INFO, nullptr, 0, &E.Info, sizeof(E.Info), &Returned);
         NtClose(Disk);
-        if (!HZ_SUCCESS(Status))
+        if (!HZ_SUCCESS(Status) || Returned != sizeof(E.Info))
             continue;
+        Status = ReadPartitions(N, E.Info.PartitionCount, E.Partitions);
+        E.PartitionsValid = HZ_SUCCESS(Status);
         uint64_t Bytes = E.Info.SectorCount * E.Info.BytesPerSector;
-        if (E.Info.Flags & HZ_DISK_SYSTEM)
+        if (!E.PartitionsValid)
+            E.Reason = "existing partitions could not be inspected";
+        else if (E.Info.Flags & HZ_DISK_SYSTEM)
             E.Reason = "holds the running system";
         else if (E.Info.Flags & HZ_DISK_READ_ONLY)
             E.Reason = "read-only";
@@ -87,6 +130,8 @@ hz::Vector<DiskEntry> ListDisks()
 struct InstallJob {
     HWND Window = 0;
     uint32_t Disk = 0;
+    HZ_DISK_INFORMATION ExpectedInfo = {};
+    hz::Vector<HZ_PARTITION_INFORMATION> ExpectedPartitions;
     uint64_t TotalBytes = 0, DoneBytes = 0;
     uint32_t Files = 0;
     hz::String Error;
@@ -110,10 +155,59 @@ uint32_t CopyPerMille(const InstallJob &Job)
 STATUS WriteSectors(HANDLE Device, uint64_t Lba, const void *Data, uint32_t Count)
 {
     uint64_t Offset = Lba * setup::kSectorSize;
-    uint32_t Written = 0;
-    STATUS Status = NtWriteFile(Device, Data, Count * setup::kSectorSize, &Offset, &Written);
-    if (HZ_SUCCESS(Status) && Written != Count * setup::kSectorSize)
+    uint32_t Bytes = Count * setup::kSectorSize, Written = 0;
+    STATUS Status = NtWriteFile(Device, Data, Bytes, &Offset, &Written);
+    if (HZ_SUCCESS(Status) && Written != Bytes)
         Status = STATUS_DISK_FULL;
+    if (HZ_SUCCESS(Status)) {
+        static uint8_t Verify[kChunk];
+        uint64_t ReadOffset = Offset;
+        uint32_t Read = 0;
+        if (Bytes > sizeof(Verify))
+            return STATUS_INVALID_PARAMETER;
+        Status = NtReadFile(Device, Verify, Bytes, &ReadOffset, &Read);
+        if (HZ_SUCCESS(Status) && (Read != Bytes || memcmp(Verify, Data, Bytes) != 0))
+            Status = STATUS_DEVICE_DATA_ERROR;
+    }
+    return Status;
+}
+
+STATUS VerifyFileCopy(const char *SourcePath, const char *TargetPath, uint64_t Size)
+{
+    hz::fs::Entry TargetInfo;
+    STATUS Status = hz::fs::Stat(hz::String(TargetPath), TargetInfo);
+    if (!HZ_SUCCESS(Status))
+        return Status;
+    if (TargetInfo.Directory || TargetInfo.Size != Size)
+        return STATUS_DEVICE_DATA_ERROR;
+    HANDLE Source, Target;
+    Status = NtCreateFile(&Source, FILE_READ_DATA, SourcePath, FILE_OPEN, 0, nullptr);
+    if (!HZ_SUCCESS(Status))
+        return Status;
+    Status = NtCreateFile(&Target, FILE_READ_DATA, TargetPath, FILE_OPEN, 0, nullptr);
+    if (!HZ_SUCCESS(Status)) {
+        NtClose(Source);
+        return Status;
+    }
+    static uint8_t SourceBuffer[kChunk], TargetBuffer[kChunk];
+    uint64_t Offset = 0;
+    while (Offset < Size) {
+        uint32_t Bytes = (uint32_t)hz::Min<uint64_t>(Size - Offset, kChunk);
+        uint32_t SourceRead = 0, TargetRead = 0;
+        uint64_t SourceOffset = Offset, TargetOffset = Offset;
+        Status = NtReadFile(Source, SourceBuffer, Bytes, &SourceOffset, &SourceRead);
+        if (HZ_SUCCESS(Status))
+            Status = NtReadFile(Target, TargetBuffer, Bytes, &TargetOffset, &TargetRead);
+        if (!HZ_SUCCESS(Status))
+            break;
+        if (SourceRead != Bytes || TargetRead != Bytes || memcmp(SourceBuffer, TargetBuffer, Bytes) != 0) {
+            Status = STATUS_DEVICE_DATA_ERROR;
+            break;
+        }
+        Offset += Bytes;
+    }
+    NtClose(Target);
+    NtClose(Source);
     return Status;
 }
 
@@ -141,12 +235,38 @@ STATUS Partition(InstallJob &Job, setup::Layout &Layout)
         return Status;
     }
     HZ_DISK_INFORMATION Info = {};
-    Status = NtDeviceIoControlFile(Disk, IOCTL_DISK_GET_INFO, nullptr, 0, &Info, sizeof(Info), nullptr);
+    uint32_t Returned = 0;
+    Status = NtDeviceIoControlFile(Disk, IOCTL_DISK_GET_INFO, nullptr, 0, &Info, sizeof(Info), &Returned);
+    hz::Vector<HZ_PARTITION_INFORMATION> Partitions;
+    if (HZ_SUCCESS(Status) && Returned != sizeof(Info))
+        Status = STATUS_DEVICE_DATA_ERROR;
+    if (HZ_SUCCESS(Status) && (!SameDisk(Info, Job.ExpectedInfo) ||
+                               (Info.Flags & (HZ_DISK_SYSTEM | HZ_DISK_READ_ONLY | HZ_DISK_IN_USE)))) {
+        Job.Error = "The selected disk changed or became unavailable after confirmation. No data was written; review the disk list.";
+        Status = STATUS_DEVICE_BUSY;
+    }
+    if (HZ_SUCCESS(Status))
+        Status = ReadPartitions(Job.Disk, Info.PartitionCount, Partitions);
+    if (HZ_SUCCESS(Status) && Partitions.Size() != Job.ExpectedPartitions.Size()) {
+        Job.Error = "The selected disk's partition layout changed after confirmation. No data was written; review the disk list.";
+        Status = STATUS_DEVICE_BUSY;
+    }
+    for (size_t I = 0; HZ_SUCCESS(Status) && I < Partitions.Size(); I++) {
+        if (!SamePartition(Partitions[I], Job.ExpectedPartitions[I])) {
+            Job.Error = "The selected disk's partition layout changed after confirmation. No data was written; review the disk list.";
+            Status = STATUS_DEVICE_BUSY;
+        }
+    }
+    if (Status == STATUS_DEVICE_BUSY && Job.Error.Empty())
+        Job.Error = "The selected disk's partition layout changed after confirmation. No data was written; review the disk list.";
     if (HZ_SUCCESS(Status) && !setup::PlanLayout(Info.SectorCount, &Layout))
         Status = STATUS_DISK_FULL;
     if (!HZ_SUCCESS(Status)) {
         NtClose(Disk);
-        Job.Error = "The disk is too small.";
+        if (Job.Error.Empty())
+            Job.Error = Status == STATUS_DISK_FULL ? "The disk is too small." :
+                                                     hz::String::Format("The target disk could not be safely revalidated (0x%08X).",
+                                                                        (uint32_t)Status);
         return Status;
     }
     Layout.DiskGuid = setup::NewGuid();
@@ -284,6 +404,12 @@ STATUS CopyTree(InstallJob &Job, const hz::String &From, const hz::String &To, c
             Job.Error = hz::String::Format("%s cannot be copied (%s).", Source.CStr(), hz::fs::StatusText(Status));
             return Status;
         }
+        Status = VerifyFileCopy(Source.CStr(), Target.CStr(), E.Size);
+        if (!HZ_SUCCESS(Status)) {
+            Job.Error = hz::String::Format("%s could not be verified after copying (%s).", Target.CStr(),
+                                           hz::fs::StatusText(Status));
+            return Status;
+        }
         Job.DoneBytes += E.Size;
         Job.Files++;
     }
@@ -324,6 +450,8 @@ STATUS CopyDevice(InstallJob &Job, const char *DevicePath, const hz::String &Tar
     }
     NtClose(File);
     NtClose(Device);
+    if (HZ_SUCCESS(Status))
+        Status = VerifyFileCopy(DevicePath, Target.CStr(), Size);
     if (!HZ_SUCCESS(Status))
         Job.Error = hz::String::Format("Copying the system image failed (0x%08X).", (uint32_t)Status);
     else
@@ -334,6 +462,12 @@ STATUS CopyDevice(InstallJob &Job, const char *DevicePath, const hz::String &Tar
 STATUS WriteText(InstallJob &Job, const hz::String &Path, const hz::String &Text)
 {
     STATUS Status = hz::fs::WriteAll(Path, Text.CStr(), Text.Length());
+    if (HZ_SUCCESS(Status)) {
+        hz::String Readback;
+        Status = hz::fs::ReadAll(Path, Readback, Text.Length() + 1);
+        if (HZ_SUCCESS(Status) && Readback != Text)
+            Status = STATUS_DEVICE_DATA_ERROR;
+    }
     if (!HZ_SUCCESS(Status))
         Job.Error = hz::String::Format("%s cannot be written (%s).", Path.CStr(), hz::fs::StatusText(Status));
     return Status;
@@ -412,6 +546,7 @@ STATUS Install(InstallJob &Job)
     }
     if (!HZ_SUCCESS(Status))
         return Status;
+    HzPrint("setup: read-back verification passed (%u copied files; GPT, FAT32 and file contents)", Job.Files);
     uint64_t End = 0;
     NtQueryUptime(&End);
     HzPrint("setup: copied %u files (%s) in %llu ms", Job.Files, hz::fs::FormatSize(Job.DoneBytes).CStr(),
@@ -459,13 +594,14 @@ protected:
     virtual void Next() = 0;
     virtual void Back() {}
     virtual void PageShown(size_t Index) {}
+    virtual void Cancel() {}
 
     Window *Main_ = nullptr;
     TextBlock *Title_ = nullptr, *Step_ = nullptr;
     Grid *Pages_ = nullptr;
     hz::Vector<StackPanel *> PageList_;
     size_t Page_ = 0;
-    Button *Back_ = nullptr, *Primary_ = nullptr;
+    Button *Back_ = nullptr, *Cancel_ = nullptr, *Primary_ = nullptr;
     hz::Vector<const char *> Titles_;
 };
 
@@ -513,6 +649,10 @@ bool Wizard::Create(const char *Title)
     Back_ = Buttons->Add<Button>("Back");
     Back_->MinWidth = 110;
     Back_->OnClick = [this]() { Back(); };
+    Cancel_ = Buttons->Add<Button>("Cancel");
+    Cancel_->MinWidth = 110;
+    Cancel_->SetVisible(false);
+    Cancel_->OnClick = [this]() { Cancel(); };
     Primary_ = Buttons->Add<Button>("Next", ButtonStyle::Accent);
     Primary_->MinWidth = 110;
     Primary_->OnClick = [this]() { Next(); };
@@ -597,8 +737,8 @@ protected:
         Titles_.Push("Installation complete");
 
         StackPanel *Welcome = AddPage();
-        Paragraph(Welcome, "Setup copies Nexora OS from this live session to a disk, so the computer can start "
-                           "from it. Settings and documents are then kept between restarts.",
+        Paragraph(Welcome, "Install the complete Nexora OS desktop and applications to a disk. The installation "
+                           "media runs Setup only; your installed system keeps its files and settings between restarts.",
                   Theme::TextPrimary);
         Paragraph(Welcome, "The disk is erased and gets two partitions: a 100 MB EFI system partition with the "
                            "boot loader, and a FAT32 partition for Nexora OS and your files.");
@@ -607,6 +747,17 @@ protected:
                                               "Limine boot loader (BSD license); see C:\\Nexora\\Licenses.",
                                               hz::fs::FormatSize(setup::MinimumDiskSectors() * 512).CStr())
                                .CStr());
+        Button *About = Welcome->Add<Button>("About Nexora OS", ButtonStyle::Standard);
+        About->Glyph = Icon::Info;
+        About->HorizontalAlignment = Align::Start;
+        About->OnClick = [this]() {
+            MessageBox(Main_, "About Nexora OS",
+                       "Nexora OS " HZ_VERSION_STRING " (" HZ_MILESTONE ")\n"
+                       "An original x86-64 UEFI desktop operating system.\n\n"
+                       "This media provides the installer. The complete Nexora desktop and its applications "
+                       "are installed to the selected disk.",
+                       nullptr, nullptr);
+        };
 
         StackPanel *Choose = AddPage();
         Paragraph(Choose, "Select the disk to install Nexora OS on. Disks that are in use or too small cannot be "
@@ -639,12 +790,36 @@ protected:
 
         StackPanel *Confirm = AddPage();
         Summary_ = Paragraph(Confirm, "", Theme::TextPrimary);
+        PartitionSummary_ = Paragraph(Confirm, "");
+        Partitions_ = Confirm->Add<ListView>();
+        Partitions_->Height = 116;
+        Partitions_->ItemHeight = 28;
+        Partitions_->Background = Theme::CardBackground;
+        Partitions_->CornerRadius = Theme::OverlayRadius;
+        Partitions_->PaintItem = [this](Painter &P, const Rect &R, size_t I) {
+            const HZ_PARTITION_INFORMATION &Part = Disks_[Chosen_].Partitions[I];
+            const char *Name = Part.Name[0] ? Part.Name :
+                               Part.Style == HZ_PARTITION_STYLE_GPT ? "GPT partition" :
+                               Part.Style == HZ_PARTITION_STYLE_MBR ? "MBR partition" : "Partition";
+            P.TextLine(GetFont(FontRole::Caption), Rect{R.X + 10, R.Y, R.Width - 130, R.Height},
+                       hz::String::Format("Partition %u: %s", Part.Number, Name).CStr(), Theme::TextPrimary);
+            P.TextLine(GetFont(FontRole::Caption), Rect{R.Right() - 120, R.Y, 110, R.Height},
+                       hz::fs::FormatSize(Part.Length).CStr(), Theme::TextSecondary, Align::End);
+        };
         Layout_ = Paragraph(Confirm, "");
         TextBlock *Warning = Paragraph(Confirm, "Everything on this disk will be erased. This cannot be undone.",
                                        Theme::Accent);
         Warning->Font = FontRole::BodyStrong;
-        Agree_ = Confirm->Add<CheckBox>("I understand that the disk will be erased");
-        Agree_->OnChanged = [this](bool) { UpdateButtons(); };
+        Paragraph(Confirm, "To authorize the erase, type ERASE exactly as shown.");
+        EraseText_ = Confirm->Add<TextBox>("Type ERASE");
+        EraseText_->MaxLength = 5;
+        EraseText_->Width = 260;
+        EraseText_->HorizontalAlignment = Align::Start;
+        EraseText_->OnTextChanged = [this](const hz::String &) { UpdateButtons(); };
+        EraseText_->OnSubmit = [this](const hz::String &Text) {
+            if (Text == "ERASE")
+                StartInstall();
+        };
 
         StackPanel *Copying = AddPage();
         Paragraph(Copying, "This takes a minute or two. Do not turn off the computer.");
@@ -667,6 +842,7 @@ protected:
     void PageShown(size_t Index) override
     {
         Back_->SetVisible(Index == 1 || Index == 2);
+        Cancel_->SetVisible(Index == 2);
         Primary_->SetVisible(Index != 3);
         Primary_->SetText(Index == 2 ? "Install" : Index == 4 ? (Succeeded_ ? "Restart now" : "Close") : "Next");
         if (Index == 1)
@@ -675,16 +851,25 @@ protected:
             const DiskEntry &D = Disks_[Chosen_];
             setup::Layout L;
             setup::PlanLayout(D.Info.SectorCount, &L);
-            Summary_->SetText(hz::String::Format("Nexora OS will be installed on disk %u, %s (%s).", D.Number,
-                                                 D.Info.Model, hz::fs::FormatSize(D.Info.SectorCount * 512).CStr())
+            Summary_->SetText(hz::String::Format("Target: Disk %u, %s, %s, %u-byte sectors, %s partition table.",
+                                                 D.Number, D.Info.Model[0] ? D.Info.Model : "Disk",
+                                                 hz::fs::FormatSize(D.Info.SectorCount * D.Info.BytesPerSector).CStr(),
+                                                 D.Info.BytesPerSector,
+                                                 D.Info.Style == HZ_PARTITION_STYLE_GPT ? "GPT" :
+                                                 D.Info.Style == HZ_PARTITION_STYLE_MBR ? "MBR" : "raw")
                                   .CStr());
+            PartitionSummary_->SetText(D.Partitions.Empty()
+                                           ? "No existing partitions detected."
+                                           : hz::String::Format("Existing partitions (%u); all will be erased:",
+                                                                D.Info.PartitionCount).CStr());
+            Partitions_->SetItemCount(D.Partitions.Size());
             Layout_->SetText(hz::String::Format("Partitions: EFI system partition, %s (FAT32); Nexora OS, %s (FAT32). "
                                                 "The live image's files are copied.",
                                                 hz::fs::FormatSize(L.Esp.Sectors() * 512).CStr(),
                                                 hz::fs::FormatSize(L.System.Sectors() * 512).CStr())
                                  .CStr());
-            Agree_->SetChecked(false, false);
-            Main_->SetFocus(Agree_);
+            EraseText_->SetText("", false);
+            Main_->SetFocus(EraseText_);
         } else if (Index == 1) {
             Main_->SetFocus(List_);
         } else if (Index != 3) {
@@ -707,7 +892,7 @@ protected:
             ShowPage(2);
             break;
         case 2:
-            if (Agree_->IsChecked())
+            if (EraseText_->Text() == "ERASE")
                 StartInstall();
             break;
         case 4:
@@ -730,6 +915,14 @@ protected:
     }
 
 private:
+    void Cancel() override
+    {
+        if (Page_ == 2) {
+            EraseText_->SetText("", false);
+            ShowPage(1);
+        }
+    }
+
     bool Selectable() const
     {
         size_t I = List_->SelectedIndex();
@@ -755,7 +948,7 @@ private:
         if (Page_ == 1)
             Enabled = Selectable();
         else if (Page_ == 2)
-            Enabled = Agree_->IsChecked();
+            Enabled = EraseText_->Text() == "ERASE";
         Primary_->SetEnabled(Enabled);
     }
 
@@ -764,6 +957,8 @@ private:
         Job_ = new InstallJob();
         Job_->Window = Main_->Handle();
         Job_->Disk = Disks_[Chosen_].Number;
+        Job_->ExpectedInfo = Disks_[Chosen_].Info;
+        Job_->ExpectedPartitions = Disks_[Chosen_].Partitions;
         Installing_ = true;
         ShowPage(3);
         HzPrint("setup: installing on disk %u", Job_->Disk);
@@ -778,8 +973,10 @@ private:
     hz::Vector<DiskEntry> Disks_;
     size_t Chosen_ = 0;
     ListView *List_ = nullptr;
-    TextBlock *Summary_ = nullptr, *Layout_ = nullptr, *Status_ = nullptr, *Percent_ = nullptr, *DoneText_ = nullptr;
-    CheckBox *Agree_ = nullptr;
+    ListView *Partitions_ = nullptr;
+    TextBlock *Summary_ = nullptr, *PartitionSummary_ = nullptr, *Layout_ = nullptr, *Status_ = nullptr,
+              *Percent_ = nullptr, *DoneText_ = nullptr;
+    TextBox *EraseText_ = nullptr;
     ProgressBar *Bar_ = nullptr;
     InstallJob *Job_ = nullptr;
     bool Installing_ = false, Succeeded_ = false;

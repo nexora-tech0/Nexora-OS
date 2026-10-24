@@ -460,6 +460,9 @@ int64_t Flyout::HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam
 
 void Flyout::Dismiss()
 {
+    if (Dismissed_)
+        return;
+    Dismissed_ = true;
     if (*Slot_ == this)
         *Slot_ = nullptr;
     if (IsOpen())
@@ -554,8 +557,10 @@ Icon IconByName(const hz::String &Name)
     } Table[] = {
         {"Home", Icon::Home},         {"Clock", Icon::Clock},     {"Settings", Icon::Settings}, {"Star", Icon::Star},
         {"Sun", Icon::Sun},           {"Moon", Icon::Moon},       {"Info", Icon::Info},         {"Search", Icon::Search},
-        {"Folder", Icon::Folder},     {"Document", Icon::Document}, {"Drive", Icon::Drive},     {"Prompt", Icon::Prompt},
-        {"Calculator", Icon::Calculator}, {"Chart", Icon::Chart}, {"Pencil", Icon::Pencil},     {"Trash", Icon::Trash},
+        {"Folder", Icon::Folder},     {"Document", Icon::Document}, {"Calendar", Icon::Calendar},
+        {"Drive", Icon::Drive},       {"Prompt", Icon::Prompt},     {"Calculator", Icon::Calculator},
+        {"Chart", Icon::Chart},       {"Pencil", Icon::Pencil},     {"Palette", Icon::Palette},
+        {"Stopwatch", Icon::Stopwatch}, {"Globe", Icon::Globe},     {"Trash", Icon::Trash},
         {"Save", Icon::Save},         {"Cube", Icon::Cube},         {"Open", Icon::Open},       {"Volume", Icon::Volume},
         {"Power", Icon::Power},       {"Nexora", Icon::Nexora},     {"Wifi", Icon::Wifi},       {"Network", Icon::Wifi},
         {"Accessibility", Icon::Accessibility}, {"AppWindow", Icon::AppWindow},
@@ -949,6 +954,8 @@ void Shell::Unlock()
     }
     if (Bar)
         NtUserShowWindow(Bar->Handle(), HZ_SW_SHOWNOACTIVATE); /* hidden while locked */
+    if (Dock)
+        NtUserShowWindow(Dock->Handle(), HZ_SW_SHOWNOACTIVATE);
     HzPrint("shell: unlocked");
     if (Started)
         return; /* unlocked again after Lock */
@@ -1051,6 +1058,8 @@ void Shell::LockNow()
     }
     if (Bar)
         NtUserShowWindow(Bar->Handle(), HZ_SW_HIDE);
+    if (Dock)
+        NtUserShowWindow(Dock->Handle(), HZ_SW_HIDE);
     HzPrint("shell: locked");
 }
 
@@ -1069,13 +1078,20 @@ extern "C" int main(int argc, char **argv)
     g_Shell.Screen = Rect{0, 0, (int32_t)Display.Width, (int32_t)Display.Height};
     g_Shell.Wallpaper = Display.Wallpaper;
     g_Shell.LoadApps();
-    g_Shell.Work = Rect{0, 0, (int32_t)Display.Width, (int32_t)Display.Height - kTaskbarHeight};
+    g_Shell.Work = Rect{0, kWorkAreaTop, (int32_t)Display.Width,
+                        (int32_t)Display.Height - kWorkAreaTop - kTaskbarHeight};
 
     Taskbar *Bar = new Taskbar(g_Shell.Screen.Width);
     if (!Bar->ShowAt(0, g_Shell.Screen.Height - kTaskbarHeight)) {
         HzPrint("shell: cannot create the taskbar");
         return 1;
     }
+    TopDock *Dock = new TopDock(g_Shell.Screen.Width);
+    if (!Dock->ShowAt(20, kTopDockTop)) {
+        HzPrint("shell: cannot create the top dock");
+        return 1;
+    }
+    NtUserShowWindow(Dock->Handle(), HZ_SW_HIDE);
     STATUS Status = NtUserRegisterShell(Bar->Handle());
     if (!HZ_SUCCESS(Status)) {
         HzPrint("shell: another shell is running (0x%08X)", (uint32_t)Status);
@@ -1084,6 +1100,7 @@ extern "C" int main(int argc, char **argv)
     HZ_RECT Work = g_Shell.Work.ToHz();
     NtUserSetWorkArea(&Work);
     g_Shell.Bar = Bar;
+    g_Shell.Dock = Dock;
     g_Shell.RefreshWindows();
 
     g_Shell.LoadSettings(); /* after registering: the wallpaper may change */
@@ -1102,6 +1119,7 @@ extern "C" int main(int argc, char **argv)
         if (!g_Shell.Locked || !g_Shell.Lock) {
             g_Shell.Locked = false;
             NtUserShowWindow(Bar->Handle(), HZ_SW_SHOWNOACTIVATE);
+            NtUserShowWindow(Dock->Handle(), HZ_SW_SHOWNOACTIVATE);
         }
         HzPrint("shell: ready");
         return RunMessageLoop();

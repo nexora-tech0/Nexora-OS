@@ -33,12 +33,14 @@ block-building game.
   translucency, rounded corners, soft shadows and an eased desktop reveal; hzui, a C++ toolkit
   drawn in user mode with shared Inter body, large-body, display and technical-text font roles,
   cached font files and fallback faces; the shell with a timezone-aware lock-screen clock
-  (optionally with a password), animated taskbar hover and active-window feedback, Start with
-  search, quick settings, Alt+Tab, a clipboard, and consistent themed right-click menus. The
+  (optionally with a password), a floating pill-shaped dark top dock with rounded status and clock bubbles, an animated bottom taskbar, Control Center,
+  Start with search, Alt+Tab, a clipboard, and consistent themed right-click menus. The
   supplied photographs in `assets/Wallpapers` are packaged with the system; Settings can choose
   independent desktop and lock-screen images. Accounts with a password get a separate sign-in
   layout with network, accessibility and power controls; password-free sessions keep the existing
-  clock-first lock screen.
+  clock-first lock screen. Settings includes System, Personalization, Network & Internet, Devices,
+  Apps, Accounts, Privacy & Security, Accessibility, Date & Language, Updates & Recovery, and About
+  Nexora OS; unsupported services are identified rather than shown as working controls.
   App shortcuts can be pinned independently of Start's app tiles, and those taskbar pins are
   saved in user settings.
 - **Programs:** Notepad (word wrap, find, undo), Files (copy, cut, paste and delete of whole
@@ -46,10 +48,10 @@ block-building game.
   Calculator, Clock, Calendar, Stopwatch, System Information, Paint (mouse drawing and BMP export),
   Browser (native shell with address entry, history, bookmarks, downloads listing and local
   text/HTML file loading through absolute paths or file URLs; HTML uses a bounded text parser,
-  while remote page loading and CSS layout are not yet supported), Settings (searchable
-  Home and category navigation, wallpaper, account credentials, display/storage/network status,
-  time zone, About and diagnostics; sound controls, USB/Bluetooth, and display scaling are clearly
-  marked unavailable because their system APIs are not implemented), Task Manager (processes,
+  while remote page loading and CSS layout are not yet supported), Settings (searchable Home and
+  category navigation, five shared wallpaper choices, account credentials, display/storage/network
+  status, time zone and live system information; sound, USB/Bluetooth and advanced management
+  features are clearly marked unavailable when their system APIs are not implemented), Task Manager (processes,
   per-processor load), Setup, which installs Nexora OS on a disk, and Blockyard. New native app
   source directories are discovered by the build automatically and checked against their manifests.
   The shell loads the app catalog from `C:\Nexora\Apps`.
@@ -63,33 +65,21 @@ block-building game.
 
 ## Walkthrough
 
-### 1. Live system
+### 1. Installation media
 
 Build the ISO (below) or take `build/nexora-os.iso`, and start it in a UEFI virtual machine
-(VirtualBox: `scripts/create-vbox-vm.sh build/nexora-os.iso --wipe-disk --start`). After the boot
-menu, the kernel displays the Nexora logo and a small animated dotted spinner on black; the
-desktop fades in when it is ready. The desktop opens on the lock screen. Press any key.
-
-![The lock screen](docs/images/lock.png)
-
-The live system runs from memory: C: is the read-only system image, so settings are not kept.
-Open Start with the logo key (or click the logo on the taskbar) and type to search; try the
-Terminal (`help`, `dir C:\Nexora\System | more`, `ps`), Files, Notepad and Task Manager.
-
-![Task Manager on four processors](docs/images/taskmgr.png)
-
-For a break, open **Blockyard** from Start and click into the window to capture the mouse:
-W A S D and the mouse to move and look, left and right buttons to break and place, 1-9 to choose
-a block, F to fly, Esc to let go of the mouse.
-
-![Blockyard](docs/images/blockyard.png)
+(VirtualBox: `scripts/create-vbox-vm.sh build/nexora-os.iso --wipe-disk --start`). The boot menu
+automatically starts Setup. Installation media exposes the installer and its **About Nexora OS**
+information, not the application desktop. The complete OS and apps are copied to the selected disk.
 
 ### 2. Install
 
-In Start, choose **Install Nexora OS**. Setup lists the disks; pick one (it is erased; at least
-230 MB), confirm, and wait for the copy (about two seconds in QEMU). Setup partitions the disk
-(GPT: an EFI system partition and a FAT32 system partition), installs the boot loader and copies
-the system. Then restart without the ISO (VirtualBox:
+Setup lists disks with their identity, capacity and current partitions. Select the intended disk,
+review what will be erased, type `ERASE`, and choose Install; Cancel returns to disk selection
+without writing. Setup rechecks the target immediately before writing and verifies the GPT/FAT32
+sectors and copied files before reporting success. It partitions the disk (GPT: an EFI system
+partition and a FAT32 system partition), installs the boot loader and copies the complete system.
+Then restart without the ISO (VirtualBox:
 `scripts/create-vbox-vm.sh --boot-disk --start`).
 
 ![Setup](docs/images/install.png)

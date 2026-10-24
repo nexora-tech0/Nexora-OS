@@ -372,6 +372,13 @@ void Painter::DrawIcon(Icon Kind, const Rect &Box, Color C, float Stroke)
         StrokeCircle(Ox + 8 * S, Oy + 8 * S, 6.5f * S, Stroke * S, C);
         Poly(8, 4.5f, 8, 8, 10.5f, 9.5f);
         break;
+    case Icon::Stopwatch:
+        StrokeCircle(Ox + 8 * S, Oy + 8.5f * S, 5.5f * S, Stroke * S, C);
+        Poly(8, 3, 8, 8.5f, 11, 10);
+        Poly(6, 1.5f, 10, 1.5f);
+        Poly(8, 1.5f, 8, 3);
+        Poly(12, 4, 13.5f, 2.5f);
+        break;
     case Icon::Home:
         Poly(2.5f, 8, 8, 2.8f, 13.5f, 8);
         Poly(4, 6.8f, 4, 13.5f, 12, 13.5f, 12, 6.8f);
@@ -442,6 +449,15 @@ void Painter::DrawIcon(Icon Kind, const Rect &Box, Color C, float Stroke)
         Poly(5.5f, 8, 10.5f, 8);
         Poly(5.5f, 11, 10.5f, 11);
         break;
+    case Icon::Calendar:
+        StrokeRoundRect(Ox + 2 * S, Oy + 3 * S, 12 * S, 11 * S, 1.2f * S, Stroke * S, C);
+        Poly(2.5f, 6, 13.5f, 6);
+        Poly(5, 1.5f, 5, 4.5f);
+        Poly(11, 1.5f, 11, 4.5f);
+        FillCircle(Ox + 5 * S, Oy + 8.5f * S, 0.8f * S, C);
+        FillCircle(Ox + 8 * S, Oy + 8.5f * S, 0.8f * S, C);
+        FillCircle(Ox + 11 * S, Oy + 8.5f * S, 0.8f * S, C);
+        break;
     case Icon::Drive:
         StrokeRoundRect(Ox + 1.5f * S, Oy + 4.5f * S, 13 * S, 7 * S, 1.5f * S, Stroke * S, C);
         FillCircle(Ox + 11.5f * S, Oy + 8 * S, 0.9f * S, C);
@@ -470,6 +486,13 @@ void Painter::DrawIcon(Icon Kind, const Rect &Box, Color C, float Stroke)
     case Icon::Pencil:
         Poly(3, 13, 3.5f, 10.5f, 11, 3, 13, 5, 5.5f, 12.5f, 3, 13);
         Poly(9.5f, 4.5f, 11.5f, 6.5f);
+        break;
+    case Icon::Palette:
+        StrokeCircle(Ox + 8 * S, Oy + 8 * S, 6 * S, Stroke * S, C);
+        FillCircle(Ox + 5 * S, Oy + 5 * S, 0.9f * S, C);
+        FillCircle(Ox + 9 * S, Oy + 4 * S, 0.9f * S, C);
+        FillCircle(Ox + 12 * S, Oy + 7 * S, 0.9f * S, C);
+        FillCircle(Ox + 6 * S, Oy + 10 * S, 0.9f * S, C);
         break;
     case Icon::Trash:
         Poly(3, 4.5f, 13, 4.5f);
@@ -514,6 +537,14 @@ void Painter::DrawIcon(Icon Kind, const Rect &Box, Color C, float Stroke)
         Poly(4.6f, 9, 5.8f, 8.1f, 7, 7.7f, 8, 7.6f, 9, 7.7f, 10.2f, 8.1f, 11.4f, 9);
         Poly(7.1f, 11.4f, 8, 10.8f, 8.9f, 11.4f);
         FillCircle(Ox + 8 * S, Oy + 13.3f * S, 0.75f * S, C);
+        break;
+    case Icon::Globe:
+        StrokeCircle(Ox + 8 * S, Oy + 8 * S, 6.5f * S, Stroke * S, C);
+        Poly(1.8f, 8, 14.2f, 8);
+        Poly(3, 4.5f, 13, 4.5f);
+        Poly(3, 11.5f, 13, 11.5f);
+        Poly(8, 1.5f, 5.5f, 4, 4.8f, 8, 5.5f, 12, 8, 14.5f);
+        Poly(8, 1.5f, 10.5f, 4, 11.2f, 8, 10.5f, 12, 8, 14.5f);
         break;
     case Icon::Accessibility:
         StrokeCircle(Ox + 8 * S, Oy + 3.3f * S, 1.6f * S, Stroke * S, C);

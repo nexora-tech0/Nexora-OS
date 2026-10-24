@@ -17,8 +17,10 @@
  */
 #include "hzcrypto.h"
 #include "hzfile.h"
+#include "hzapps.h"
 #include "hzui.h"
 #include "hzversion.h"
+#include "hzwallpaper.h"
 
 using namespace hzui;
 
@@ -27,71 +29,14 @@ namespace {
 /* Fallback tints used only if a packaged wallpaper preview cannot be read. */
 struct Swatch {
     Color Top, Middle, Bottom, Glow;
-    const char *Name;
-    const char *Description;
 };
-const Swatch kSwatches[HZ_MAX_WALLPAPER + 1] = {
-    {0xFF153D2C, 0xFF285840, 0xFF102A36, 0xFF85D7A6, "Mountain falls", "Waterfall beneath a mountain"},
-    {0xFF24455D, 0xFF356D89, 0xFF162B42, 0xFF8DD2E8, "Coastal cliffs", "Cliffs at sunset"},
-    {0xFF272638, 0xFF56516A, 0xFF242C42, 0xFFE4A68A, "City at dusk", "City lights at twilight"},
-    {0xFF344332, 0xFF65744A, 0xFF273841, 0xFFD7BA79, "Red fox", "A red fox in winter"},
-    {0xFF25334A, 0xFF56677B, 0xFF28394B, 0xFFE9C4B0, "Coastal lock screen", "Purple mountain coast"},
+const Swatch kFallbackSwatches[hz::wallpaper::Count] = {
+    {0xFF153D2C, 0xFF285840, 0xFF102A36, 0xFF85D7A6},
+    {0xFF24455D, 0xFF356D89, 0xFF162B42, 0xFF8DD2E8},
+    {0xFF272638, 0xFF56516A, 0xFF242C42, 0xFFE4A68A},
+    {0xFF344332, 0xFF65744A, 0xFF273841, 0xFFD7BA79},
+    {0xFF25334A, 0xFF56677B, 0xFF28394B, 0xFFE9C4B0},
 };
-
-uint16_t ReadLe16(const uint8_t *Data)
-{
-    return (uint16_t)(Data[0] | ((uint16_t)Data[1] << 8));
-}
-
-uint32_t ReadLe32(const uint8_t *Data)
-{
-    return (uint32_t)Data[0] | ((uint32_t)Data[1] << 8) | ((uint32_t)Data[2] << 16) |
-           ((uint32_t)Data[3] << 24);
-}
-
-uint32_t *LoadWallpaperPreview(uint32_t Index, int32_t &Width, int32_t &Height)
-{
-    hz::String Path = hz::String::Format("C:\\Nexora\\Wallpapers\\wallpaper-preview-%03u.bmp", Index);
-    hz::String File;
-    STATUS Status = hz::fs::ReadAll(Path, File, 256 * 1024);
-    if (!HZ_SUCCESS(Status)) {
-        HzPrint("settings: cannot read wallpaper preview %u (0x%08X)", Index, (uint32_t)Status);
-        return nullptr;
-    }
-    const uint8_t *Data = (const uint8_t *)File.CStr();
-    if (File.Length() < 54 || Data[0] != 'B' || Data[1] != 'M')
-        return nullptr;
-    uint32_t PixelOffset = ReadLe32(Data + 10), HeaderSize = ReadLe32(Data + 14);
-    int32_t SourceWidth = (int32_t)ReadLe32(Data + 18), SignedHeight = (int32_t)ReadLe32(Data + 22);
-    uint16_t Planes = ReadLe16(Data + 26), BitsPerPixel = ReadLe16(Data + 28);
-    uint32_t Compression = ReadLe32(Data + 30);
-    if (HeaderSize < 40 || (uint64_t)HeaderSize + 14 > File.Length() || PixelOffset < HeaderSize + 14 ||
-        PixelOffset > File.Length() || SourceWidth <= 0 || SourceWidth > 512 || SignedHeight == INT32_MIN ||
-        SignedHeight == 0 || Planes != 1 || BitsPerPixel != 24 || Compression != 0)
-        return nullptr;
-    int32_t SourceHeight = SignedHeight < 0 ? -SignedHeight : SignedHeight;
-    if (SourceHeight > 512)
-        return nullptr;
-    uint64_t RowBytes = ((uint64_t)SourceWidth * 3 + 3) & ~3ull;
-    if (RowBytes * (uint32_t)SourceHeight > File.Length() - PixelOffset)
-        return nullptr;
-    uint64_t PixelCount = (uint64_t)SourceWidth * SourceHeight;
-    uint32_t *Pixels = (uint32_t *)malloc((size_t)PixelCount * sizeof(uint32_t));
-    if (!Pixels)
-        return nullptr;
-    for (int32_t Y = 0; Y < SourceHeight; Y++) {
-        int32_t SourceY = SignedHeight < 0 ? Y : SourceHeight - 1 - Y;
-        const uint8_t *Row = Data + PixelOffset + RowBytes * (uint32_t)SourceY;
-        for (int32_t X = 0; X < SourceWidth; X++) {
-            const uint8_t *Pixel = Row + (size_t)X * 3;
-            Pixels[(size_t)Y * SourceWidth + X] =
-                0xFF000000u | ((uint32_t)Pixel[2] << 16) | ((uint32_t)Pixel[1] << 8) | Pixel[0];
-        }
-    }
-    Width = SourceWidth;
-    Height = SourceHeight;
-    return Pixels;
-}
 
 bool CurrentWallpaper(uint32_t &Wallpaper)
 {
@@ -121,8 +66,13 @@ public:
     {
         Height = 142;
         Focusable = true;
-        ToolTip = kSwatches[Index].Description;
-        Preview_ = LoadWallpaperPreview(Index, PreviewWidth_, PreviewHeight_);
+        const hz::wallpaper::Info *Info = hz::wallpaper::GetInfo(Index);
+        if (!Info)
+            return;
+        ToolTip = Info->Description;
+        STATUS LoadStatus = hz::wallpaper::LoadPreview(Index, &Preview_, &PreviewWidth_, &PreviewHeight_);
+        if (!HZ_SUCCESS(LoadStatus))
+            HzPrint("settings: cannot load wallpaper preview %u (0x%08X)", Index, (uint32_t)LoadStatus);
     }
 
     ~WallpaperCard() override { free(Preview_); }
@@ -130,7 +80,12 @@ public:
     void Paint(Painter &P) override
     {
         const Rect &B = Bounds();
-        const Swatch &S = kSwatches[Index_];
+        if (Index_ >= hz::wallpaper::Count)
+            return;
+        const hz::wallpaper::Info *Info = hz::wallpaper::GetInfo(Index_);
+        if (!Info)
+            return;
+        const Swatch &S = kFallbackSwatches[Index_];
         Rect Image{B.X + 4, B.Y + 4, B.Width - 8, 104};
         if (Preview_) {
             P.DrawBitmap(Image, Preview_, PreviewWidth_, PreviewHeight_);
@@ -151,7 +106,7 @@ public:
         else if (IsHovered())
             P.StrokeRoundRect(Rect{B.X, B.Y, B.Width, 108}, 8, 1, Theme::ControlStrongStroke);
         P.TextLine(GetFont(Chosen ? FontRole::BodyStrong : FontRole::Body),
-                   Rect{B.X + 4, B.Y + 112, B.Width - 8, 24}, S.Name,
+                   Rect{B.X + 4, B.Y + 112, B.Width - 8, 24}, Info->Name,
                    Theme::TextPrimary);
     }
 
@@ -272,13 +227,17 @@ private:
     void ApplyName();
     void ApplyPassword();
     void ChangeOffset(int Minutes);
-    void AddDisplay();
-    void AddStorage();
+    void AddSystem();
+    hz::Function<void()> AddStorage(StackPanel *Parent);
     void AddNetwork();
     void AddTime();
     void AddAbout();
+    void AddApps();
+    void AddPrivacySecurity();
     void AddHome();
-    void AddUnavailablePages();
+    void AddDevices();
+    void AddAccessibility();
+    void AddRecovery();
     void Show(size_t Index);
     void OpenPage(const char *Title);
     void FilterNavigation(const hz::String &Query);
@@ -344,7 +303,8 @@ StackPanel *SettingsApp::NewPage(const char *Title, const char *Subtitle)
 
 void SettingsApp::AddPersonalization()
 {
-    StackPanel *P = NewPage("Personalization", "Choose separate images for the desktop and the lock screen.");
+    StackPanel *P = NewPage("Personalization",
+                            "Choose separate desktop and lock-screen images. Theme and accent-color controls are not implemented.");
     TextBlock *Status = P->Add<TextBlock>("", FontRole::Caption);
     Status->Wrap = true;
     StackPanel *Targets = P->Add<StackPanel>(Orientation::Horizontal, 8);
@@ -407,7 +367,7 @@ void SettingsApp::AddAccounts()
     AccountName_ = NameRow->Add<TextBox>("Your name");
     AccountName_->MaxLength = 32;
     hz::fs::Settings InitialSettings;
-    STATUS LoadStatus = LoadShellSettings(InitialSettings);
+    STATUS LoadStatus = Live ? STATUS_SUCCESS : LoadShellSettings(InitialSettings);
     AccountName_->SetText(HZ_SUCCESS(LoadStatus) ? InitialSettings.Get("UserName").CStr() : "", false);
     AccountName_->OnSubmit = [this](const hz::String &) { ApplyName(); };
     Button *SaveName = NameRow->Add<Button>("Save name");
@@ -420,6 +380,8 @@ void SettingsApp::AddAccounts()
 
     InfoCard *Pw = P->Add<InfoCard>("Password");
     PasswordState_ = Pw->Row("Status");
+    if (Live)
+        PasswordState_->SetText("Account changes are unavailable on the live system.");
     OldPassword_ = Pw->Add<TextBox>("Current password");
     NewPassword_ = Pw->Add<TextBox>("New password (empty: no password)");
     Confirm_ = Pw->Add<TextBox>("Type the new password again");
@@ -446,12 +408,17 @@ void SettingsApp::AddAccounts()
         for (Element *E : Disabled)
             E->SetEnabled(false);
     }
-    if (!HZ_SUCCESS(LoadStatus)) {
+    if (Live) {
+        NameNote_->SetText("Account changes are disabled in live mode. Install Nexora OS to save a name or password.");
+        NameNote_->Foreground = Theme::TextSecondary;
+    } else if (!HZ_SUCCESS(LoadStatus)) {
         NameNote_->Foreground = Theme::Accent;
         NameNote_->SetText(hz::String::Format("Could not load account settings: %s.",
                                               hz::fs::StatusText(LoadStatus)).CStr());
     }
-    List_.Push(Page{"Accounts", Icon::Person, P, "account user username password lock screen", [this]() {
+    List_.Push(Page{"Accounts", Icon::Person, P, "account user username password lock screen", [this, Live]() {
+                        if (Live)
+                            return;
                         hz::fs::Settings S;
                         STATUS Status = LoadShellSettings(S);
                         if (!HZ_SUCCESS(Status)) {
@@ -628,16 +595,17 @@ void SettingsApp::ChangeOffset(int Minutes)
         List_[Current_].Update();
 }
 
-void SettingsApp::AddDisplay()
+void SettingsApp::AddSystem()
 {
     StackPanel *P =
-        NewPage("Display", "Information about the active screen. Resolution and scaling controls are not available.");
+        NewPage("System", "Display, storage, power, and system information for this computer.");
     InfoCard *Card = P->Add<InfoCard>("Screen");
     TextBlock *Resolution = Card->Row("Resolution");
     TextBlock *Refresh = Card->Row("Frame interval");
     TextBlock *Work = Card->Row("Work area");
     TextBlock *Compositor = Card->Row("Compositor");
-    List_.Push(Page{"Display", Icon::Home, P, "screen display resolution refresh scale", [Resolution, Refresh, Work, Compositor]() {
+    hz::Function<void()> RefreshStorage = AddStorage(P);
+    auto UpdateScreen = [Resolution, Refresh, Work, Compositor]() {
                         HZ_DISPLAY_INFO I;
                         memset(&I, 0, sizeof(I));
                         STATUS Status = NtUserGetDisplayInfo(&I);
@@ -665,15 +633,33 @@ void SettingsApp::AddDisplay()
                                                          I.WorkArea.Bottom)
                                           .CStr());
                         Compositor->SetText(I.Composited ? "On (damage-driven, per-window surfaces)" : "Off");
+                    };
+    InfoCard *Capabilities = P->Add<InfoCard>("Power and sound");
+    Capabilities->Row("Power")->SetText("Restart and shut down are available from Start > Power. Sleep is not supported.");
+    Capabilities->Row("Sound")->SetText("Audio devices and volume controls are not implemented in this build.");
+    InfoCard *SystemInfo = P->Add<InfoCard>("System information");
+    TextBlock *SystemInfoText = SystemInfo->Add<TextBlock>("Processor and memory details are available in About Nexora OS.",
+                                                           FontRole::Body);
+    SystemInfoText->Wrap = true;
+    Button *AboutButton = SystemInfo->Add<Button>("About Nexora OS", ButtonStyle::Subtle);
+    AboutButton->HorizontalAlignment = Align::Start;
+    AboutButton->OnClick = [this]() { OpenPage("About Nexora OS"); };
+    List_.Push(Page{"System", Icon::Home, P,
+                    "system display resolution refresh scale storage disk drive volume power sound processor memory",
+                    [UpdateScreen, RefreshStorage]() {
+                        UpdateScreen();
+                        RefreshStorage();
                     }});
 }
 
-void SettingsApp::AddStorage()
+hz::Function<void()> SettingsApp::AddStorage(StackPanel *Parent)
 {
-    StackPanel *P = NewPage("Storage", "Volumes and space usage. Refresh to query the file systems again.");
-    Button *Refresh = P->Add<Button>("Refresh storage", ButtonStyle::Subtle);
+    InfoCard *Storage = Parent->Add<InfoCard>("Storage");
+    TextBlock *Help = Storage->Add<TextBlock>("Mounted volumes and available space.", FontRole::Caption);
+    Help->Foreground = Theme::TextSecondary;
+    Button *Refresh = Storage->Add<Button>("Refresh storage", ButtonStyle::Subtle);
     Refresh->HorizontalAlignment = Align::Start;
-    StackPanel *List = P->Add<StackPanel>(Orientation::Vertical, 10);
+    StackPanel *List = Parent->Add<StackPanel>(Orientation::Vertical, 10);
     auto Update = [this, List]() {
                         List->ClearChildren();
                         size_t Found = 0;
@@ -707,12 +693,13 @@ void SettingsApp::AddStorage()
                         Main_->InvalidateLayout();
                     };
     Refresh->OnClick = Update;
-    List_.Push(Page{"Storage", Icon::Drive, P, "storage disk drive volume free capacity", Update});
+    return Update;
 }
 
 void SettingsApp::AddNetwork()
 {
-    StackPanel *P = NewPage("Network", "Detected network adapters and addresses. This is not Internet connectivity.");
+    StackPanel *P = NewPage("Network & Internet",
+                            "Detected network adapters and addresses. This is not Internet connectivity.");
     Button *Refresh = P->Add<Button>("Refresh network status", ButtonStyle::Subtle);
     Refresh->HorizontalAlignment = Align::Start;
     InfoCard *Card = P->Add<InfoCard>("Adapters");
@@ -774,14 +761,14 @@ void SettingsApp::AddNetwork()
                         Availability->SetText("DHCP may assign an address, gateway, and DNS server. DNS requests, routing, TCP, HTTP, TLS, and browser Internet access are not implemented.");
                     };
     Refresh->OnClick = Update;
-    List_.Push(Page{"Network", Icon::Wifi, P, "network ethernet adapter wifi internet ip dns dhcp", Update});
+    List_.Push(Page{"Network & Internet", Icon::Wifi, P, "network ethernet adapter wifi internet ip dns dhcp", Update});
 }
 
 void SettingsApp::AddTime()
 {
     bool Live = hz::fs::IsLiveSystem();
-    StackPanel *P = NewPage("Time", "The computer's clock runs in UTC. The clocks on screen show the time zone chosen "
-                                    "here (no daylight saving changes); file times stay in UTC.");
+    StackPanel *P = NewPage("Date & Language", "The computer's clock runs in UTC. The clocks on screen show the time zone chosen "
+                                                  "here (no daylight saving changes); file times stay in UTC.");
     InfoCard *Card = P->Add<InfoCard>("Clock");
     TextBlock *Now = Card->Row("Date and time");
     TextBlock *Zone = Card->Row("Time zone");
@@ -803,7 +790,11 @@ void SettingsApp::AddTime()
         Utc->SetEnabled(false);
         Zone->SetText("UTC (the live system cannot save a time zone)");
     }
-    List_.Push(Page{"Time", Icon::Clock, P, "time clock timezone date utc", [Now, Zone, Up, Live]() {
+    InfoCard *Language = P->Add<InfoCard>("Language and input");
+    Language->Row("Language")->SetText("Locale selection is not implemented.");
+    Language->Row("Keyboard layout")->SetText("The built-in layout is fixed in this build.");
+    List_.Push(Page{"Date & Language", Icon::Clock, P, "time clock timezone date utc language locale keyboard input",
+                    [Now, Zone, Up, Live]() {
                         uint64_t T = 0, U = 0;
                         STATUS TimeStatus = NtQuerySystemTime(&T);
                         STATUS UptimeStatus = NtQueryUptime(&U);
@@ -833,7 +824,7 @@ void SettingsApp::AddTime()
 
 void SettingsApp::AddAbout()
 {
-    StackPanel *P = NewPage("About", "This system and the software it runs.");
+    StackPanel *P = NewPage("About Nexora OS", "This system and the software it runs.");
     InfoCard *Product = P->Add<InfoCard>("Nexora OS");
     Product->Row("Version")->SetText(HZ_VERSION_STRING " (" HZ_MILESTONE ")");
     Product->Row("Kernel")->SetText("hzkrnl, x86-64, UEFI");
@@ -849,7 +840,8 @@ void SettingsApp::AddAbout()
     Credits->Row("Fonts")->SetText("Inter, JetBrains Mono (OFL)");
     Credits->Row("Boot loader")->SetText("Limine (BSD-2-Clause)");
     Credits->Row("Licenses")->SetText("C:\\Nexora\\Licenses");
-    List_.Push(Page{"About", Icon::Info, P, "about system version processor memory uptime", [Cpus, Memory, Load, Switches]() {
+    List_.Push(Page{"About Nexora OS", Icon::Info, P, "about system version processor memory uptime license diagnostics",
+                    [Cpus, Memory, Load, Switches]() {
                         HZ_SYSTEM_BASIC_INFORMATION I = {};
                         uint32_t Returned = 0;
                         STATUS Status =
@@ -881,12 +873,17 @@ void SettingsApp::AddAbout()
 
 void SettingsApp::AddHome()
 {
-    StackPanel *P = NewPage("Home", "Your Nexora OS settings, with live system status.");
+    StackPanel *P = NewPage("Home", "Settings for this device, with information queried from the running system.");
+    InfoCard *Device = P->Add<InfoCard>("This device");
+    Device->Row("Product")->SetText("Nexora OS");
+    Device->Row("Version")->SetText(HZ_VERSION_STRING " (" HZ_MILESTONE ")");
+
     InfoCard *Status = P->Add<InfoCard>("At a glance");
     TextBlock *Display = Status->Row("Display");
     TextBlock *Memory = Status->Row("Memory");
     TextBlock *Processes = Status->Row("Processes");
     TextBlock *Network = Status->Row("Network");
+    P->Add<TextBlock>("Recommended settings", FontRole::Subtitle);
     Grid *Shortcuts = P->Add<Grid>();
     Shortcuts->Columns.Push(GridLength::Stars(1));
     Shortcuts->Columns.Push(GridLength::Stars(1));
@@ -895,12 +892,28 @@ void SettingsApp::AddHome()
     Shortcuts->Rows.Push(GridLength::AutoSize());
     Shortcuts->ColumnSpacing = 8;
     Shortcuts->RowSpacing = 8;
-    const char *Targets[] = {"Personalization", "Accounts", "Display", "Storage", "Network", "Time"};
+    struct ShortcutInfo {
+        const char *Title;
+        const char *Description;
+    };
+    const ShortcutInfo Targets[] = {
+        {"System", "Display, mounted volumes, and basic system status."},
+        {"Personalization", "Choose independent desktop and lock-screen wallpapers."},
+        {"Network & Internet", "Inspect adapter link and assigned IPv4 details."},
+        {"Apps", "Browse and open installed Nexora applications."},
+        {"Accounts", "Manage the current account and sign-in password."},
+        {"About Nexora OS", "Review the OS version and live hardware information."},
+    };
     for (size_t Index = 0; Index < sizeof(Targets) / sizeof(Targets[0]); Index++) {
-        Button *Shortcut = Shortcuts->Add<Button>(Targets[Index]);
+        InfoCard *Shortcut = Shortcuts->Add<InfoCard>(Targets[Index].Title);
         Shortcut->GridColumn = Index % 2;
         Shortcut->GridRow = Index / 2;
-        Shortcut->OnClick = [this, Title = Targets[Index]]() { OpenPage(Title); };
+        TextBlock *Description = Shortcut->Add<TextBlock>(Targets[Index].Description, FontRole::Caption);
+        Description->Foreground = Theme::TextSecondary;
+        Description->Wrap = true;
+        Button *Open = Shortcut->Add<Button>("Open", ButtonStyle::Subtle);
+        Open->HorizontalAlignment = Align::Start;
+        Open->OnClick = [this, Title = Targets[Index].Title]() { OpenPage(Title); };
     }
     List_.Push(Page{"Home", Icon::Home, P, "home start overview status", [Display, Memory, Processes, Network]() {
                         HZ_DISPLAY_INFO Screen = {};
@@ -945,53 +958,92 @@ void SettingsApp::AddHome()
                     }, true});
 }
 
-void SettingsApp::AddUnavailablePages()
+void SettingsApp::AddApps()
 {
-    auto AddUnavailable = [this](const char *Title, const char *Keywords, const char *Message) {
-        StackPanel *P = NewPage(Title, Message);
-        InfoCard *Card = P->Add<InfoCard>("Availability");
-        TextBlock *Text = Card->Add<TextBlock>(Message, FontRole::Body);
-        Text->Wrap = true;
-        List_.Push(Page{Title, Icon::Info, P, Keywords, {}});
-    };
-    AddUnavailable("Sound", "sound audio volume microphone speaker",
-                   "Sound device discovery, volume controls, and audio playback are not implemented in this build.");
-    AddUnavailable("Devices", "devices usb bluetooth controller keyboard mouse",
-                   "USB host-controller and Bluetooth stacks are not available. Bluetooth scanning, BLE/GATT, HID, and Classic Bluetooth are not supported.");
-    AddUnavailable("Accessibility", "accessibility contrast text size scale",
-                   "Keyboard navigation is available throughout Settings. System-wide contrast, text scaling, and assistive-technology controls are not implemented.");
+    StackPanel *P = NewPage("Apps", "Installed Nexora applications and their launch status.");
+    InfoCard *Availability = P->Add<InfoCard>("App management");
+    TextBlock *Note = Availability->Add<TextBlock>(
+        "Installed apps can be opened here. Default-app assignments and startup-app management are not implemented.",
+        FontRole::Body);
+    Note->Wrap = true;
 
-    StackPanel *P = NewPage("Diagnostics", "Live kernel and device-query checks. These are status reads, not a complete diagnostic suite.");
-    InfoCard *Checks = P->Add<InfoCard>("System query");
-    TextBlock *Kernel = Checks->Row("System information");
-    TextBlock *Display = Checks->Row("Display information");
-    TextBlock *Network = Checks->Row("Network interfaces");
-    List_.Push(Page{"Diagnostics", Icon::Info, P, "diagnostics troubleshoot logs system errors health", [Kernel, Display, Network]() {
-                        HZ_SYSTEM_BASIC_INFORMATION Basic = {};
-                        uint32_t BasicBytes = 0;
-                        STATUS BasicStatus = NtQuerySystemInformation(HZ_SYSTEM_BASIC_INFORMATION_CLASS, &Basic,
-                                                                      sizeof(Basic), &BasicBytes);
-                        Kernel->SetText(HZ_SUCCESS(BasicStatus) && BasicBytes == sizeof(Basic)
-                                            ? "Available"
-                                            : hz::String::Format("Failed (0x%08X)", (uint32_t)BasicStatus).CStr());
-                        HZ_DISPLAY_INFO Screen = {};
-                        STATUS DisplayStatus = NtUserGetDisplayInfo(&Screen);
-                        Display->SetText(HZ_SUCCESS(DisplayStatus) && Screen.Width && Screen.Height
-                                             ? "Available"
-                                             : hz::String::Format("Failed (0x%08X)", (uint32_t)DisplayStatus).CStr());
-                        HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION Interfaces[HZ_MAX_NETWORK_INTERFACES] = {};
-                        uint32_t NetworkBytes = 0;
-                        STATUS NetworkStatus = NtQuerySystemInformation(HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION_CLASS,
-                                                                         Interfaces, sizeof(Interfaces), &NetworkBytes);
-                        if (!HZ_SUCCESS(NetworkStatus))
-                            Network->SetText(hz::String::Format("Failed (0x%08X)", (uint32_t)NetworkStatus).CStr());
-                        else if (NetworkBytes > sizeof(Interfaces) || NetworkBytes % sizeof(Interfaces[0]))
-                            Network->SetText("Invalid response length");
-                        else {
-                            uint32_t Count = (uint32_t)(NetworkBytes / sizeof(Interfaces[0]));
-                            Network->SetText(hz::String::Format("%u record%s", Count, Count == 1 ? "" : "s").CStr());
-                        }
-                    }});
+    hz::Vector<hz::apps::App> Apps = hz::apps::Load();
+    if (Apps.Empty()) {
+        P->Add<TextBlock>("No valid installed app manifests were found.", FontRole::Body);
+    }
+    for (const hz::apps::App &Program : Apps) {
+        InfoCard *Card = P->Add<InfoCard>(Program.Name.CStr());
+        TextBlock *Description = Card->Add<TextBlock>(
+            Program.Description.Empty() ? "No description provided." : Program.Description.CStr(), FontRole::Body);
+        Description->Wrap = true;
+        TextBlock *Result = Card->Add<TextBlock>("", FontRole::Caption);
+        Result->Foreground = Theme::TextSecondary;
+        Button *Launch = Card->Add<Button>("Open", ButtonStyle::Subtle);
+        Launch->HorizontalAlignment = Align::Start;
+        Launch->OnClick = [Program, Result]() {
+            uint32_t ProcessId = 0;
+            STATUS Status = hz::apps::Launch(Program, nullptr, &ProcessId);
+            if (!HZ_SUCCESS(Status)) {
+                HzPrint("settings: could not launch %s (0x%08X)", Program.Name.CStr(), (uint32_t)Status);
+                Result->Foreground = Theme::Accent;
+                Result->SetText(hz::String::Format("Could not open this app (0x%08X).", (uint32_t)Status).CStr());
+                return;
+            }
+            Result->Foreground = Theme::TextSecondary;
+            Result->SetText(hz::String::Format("Started (process %u).", ProcessId).CStr());
+        };
+    }
+    List_.Push(Page{"Apps", Icon::Document, P, "apps installed applications default startup launch", {}});
+}
+
+void SettingsApp::AddPrivacySecurity()
+{
+    StackPanel *P = NewPage("Privacy & Security", "Security features currently available in this Nexora OS build.");
+    InfoCard *AccountSecurity = P->Add<InfoCard>("Sign-in");
+    AccountSecurity->Row("Account password")->SetText(
+        "Password setup is available from Accounts. Password enforcement depends on the active sign-in flow.");
+    InfoCard *Availability = P->Add<InfoCard>("Security management");
+    TextBlock *Note = Availability->Add<TextBlock>(
+        "App permission controls, firewall rules, local security policy, audit-log tools, and developer settings "
+        "are not implemented.",
+        FontRole::Body);
+    Note->Wrap = true;
+    List_.Push(Page{"Privacy & Security", Icon::Info, P, "privacy security permissions firewall policy audit developer",
+                    {}});
+}
+
+void SettingsApp::AddDevices()
+{
+    const char *Message = "Keyboard and mouse input are supported, but this build has no peripheral-management page, "
+                          "USB host controller stack, or Bluetooth support.";
+    StackPanel *P = NewPage("Devices", Message);
+    InfoCard *Card = P->Add<InfoCard>("Availability");
+    TextBlock *Text = Card->Add<TextBlock>(Message, FontRole::Body);
+    Text->Wrap = true;
+    List_.Push(Page{"Devices", Icon::Info, P, "devices usb bluetooth controller keyboard mouse", {}});
+}
+
+void SettingsApp::AddAccessibility()
+{
+    const char *Message =
+        "Keyboard navigation is available throughout Settings. System-wide contrast, text scaling, and "
+        "assistive-technology controls are not implemented.";
+    StackPanel *P = NewPage("Accessibility", Message);
+    InfoCard *Card = P->Add<InfoCard>("Availability");
+    TextBlock *Text = Card->Add<TextBlock>(Message, FontRole::Body);
+    Text->Wrap = true;
+    List_.Push(Page{"Accessibility", Icon::Info, P, "accessibility contrast text size scale", {}});
+}
+
+void SettingsApp::AddRecovery()
+{
+    StackPanel *Recovery = NewPage("Updates & Recovery", "Update and recovery functions supported by this build.");
+    InfoCard *Update = Recovery->Add<InfoCard>("Updates");
+    Update->Row("Update service")->SetText("No OS update service is configured.");
+    InfoCard *Restore = Recovery->Add<InfoCard>("Recovery");
+    Restore->Row("Recovery image")->SetText("No recovery partition or restore image is configured.");
+    Restore->Row("Restart and shut down")->SetText("Use Start > Power.");
+    List_.Push(Page{"Updates & Recovery", Icon::Info, Recovery, "updates recovery restore reset maintenance", {}});
 }
 
 void SettingsApp::OpenPage(const char *Title)
@@ -1075,14 +1127,17 @@ bool SettingsApp::Create(const char *Initial)
     Host_->SetContent(Pages_);
 
     AddHome();
+    AddSystem();
     AddPersonalization();
-    AddAccounts();
-    AddDisplay();
-    AddStorage();
     AddNetwork();
+    AddDevices();
+    AddApps();
+    AddAccounts();
+    AddPrivacySecurity();
+    AddAccessibility();
     AddTime();
+    AddRecovery();
     AddAbout();
-    AddUnavailablePages();
 
     Nav_->PaintItem = [this](Painter &P, const Rect &R, size_t I) {
         if (NavigationPages_.Empty()) {

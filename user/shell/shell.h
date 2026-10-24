@@ -2,7 +2,7 @@
  * Nexora OS - user/shell/shell.h
  * The shell (shell.exe): started by the kernel once the desktop is shown. It registers its
  * taskbar window with win32k as the shell window, reserves the bottom strip of the screen (the
- * work area), shows the lock screen, and then runs the taskbar, the Start menu, quick settings and
+ * work area), shows the lock screen, and then runs the top dock, taskbar, Start menu, and Control Center.
  * the Alt+Tab switcher. win32k tells it about app windows of other processes (HZ_WM_SHELLNOTIFY)
  * and hands it the logo key and Alt+Tab; programs ask it for changes (HZ_WM_SHELLREQUEST).
  * Installed programs come from their manifests (C:\Nexora\Apps\*.app, see hzapps.h).
@@ -19,6 +19,9 @@ namespace shell {
 using namespace hzui;
 
 constexpr int32_t kTaskbarHeight = 48;
+constexpr int32_t kTopDockHeight = 40;
+constexpr int32_t kTopDockTop = 8;
+constexpr int32_t kWorkAreaTop = kTopDockTop + kTopDockHeight + 4;
 constexpr size_t kMaxRecent = 4;
 
 struct AppWindow {
@@ -30,10 +33,12 @@ struct AppWindow {
 };
 
 class Taskbar;
+class TopDock;
 
 struct Shell {
     Rect Screen, Work;
     Taskbar *Bar = nullptr;
+    TopDock *Dock = nullptr;
     Window *Lock = nullptr;
     Window *Start = nullptr;
     Window *Quick = nullptr;
@@ -44,12 +49,10 @@ struct Shell {
     hz::Vector<AppWindow> Windows;   /* taskbar order: first seen first */
     HWND Active = 0;
     bool Locked = true;
-    /* Quick settings state (visual only, except the wallpaper) */
+    /* Wallpaper selection shared by Settings and the desktop quick-settings picker. */
     uint32_t Wallpaper = 0;
     uint32_t LockWallpaper = HZ_LOCK_WALLPAPER_DEFAULT;
     bool LockWallpaperApplied = false;
-    bool NightLight = false, Focus = false, EnergySaver = false, Airplane = false;
-    float Brightness = 80, Volume = 60;
     /* The switcher */
     hz::Vector<HWND> SwitchList;
     size_t SwitchIndex = 0;
@@ -104,7 +107,7 @@ struct Shell {
 
 extern Shell g_Shell;
 
-/* A window that closes itself when it loses activation (Start, quick settings). */
+/* A window that closes itself when it loses activation (Start or Control Center). */
 class Flyout : public Window {
 public:
     Flyout(const char *Title, int32_t Width, int32_t Height, Window **Slot);
@@ -113,6 +116,7 @@ public:
 
 private:
     Window **Slot_;
+    bool Dismissed_ = false;
 };
 
 /* The Nexora OS logo (Start) and program icons: the manifest's glyph on its coloured tile, or a

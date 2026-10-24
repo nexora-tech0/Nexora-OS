@@ -135,8 +135,8 @@ Color MixColors(Color From, Color To, float T);    /* channel-wise, T in 0..1 */
 enum class Icon : uint8_t {
     None, Check, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Close, Add, Remove, Search, More,
     Info, Clock, Home, Settings, Star, Power, Volume, Sun, Moon, Leaf, Plane,
-    Folder, Document, Drive, Prompt, Calculator, Chart, ArrowUp, Pencil, Trash, Save, Open, Refresh,
-    Cut, Copy, Paste, Person, Cube, Wifi, Accessibility, AppWindow, Nexora
+    Folder, Document, Calendar, Drive, Prompt, Calculator, Chart, ArrowUp, Pencil, Palette, Stopwatch,
+    Globe, Trash, Save, Open, Refresh, Cut, Copy, Paste, Person, Cube, Wifi, Accessibility, AppWindow, Nexora
 };
 
 /* Draws into a canvas in its coordinates, through a stack of clip rectangles. Shapes are

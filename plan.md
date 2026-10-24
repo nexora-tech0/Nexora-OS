@@ -77,3 +77,92 @@ Implement one stage at a time, build and test each before proceeding, preserve c
 drivers and user changes, and do not claim support for hardware that was not exercised. Driver
 choices or real-machine tests requiring unavailable hardware must be called out rather than
 simulated as success.
+
+## Nexora OS installer delivery plan
+
+### Scope and decisions
+
+The user completed [NEXORA-OS-INSTALLER-AND-OS-DECISIONS.md](./NEXORA-OS-INSTALLER-AND-OS-DECISIONS.md).
+Treat those decisions as product requirements: retain Nexora identity while borrowing Windows 11
+usability patterns; installation media starts Setup automatically and exposes About, not the live
+desktop; install the full OS and apps to disk. Prioritize reliable functionality, persistent data,
+and verified installed-disk boot; defer dual boot, manual partitioning, automatic updates, and
+broad recovery until safe.
+
+Nexora already has a native Setup wizard in `user/apps/setup/setup.cpp`, GPT/FAT32 builders in
+`user/apps/setup/installer.cpp`, and `install`/`diskboot` smoke cases in `scripts/smoke-test.py`.
+Improve these existing surfaces rather than creating a second installer. The destructive path must
+never guess a disk, silently erase an existing OS, or claim success without verification. Any
+VirtualBox validation must use a new disposable VDI, not the preserved old test disk.
+
+### Phased checklist
+
+#### Phase 1 — Reproduce and establish a trustworthy baseline
+
+- [ ] Build the current tree with the E-drive NexoraBuild toolchain and record the resulting ISO.
+- [ ] Run focused QEMU `install` and `diskboot` cases on fresh disposable images.
+- [ ] Investigate the known GPT/partition self-test failure independently from installer behavior.
+      Record whether it occurs in QEMU, VirtualBox, or both and fix its root cause before treating
+      the affected boot as healthy.
+- [ ] Inspect current disk enumeration, device identity, eligibility reasons, layout sizing, copy
+      progress, error paths, and first-boot/persistence path. Do not make unrelated subsystem
+      changes.
+
+#### Phase 2 — Make installation safe and genuinely verifiable
+
+- [ ] Keep the initial supported target as explicit full-disk UEFI/GPT/FAT32 installation. Exclude
+      the live medium, the running-system disk, read-only/in-use/unsupported disks, and disks below
+      the measured minimum capacity.
+- [ ] Present model, actual size, and existing partition information; require explicit target
+      selection and refresh; explain why a target is unavailable.
+- [ ] Before writing, show the exact selected disk and data-loss effect; require the user to type
+      `ERASE` and provide a final Cancel action. Do not start writes on an ambiguous selection.
+- [ ] Copy the actual boot and OS payload, configure the bootloader, and verify installed files and
+      boot configuration before showing success. Surface failures, preserve local diagnostics
+      where possible, and offer retry only when safe.
+- [ ] Keep offline installation supported. Label progress by actual operation/stage; provide
+      estimated time only when measured/reliable. Allow cancellation after writes begin only at
+      safe checkpoints with a warning.
+- [ ] Preserve or initialize first-boot account setup, secure password storage/authentication, and
+      persistent user files/settings. Do not bypass login or imply persistence unless verified.
+
+#### Phase 3 — Polish the setup experience to the agreed direction
+
+- [ ] Make the installer the default boot experience, start Setup automatically, and keep About
+      available on its welcome screen. Do not expose the app desktop in the release boot menu.
+- [ ] Refine the existing one-page wizard into responsive Welcome, optional locale/keyboard/network,
+      disk choice, supported install choice, final review, progress, verification, and completion
+      steps. Use sensible defaults and allow optional network setup without requiring internet.
+- [ ] Apply Nexora's charcoal/graphite, original branding, clean sans-serif, restrained transparency,
+      configurable accent, and subtle fast transitions. Keep it consistent with the installed
+      desktop and avoid audio by default.
+- [ ] Completion must state that verification passed, explain removing installation media, and offer
+      Restart and Shut Down. If verification fails, never show a success screen.
+
+#### Phase 4 — Validate installed OS and desktop requirements
+
+- [ ] Run QEMU `install` on a new blank disposable disk. Check GPT layout, both FAT32 partitions,
+      EFI loader/config, kernel/symbols, actual system payload, and first-boot marker with host-side
+      read-back tools.
+- [ ] Run `diskboot` from that output through first-boot account setup. Verify boot independent of
+      the ISO, actual password checks (when configured), app launch, file/settings persistence
+      after another restart, and expected wallpaper/theme/time-zone preferences.
+- [ ] Recreate a separate VirtualBox VM with the new ISO and a disposable blank VDI. Install,
+      detach the ISO, and verify boot from the VDI; do not reuse the preserved old test disk.
+- [ ] Where possible, inspect the desktop at 1024x768 and 1920x1080. Prioritize responsive input,
+      reliable window management, keyboard access/focus, accessibility defaults, and real controls.
+      Keep unimplemented settings clearly unavailable.
+
+#### Phase 5 — Document and deliver
+
+- [ ] Update README/build guidance for producing the bootable ISO and writing it to USB, tested
+      hardware/firmware, safe installation steps, and current limitations.
+- [ ] Report modified files and separate QEMU, VirtualBox, and physical-hardware results. Do not
+      claim any environment or persistence result that was not directly tested.
+
+### Completion gate
+
+The ISO builds; QEMU installation and installed-disk boot/persistence checks pass with read-back
+validation; and a clean VirtualBox VM installs to a disposable VDI and boots independently of the
+ISO. Destructive-disk safeguards and honest error reporting are verified. Any failing or
+environment-blocked gate remains explicitly incomplete.
