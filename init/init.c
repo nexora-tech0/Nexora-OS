@@ -304,6 +304,7 @@ static void KiStartSystemThread(KSTART_ROUTINE Routine, KPRIORITY Priority, cons
 static void KiPhase1Initialization(void *Context)
 {
     bool DisplayOk = Context != NULL;
+    uint64_t StageStartUs = KeQueryUptimeMicroseconds();
     DbgPrint("Scheduler: running in thread '%s' (id %u, priority %d)\n", KeGetCurrentThread()->Name,
              KeGetCurrentThread()->ThreadId, KeGetCurrentThread()->Priority);
     ExInitializeWorkerThread();
@@ -316,8 +317,11 @@ static void KiPhase1Initialization(void *Context)
     bool IoApicOk = KiIoApicSelfTest();
     bool MemoryOk = MmRunSelfTests();
     bool SchedulerOk = KeRunSchedulerSelfTests();
+    DbgPrint("Init: CPU, timer, memory, and scheduler checks took %llu ms\n",
+             (unsigned long long)((KeQueryUptimeMicroseconds() - StageStartUs) / 1000));
 
     /* Drivers (PCI, disks, PS/2, ramdisk), file systems and drive letters. */
+    StageStartUs = KeQueryUptimeMicroseconds();
     IoInitializeDrivers();
     IoReportVolumes();
     bool NetworkOk = NetRunProtocolSelfTests();
@@ -333,11 +337,22 @@ static void KiPhase1Initialization(void *Context)
     W32kInitialize();
     ObDumpNamespace();
     bool LanguagesOk = KiRunLanguageSelfTests();
+    DbgPrint("Init: hardware, filesystem, network, and desktop initialization took %llu ms\n",
+             (unsigned long long)((KeQueryUptimeMicroseconds() - StageStartUs) / 1000));
 
     KiRunCommandLineDiagnostics();
+    StageStartUs = KeQueryUptimeMicroseconds();
     bool ProcessesOk = PsRunSelfTests();
+    DbgPrint("Init: process self-tests took %llu ms\n",
+             (unsigned long long)((KeQueryUptimeMicroseconds() - StageStartUs) / 1000));
+    StageStartUs = KeQueryUptimeMicroseconds();
     bool FileSystemsOk = IoRunSelfTests();
+    DbgPrint("Init: filesystem self-tests took %llu ms\n",
+             (unsigned long long)((KeQueryUptimeMicroseconds() - StageStartUs) / 1000));
+    StageStartUs = KeQueryUptimeMicroseconds();
     bool DesktopOk = W32kRunSelfTests();
+    DbgPrint("Init: window-manager and UI self-tests took %llu ms\n",
+             (unsigned long long)((KeQueryUptimeMicroseconds() - StageStartUs) / 1000));
 
     /* Background system threads start after the self-tests so they cannot disturb the counts. */
     KiStartSystemThread(MmZeroPageThread, 1, "ZeroPage");

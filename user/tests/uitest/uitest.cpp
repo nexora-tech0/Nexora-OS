@@ -91,6 +91,21 @@ void TestCore()
     Check(!P && Q && *Q == "owned", "UniquePtr move");
 }
 
+void TestTypography()
+{
+    HZ_FONT *Body = GetFont(FontRole::Body);
+    HZ_FONT *BodyLarge = GetFont(FontRole::BodyLarge);
+    HZ_FONT *Display = GetFont(FontRole::Display);
+    HZ_FONT *Mono = GetFont(FontRole::Mono);
+    Check(Body && BodyLarge && Display && Mono, "standard font roles load from the packaged font assets");
+    if (Body && BodyLarge && Display && Mono) {
+        Check(HzFontLineHeight(Body) < HzFontLineHeight(BodyLarge) &&
+                  HzFontLineHeight(BodyLarge) < HzFontLineHeight(Display),
+              "body, large-body, and display roles follow the typography scale");
+        Check(HzFontLineHeight(Mono) > 0, "technical text font has valid metrics");
+    }
+}
+
 /* ---- Layout -------------------------------------------------------------------------------------- */
 
 void TestLayout()
@@ -944,6 +959,7 @@ extern "C" int main(int argc, char **argv)
     HZ_POINT Cursor = {};
     NtUserGetCursorPos(&Cursor);
     TestCore();
+    TestTypography();
     TestLayout();
     TestPainting();
     TestTransitions();

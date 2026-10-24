@@ -121,7 +121,7 @@ void ListView::SetOffset(int32_t Offset, bool Animated)
 {
     Offset = hz::Clamp(Offset, 0, MaxOffset());
     if (Animated) {
-        Scroll_.To((float)Offset, 150);
+        Scroll_.To((float)Offset, Motion::ScrollMs);
         StartAnimation();
         return;
     }

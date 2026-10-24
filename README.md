@@ -30,16 +30,19 @@ block-building game.
 - **File systems:** a read-only C: from the boot ramdisk on the live system, and read/write
   FAT32 with long file names (write-back FAT cache, multi-cluster transfers).
 - **Desktop:** win32k's windows, message queues and input routing, a compositor with Mica-like
-  translucency, rounded corners and soft shadows; hzui, a C++ toolkit drawn in user mode; the
-  shell with a lock screen (optionally with a password), the taskbar, Start with search, quick
-  settings, Alt+Tab, a clipboard, and consistent themed right-click menus. Wallpapers in
+  translucency, rounded corners, soft shadows and an eased desktop reveal; hzui, a C++ toolkit
+  drawn in user mode with shared Inter body, large-body, display and technical-text font roles,
+  cached font files and fallback faces; the shell with a timezone-aware lock-screen clock
+  (optionally with a password), animated taskbar hover and active-window feedback, Start with
+  search, quick settings, Alt+Tab, a clipboard, and consistent themed right-click menus. Wallpapers in
   `assets/Wallpapers` are packaged with the system and one is selected at each boot.
   App shortcuts can be pinned independently of Start's app tiles, and those taskbar pins are
   saved in user settings.
 - **Programs:** Notepad (word wrap, find, undo), Files (copy, cut, paste and delete of whole
   folders, with item context menus), Terminal (built-in commands, console programs, `> file`, `| more`, line wrapping),
   Calculator, Clock, Calendar, Stopwatch, System Information, Paint (mouse drawing and BMP export),
-  Settings (wallpaper, account name and password, time zone), Task Manager (processes,
+  Browser (native shell with address entry, history, bookmarks, downloads listing and an initial
+  HTML text parser; remote page loading and CSS layout are not yet supported), Settings (wallpaper, account name and password, time zone), Task Manager (processes,
   per-processor load), Setup, which installs Nexora OS on a disk, and Blockyard. New native app
   source directories are discovered by the build automatically and checked against their manifests.
   The shell loads the app catalog from `C:\Nexora\Apps`.
@@ -131,7 +134,8 @@ Nexora currently runs its own statically linked PE32+ applications. It does not 
 general Windows application compatibility or a Linux ELF/syscall runtime; those require separate
 loader and API work and are not implied by the native app catalog. Files and Terminal can launch
 Nexora-compatible `.exe` programs, but Windows executables that import DLLs are not supported yet.
-There is not a browser app or a complete TCP/IP stack in this build. The Intel E1000 driver can
+The native Nexora Browser shell and a bounded HTML-to-text parser are included, but there is not yet
+a complete TCP/IP stack, HTTP client, or page layout renderer. The Intel E1000 driver can
 initialize VirtualBox's PRO/1000 MT Desktop adapter, and the bounded DHCPv4 client requests and
 reports an IPv4 address, gateway, and DNS server. DNS queries, ARP-based routing, TCP sockets,
 HTTPS/TLS, and the user-mode networking API are not implemented yet, so pages cannot be loaded.

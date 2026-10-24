@@ -37,7 +37,7 @@ public:
             if (!ActiveInitialized_ || Active != WasActive_) {
                 ActiveInitialized_ = true;
                 WasActive_ = Active;
-                ActiveIndicator_.To(Active ? 1.0f : 0.0f, 160);
+                ActiveIndicator_.To(Active ? 1.0f : 0.0f, Motion::ControlStateMs);
                 StartAnimation();
             }
         }
@@ -71,12 +71,12 @@ public:
 
     void OnPointerEnter() override
     {
-        Hover_.To(1, 110);
+        Hover_.To(1, Motion::HoverEnterMs);
         StartAnimation();
     }
     void OnPointerLeave() override
     {
-        Hover_.To(0, 140);
+        Hover_.To(0, Motion::HoverLeaveMs);
         StartAnimation();
     }
 

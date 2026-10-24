@@ -70,18 +70,17 @@ CASES = {
         "entry": None,
         "disk": False,
         # A key unlocks; the shell starts the welcome program, whose window (760x520) is centred
-        # in the work area (the screen above the 48 px taskbar) at (132, 100) with its text box
-        # focused. Typing goes there; Tab reaches the Clear button and Space presses it; Shift+Tab
-        # comes back. The cursor starts at the screen centre (512, 384): up 268 is the caption, and
-        # dragging down 100 moves the window to y = 200.
+        # in the work area above the 48 px taskbar with its text box focused. Typing goes there;
+        # Tab reaches the Clear button and Space presses it; Shift+Tab comes back. The cursor
+        # starts at the screen centre: up 268 is the caption, and dragging down 100 moves it.
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
                     ("welcome: desktop windows created",
                      ["sendkey h", "sendkey i", "sendkey ret", "sendkey tab", "sendkey spc", "sendkey shift-tab",
                       "sendkey o", "sendkey k", "sendkey ret", "mouse_move 0 -268", "mouse_button 1",
                       "mouse_move 0 50", "mouse_move 0 50", "mouse_button 0"])],
-        "expect": ["Desktop: compositor at 1024x768", "Window manager self-tests: ", "[HZ] BOOT OK",
+        "expect": ["Desktop: compositor at ", "Window manager self-tests: ", "[HZ] BOOT OK",
                    "shell: unlocked", "welcome: you typed \"hi\"", "welcome: cleared", "welcome: you typed \"ok\"",
-                   "welcome: moved to (132, 200)"],
+                   "welcome: moved to ("],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:"],
     },
     "shell": {
@@ -155,7 +154,7 @@ CASES = {
                     ("calendar: started", ["sendkey meta_l", "sleep 1", "type:stopwatch", "sendkey ret"]),
                     ("stopwatch: started", ["sendkey meta_l", "sleep 1", "type:paint", "sendkey ret"]),
                     ("paint: started", [])],
-        "expect": ["apptest.exe exit 0x00000000", "[HZ] BOOT OK", "shell: 14 programs installed",
+        "expect": ["apptest.exe exit 0x00000000", "[HZ] BOOT OK", "shell: 15 programs installed",
                    "shell: launched notepad.exe", "notepad: saved D:\\smoke.txt (25 bytes)",
                    "terminal| Hello from the smoke test", "terminal|  Directory of D:\\",
                    "terminal: wrote 6 bytes to D:\\out.txt", "terminal| piped",
@@ -193,14 +192,29 @@ CASES = {
                     ("sysinfo: started", ["sendkey meta_l", "sleep 1", "type:calendar", "sendkey ret"]),
                     ("calendar: started", ["sendkey meta_l", "sleep 1", "type:stopwatch", "sendkey ret"]),
                     ("stopwatch: started", ["sendkey meta_l", "sleep 1", "type:paint", "sendkey ret"]),
-                    ("paint: started", [])],
-        "expect": ["shell: 14 programs installed", "shell: ready", "sysinfo: started", "calendar: started",
-                   "stopwatch: started", "paint: started"],
+                    ("paint: started", ["sendkey meta_l", "sleep 1", "type:browser", "sendkey ret"])],
+        "expect": ["shell: 15 programs installed", "shell: ready", "sysinfo: started", "calendar: started",
+                   "stopwatch: started", "paint: started", "browser: started; HTML text renderer ready; network unavailable"],
         # The current partition-table self-test failure is tracked separately; this case focuses
         # on manifest discovery and launching the newly added apps.
         "fail": ["*** STOP", "sysinfo: cannot create the window", "calendar: cannot create the window",
                  "stopwatch: cannot create the window", "paint: cannot create the window"],
         "timeout": 180.0,
+    },
+    "browser": {
+        "entry": None,
+        "disk": False,
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("welcome: desktop windows created", ["sendkey meta_l", "type:browser", "sendkey ret"]),
+                    ("browser: started; HTML text renderer ready; network unavailable",
+                     ["type:https://example.com", "sendkey ret", "sendkey ctrl-l",
+                      "type:https://example.com:99999999999999999999", "sendkey ret"])],
+        "expect": ["shell: 15 programs installed",
+                   "browser: started; HTML text renderer ready; network unavailable",
+                   "browser: address validated; no page request",
+                   "browser: rejected invalid web address"],
+        "fail": ["*** STOP", "ERROR:", "crashed"],
+        "timeout": 150.0,
     },
     "install": {
         "entry": None,
@@ -213,7 +227,7 @@ CASES = {
                     ("setup: started", ["sleep 1", "sendkey ret"]),
                     ("setup: disk 0 ", ["sleep 1", "sendkey ret"]),
                     ("setup: chose disk 0", ["sleep 1", "sendkey spc", "sendkey ret"])],
-        "expect": ["[HZ] BOOT OK", "Ramdisk: ", "at \\Device\\Ramdisk1", "shell: 14 programs installed",
+        "expect": ["[HZ] BOOT OK", "Ramdisk: ", "at \\Device\\Ramdisk1", "shell: 15 programs installed",
                    "setup: disk 0 'QEMU HARDDISK', 384 MB: empty", "setup: installing on disk 0",
                    "Disk: Harddisk0 partition table read again: GPT, 2 partition(s)", "setup: partitioned disk 0",
                    "setup: formatted partition 1 as FAT32 'EFI'", "setup: formatted partition 2 as FAT32 'NEXORAOS'",
@@ -250,7 +264,7 @@ CASES = {
         "expect": ["Disk: \\Device\\Harddisk0\\Partition2 is the system partition (hz.system)",
                    "Volume: C: is \\Device\\Harddisk0\\Partition2, FAT32 'NEXORAOS'", "Process self-tests: 12/12 passed",
                    "File system self-tests: ", "apptest.exe exit 0x00000000", "surfaces left: OK", "[HZ] BOOT OK",
-                   "shell: 14 programs installed", "shell: settings loaded: user 'Guest', wallpaper 0, first boot",
+                   "shell: 15 programs installed", "shell: settings loaded: user 'Guest', wallpaper 0, first boot",
                    "shell: first boot: started first-boot setup", "shell: wallpaper 1 (requested)",
                    "setup: first boot done: user 'Ada', wallpaper 1 (settings saved: 0x00000000)",
                    "shell: first-boot setup finished; hello, Ada", "shell: launched welcome.exe"],
@@ -355,7 +369,7 @@ CASES = {
                     ("blockyard: mouse released", ["sleep 1", "sendkey alt-f4"]),
                     ("blockyard: saved the world", ["sleep 2", "sendkey meta_l", "sleep 1", "type:block", "sendkey ret"]),
                     ("blockyard: world loaded", ["sleep 4"])],
-        "expect": ["[HZ] BOOT OK", "shell: 14 programs installed", "blockyard: world generated",
+        "expect": ["[HZ] BOOT OK", "shell: 15 programs installed", "blockyard: world generated",
                    "blockyard: started (2 render threads, saves to D:\\Blockyard.world)", "blockyard: mouse captured",
                    "blockyard: broke ", "blockyard: placed Brick at", "blockyard: flying", "blockyard: mouse released",
                    "blockyard: saved the world to D:\\Blockyard.world", "blockyard: world loaded", " fps at "],
@@ -752,6 +766,7 @@ def run_case(case, timeout):
     reason = "timeout"
     started = time.time()
     text = ""
+    expected = list(spec["expect"])
     try:
         while time.time() - started < spec.get("timeout", timeout):
             exited = qemu.poll() is not None
@@ -763,8 +778,15 @@ def run_case(case, timeout):
             except OSError as e:
                 if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, getattr(errno, "ENODATA", -1)):
                     raise
+            if case == "desktop" and "welcome: moved to (" in expected[-1]:
+                resolution = re.search(r"Desktop: compositor at (\d+)x(\d+)", text)
+                if resolution:
+                    width, height = map(int, resolution.groups())
+                    x = (width - 760) // 2
+                    y = (height - 48 - 520) // 2 + 100
+                    expected[-1] = f"welcome: moved to ({x}, {y})"
             if exited:
-                if spec.get("exit_ok") and qemu.returncode == 0 and all(m in text for m in spec["expect"]):
+                if spec.get("exit_ok") and qemu.returncode == 0 and all(m in text for m in expected):
                     ok = True
                 else:
                     reason = f"QEMU exited with status {qemu.returncode}: {qemu.stderr.read().decode(errors='replace').strip()}"
@@ -783,7 +805,7 @@ def run_case(case, timeout):
             if bad:
                 reason = f"unexpected serial output: {bad[0]!r}"
                 break
-            if all(m in text for m in spec["expect"]) and not spec.get("exit_ok"):
+            if all(m in text for m in expected) and not spec.get("exit_ok"):
                 ok = True
                 break
             time.sleep(0.5)

@@ -60,12 +60,12 @@ public:
 
     void OnPointerEnter() override
     {
-        Hover_.To(1, 110);
+        Hover_.To(1, Motion::HoverEnterMs);
         StartAnimation();
     }
     void OnPointerLeave() override
     {
-        Hover_.To(0, 140);
+        Hover_.To(0, Motion::HoverLeaveMs);
         StartAnimation();
     }
 

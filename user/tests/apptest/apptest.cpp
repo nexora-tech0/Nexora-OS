@@ -14,6 +14,8 @@
  * exit code is the number of failed checks.
  */
 #include "../../apps/calc/engine.cpp"
+#include "../../apps/browser/html.cpp"
+#include "../../apps/browser/url.cpp"
 #include "../../apps/setup/installer.cpp"
 #include "../../apps/terminal/parse.cpp"
 #include "hzapps.h"
@@ -131,7 +133,8 @@ void TestManifests()
     bool Live = hz::fs::IsLiveSystem(); /* Setup is pinned on the live image only */
     Check(Apps.Size() >= 10, "the app catalog contains the baseline programs");
     Check(FindByImage(Apps, "calendar.exe") && FindByImage(Apps, "stopwatch.exe") &&
-              FindByImage(Apps, "sysinfo.exe") && FindByImage(Apps, "paint.exe"),
+              FindByImage(Apps, "sysinfo.exe") && FindByImage(Apps, "paint.exe") &&
+              FindByImage(Apps, "browser.exe"),
           "new built-in apps are registered");
     Check(Apps.Size() && Apps[0].Id == "setup" && Apps[0].Pinned == Live, "Setup is pinned on live systems only");
     bool Ordered = true, Present = true;
@@ -151,6 +154,62 @@ void TestManifests()
     const App *Calc = FindByImage(Apps, "C:\\Nexora\\System\\CALC.EXE");
     Check(Calc && Calc->Name == "Calculator", "find a program by its image");
     Check(OpenPath(hz::String("C:\\Nexora\\Fonts\\Inter-Regular.ttf")) == STATUS_NOT_FOUND, "no program opens fonts");
+}
+
+/* ---- Browser URL parsing ------------------------------------------------------------------------- */
+
+void TestBrowserUrls()
+{
+    using namespace nexora::browser;
+    Url Address;
+    Check(ParseUrl("https://example.com/", &Address) == UrlError::None && Address.valid &&
+              Address.scheme == Scheme::Https && IsSecure(Address) && Address.port == 443 &&
+              !strcmp(Address.host, "example.com") && !strcmp(Address.path, "/"),
+          "browser parses a secure URL");
+    Check(ParseUrl("http://example.com:8080/a?q=1", &Address) == UrlError::None && Address.port == 8080 &&
+              Address.explicitPort && !strcmp(Address.path, "/a?q=1"),
+          "browser parses a URL with port and query");
+    Check(ParseUrl("https://example.com?q=1", &Address) == UrlError::None && !strcmp(Address.path, "/?q=1"),
+          "browser adds a slash before a query");
+    Check(ParseUrl("https://user@example.com/", &Address) == UrlError::InvalidAuthority &&
+              ParseUrl("https://example.com:99999/", &Address) == UrlError::InvalidPort &&
+              ParseUrl("https://example.com:999999999999999999999999/", &Address) == UrlError::InvalidPort &&
+              ParseUrl("file:///etc/passwd", &Address) == UrlError::UnsupportedScheme,
+          "browser rejects unsafe or unsupported URL forms");
+}
+
+void TestBrowserHtml()
+{
+    using namespace nexora::browser;
+    const char Markup[] =
+        "<!doctype html><html><head><title> Nexora   Browser </title></head><body>"
+        "<h1>Welcome &amp; enjoy</h1><p>Hello <a href=\"http://example.com/\">world &lt;web&gt;</a>.</p>"
+        "<script>secret()</script><style>h1 { color: red; }</style></body></html>";
+    HtmlDocument Document;
+    Check(ParseHtml(Markup, sizeof(Markup) - 1, &Document), "browser HTML parser accepts a bounded document");
+    Check(!strcmp(Document.Title, "Nexora Browser") && !strcmp(Document.Text, "Welcome & enjoy\nHello world <web>."),
+          "browser HTML parser extracts title, block text and basic entities");
+    Check(Document.LinkCount == 1 && !strcmp(Document.Links[0].Text, "world <web>") &&
+              !strcmp(Document.Links[0].Href, "http://example.com/"),
+          "browser HTML parser captures link labels and destinations");
+    Check(Document.UnsupportedContent && !strcmp(Document.Text, "Welcome & enjoy\nHello world <web>."),
+          "browser HTML parser omits script and stylesheet content and reports unsupported features");
+
+    const char Styled[] = "<p style='color:red'>Text &unknown;</p>";
+    Check(ParseHtml(Styled, sizeof(Styled) - 1, &Document) && Document.UnsupportedContent &&
+              !strcmp(Document.Text, "Text &unknown;"),
+          "browser HTML parser flags inline style and preserves unknown entities");
+    Check(ParseHtml("<p>unfinished", 13, &Document) && !strcmp(Document.Text, "unfinished"),
+          "browser HTML parser tolerates an unclosed element");
+    Check(!ParseHtml(nullptr, 0, &Document) && !ParseHtml("x", HtmlMaximumSource + 1, &Document),
+          "browser HTML parser rejects invalid and oversized input");
+
+    char LongText[HtmlMaximumText + 20];
+    for (size_t i = 0; i < sizeof(LongText); ++i)
+        LongText[i] = 'x';
+    Check(ParseHtml(LongText, sizeof(LongText), &Document) && Document.Truncated &&
+              Document.TextLength == HtmlMaximumText - 1 && Document.Text[Document.TextLength] == 0,
+          "browser HTML parser bounds output and reports truncation");
 }
 
 /* ---- Calculator --------------------------------------------------------------------------------- */
@@ -520,6 +579,8 @@ extern "C" int main(int argc, char **argv)
 {
     TestPaths();
     TestManifests();
+    TestBrowserUrls();
+    TestBrowserHtml();
     TestCalculator();
     TestTerminalParse();
     TestEditorModel();

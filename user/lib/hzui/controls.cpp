@@ -99,13 +99,13 @@ void Button::PaintOverlay(Painter &P)
 
 void Button::OnPointerEnter()
 {
-    Hover_.To(1, 100);
+    Hover_.To(1, Motion::HoverEnterMs);
     StartAnimation();
 }
 
 void Button::OnPointerLeave()
 {
-    Hover_.To(0, 150);
+    Hover_.To(0, Motion::HoverLeaveMs);
     StartAnimation();
 }
 
@@ -153,7 +153,7 @@ void ToggleSwitch::SetOn(bool On, bool Notify)
         return;
     On_ = On;
     if (GetWindow()) {
-        Knob_.To(On ? 1.0f : 0.0f, 160);
+        Knob_.To(On ? 1.0f : 0.0f, Motion::ControlStateMs);
         StartAnimation();
     } else {
         Knob_.Jump(On ? 1.0f : 0.0f);
@@ -204,13 +204,13 @@ void ToggleSwitch::PaintOverlay(Painter &P)
 
 void ToggleSwitch::OnPointerEnter()
 {
-    Hover_.To(1, 100);
+    Hover_.To(1, Motion::HoverEnterMs);
     StartAnimation();
 }
 
 void ToggleSwitch::OnPointerLeave()
 {
-    Hover_.To(0, 150);
+    Hover_.To(0, Motion::HoverLeaveMs);
     StartAnimation();
 }
 
@@ -430,13 +430,13 @@ void Slider::PaintOverlay(Painter &P)
 
 void Slider::OnPointerEnter()
 {
-    Hover_.To(1, 100);
+    Hover_.To(1, Motion::HoverEnterMs);
     StartAnimation();
 }
 
 void Slider::OnPointerLeave()
 {
-    Hover_.To(0, 150);
+    Hover_.To(0, Motion::HoverLeaveMs);
     StartAnimation();
 }
 

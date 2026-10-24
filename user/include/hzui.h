@@ -76,6 +76,16 @@ struct Rect {
 enum class Align : uint8_t { Stretch, Start, Center, End };
 enum class Orientation : uint8_t { Vertical, Horizontal };
 
+namespace Motion {
+constexpr uint32_t HoverEnterMs = 110;
+constexpr uint32_t HoverLeaveMs = 140;
+constexpr uint32_t ControlStateMs = 160;
+constexpr uint32_t ScrollMs = 180;
+constexpr uint32_t FocusExpandMs = 150;
+constexpr uint32_t FocusCollapseMs = 250;
+constexpr uint32_t LockScreenExitMs = 260;
+}  // namespace Motion
+
 /* ---- Theme (dark) ------------------------------------------------------------------------------- */
 
 namespace Theme {

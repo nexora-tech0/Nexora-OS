@@ -620,7 +620,7 @@ public:
             return;
         }
         Leaving_ = true;
-        Leave_.To(1, 260);
+        Leave_.To(1, Motion::LockScreenExitMs);
         StartAnimation();
     }
 

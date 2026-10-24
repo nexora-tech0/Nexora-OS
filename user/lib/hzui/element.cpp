@@ -609,14 +609,14 @@ void ScrollBar::Paint(Painter &P)
 
 void ScrollBar::OnPointerEnter()
 {
-    Expand_.To(1, 150);
+    Expand_.To(1, Motion::FocusExpandMs);
     StartAnimation();
 }
 
 void ScrollBar::OnPointerLeave()
 {
     if (DragStartY_ < 0) {
-        Expand_.To(0, 250);
+        Expand_.To(0, Motion::FocusCollapseMs);
         StartAnimation();
     }
 }
@@ -649,7 +649,7 @@ void ScrollBar::OnPointerUp(PointerEvent &E)
 {
     DragStartY_ = -1;
     if (!IsHovered()) {
-        Expand_.To(0, 250);
+        Expand_.To(0, Motion::FocusCollapseMs);
         StartAnimation();
     }
 }
@@ -716,7 +716,7 @@ void ScrollViewer::ScrollTo(int32_t Offset, bool Animated)
 {
     Offset = hz::Clamp(Offset, 0, hz::Max(Extent_ - ContentBounds().Height, 0));
     if (Animated) {
-        Scroll_.To((float)Offset, 180);
+        Scroll_.To((float)Offset, Motion::ScrollMs);
         StartAnimation();
         return;
     }
