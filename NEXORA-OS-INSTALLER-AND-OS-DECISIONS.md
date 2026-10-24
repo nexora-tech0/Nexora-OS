@@ -22,7 +22,8 @@ is kept for future revisions.
 - Deliver a bootable ISO that can also be written to USB.
 - User clarification: boot media must automatically open Setup and expose only installation and
   About information to normal users; do not offer the app desktop from the install ISO. Install
-  the full OS and applications to disk. About is available from a button on Setup's welcome page.
+  the full OS and applications to disk. Bundle all installation files on the ISO for offline use.
+  About is available from a button on Setup's welcome page.
 - Target UEFI and test VirtualBox first, with QEMU coverage; expand physical hardware support after
   core installation works.
 - Use a compact, centered, responsive, single-page-at-a-time wizard matching the installed Nexora

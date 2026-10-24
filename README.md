@@ -70,7 +70,8 @@ block-building game.
 Build the ISO (below) or take `build/nexora-os.iso`, and start it in a UEFI virtual machine
 (VirtualBox: `scripts/create-vbox-vm.sh build/nexora-os.iso --wipe-disk --start`). The boot menu
 automatically starts Setup. Installation media exposes the installer and its **About Nexora OS**
-information, not the application desktop. The complete OS and apps are copied to the selected disk.
+information, not the application desktop. The complete OS and apps are bundled on the ISO for
+offline installation and copied to the selected disk.
 
 ### 2. Install
 
