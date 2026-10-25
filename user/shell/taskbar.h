@@ -19,7 +19,6 @@ public:
     void ApplyTheme(); /* re-fills the tray pill after a colour-scheme switch */
 
 protected:
-    void OnPaint(Painter &P) override;
     void OnContextMenu(Point Screen) override;
 
 private:

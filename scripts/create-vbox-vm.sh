@@ -67,6 +67,7 @@ if command -v VBoxManage >/dev/null 2>&1; then
 fi
 if [ -z "$VBM" ]; then
     for c in "/mnt/c/Program Files/Oracle/VirtualBox/VBoxManage.exe" \
+             "/mnt/e/VIRTUALBOX/VBoxManage.exe" \
              "/c/Program Files/Oracle/VirtualBox/VBoxManage.exe" \
              "/cygdrive/c/Program Files/Oracle/VirtualBox/VBoxManage.exe"; do
         if [ -x "$c" ]; then VBM="$c"; break; fi

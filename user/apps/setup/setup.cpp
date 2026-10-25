@@ -825,7 +825,7 @@ public:
     }
 };
 
-/* The product mark: the Nexora glyph on its accent tile, as Setup carries the Windows logo. */
+/* The Nexora mark stays prominent and legible on its accent tile. */
 class LogoMark final : public Element {
 public:
     LogoMark()
@@ -839,7 +839,7 @@ public:
     {
         const Rect &B = Bounds();
         P.FillRoundRect(B, 8, Theme::Accent);
-        P.DrawIcon(Icon::Nexora, Rect{B.X + 5, B.Y + 5, B.Width - 10, B.Height - 10}, Theme::TextOnAccent, 1.2f);
+        P.DrawIcon(Icon::Nexora, Rect{B.X + 5, B.Y + 5, B.Width - 10, B.Height - 10}, Theme::TextOnAccent, 2.4f);
     }
 };
 

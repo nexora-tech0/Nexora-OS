@@ -92,7 +92,7 @@ void Shell::LoadSettings()
     }
     /* The shell's own appearance (M10/M11): the top dock and the desktop icon layer. Settings
        writes both and asks for HZ_SHELL_REQUEST_SETTINGS, so a change takes effect at once. */
-    ShowTopDock = Config.GetInt("TopDock", 0) != 0;
+    ShowTopDock = Config.GetInt("TopDock", 1) != 0;
     ShowDesktopIcons = Config.GetInt("DesktopIcons", 1) != 0;
     if (Dock && !Locked)
         NtUserShowWindow(Dock->Handle(), ShowTopDock ? HZ_SW_SHOWNOACTIVATE : HZ_SW_HIDE);

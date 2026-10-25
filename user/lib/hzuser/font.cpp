@@ -431,10 +431,10 @@ extern "C" void HzDrawGlyphCentered(HZ_CANVAS *Canvas, HZ_FONT *Font, uint32_t C
         G = &Temporary;
     }
     if (G->Bitmap) {
-        /* OffsetX/OffsetY place the ink relative to the pen origin on the baseline, so putting the
-           ink's centre on (CenterX, CenterY) centres the picture itself, not the pen box. */
-        int32_t Left = CenterX - (G->OffsetX + G->Width / 2);
-        int32_t Top = CenterY - (G->OffsetY + G->Height / 2);
+        /* This API centers the raster itself, unlike text drawing, where the bearings position ink
+           relative to a baseline. */
+        int32_t Left = CenterX - G->Width / 2;
+        int32_t Top = CenterY - G->Height / 2;
         for (int32_t y = 0; y < G->Height; y++) {
             int32_t Py = Top + y;
             if (Py < Canvas->Clip.Top || Py >= Canvas->Clip.Bottom)

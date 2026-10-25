@@ -313,7 +313,7 @@ void Taskbar::ApplyTheme()
 
 TopDock::TopDock(int32_t ScreenWidth)
     : Window("Nexora Dock", ScreenWidth - 40, kTopDockHeight,
-             HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_MICA | HZ_WS_NOFRAME)
+             HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_MICA)
 {
     Grid *Root = new Grid();
     Root->Columns.Push(GridLength::Stars(1));
@@ -383,12 +383,6 @@ int64_t Taskbar::HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LPara
         return 0;
     }
     return Window::HandleMessage(Message, WParam, LParam);
-}
-
-void Taskbar::OnPaint(Painter &P)
-{
-    Window::OnPaint(P);
-    P.FillRect(Rect{0, 0, WindowSize().Width, 1}, 0x1AFFFFFF);
 }
 
 void Taskbar::OnContextMenu(Point Screen)

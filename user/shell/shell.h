@@ -19,9 +19,9 @@ namespace shell {
 using namespace hzui;
 
 constexpr int32_t kTaskbarHeight = 48;
-constexpr int32_t kTopDockHeight = 40;
-constexpr int32_t kTopDockTop = 8;
-constexpr int32_t kWorkAreaTop = kTopDockTop + kTopDockHeight + 4;
+constexpr int32_t kTopDockHeight = 48;
+constexpr int32_t kTopDockTop = 10;
+constexpr int32_t kWorkAreaTop = kTopDockTop + kTopDockHeight + 8;
 constexpr size_t kMaxRecent = 4;
 
 struct AppWindow {
@@ -66,7 +66,7 @@ struct Shell {
     int UtcOffset = 0;                     /* M11: minutes; the clocks show local time */
     bool FirstBoot = false;
     bool Persistent = false;
-    bool ShowTopDock = false;      /* shell.ini "TopDock": the macOS-style dock at the top */
+    bool ShowTopDock = true;       /* shell.ini "TopDock": the floating dock along the top */
     bool ShowDesktopIcons = true;  /* shell.ini "DesktopIcons": the desktop icon layer */
     bool LightMode = false;        /* shell.ini "Theme": 0 dark, 1 light. Applied in LoadSettings(). */
     bool Started = false; /* unlocked once: Welcome or first-boot setup ran */
