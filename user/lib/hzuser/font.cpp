@@ -300,6 +300,44 @@ extern "C" HZ_FONT *HzGetFont(int Which)
     return g_Standard[Which];
 }
 
+extern "C" HZ_FONT *HzIconFont(int32_t PixelHeight)
+{
+    /* The icon font is a normal TrueType font whose glyphs are pictures; each size is its own
+       HZ_FONT (the file itself is read once by SharedFile and shared). Snap to a small set of sizes
+       so a rounded layout does not load a new font for every pixel. */
+    static const char *const Path = "C:\\Nexora\\Fonts\\MaterialIcons-Regular.ttf";
+    static const int32_t Steps[] = {12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64, 96, 128};
+    struct Entry {
+        int32_t Size;
+        HZ_FONT *Font;
+    };
+    static Entry Cache[8];
+    static int32_t Count;
+
+    if (PixelHeight < Steps[0])
+        PixelHeight = Steps[0];
+    int32_t Size = Steps[sizeof(Steps) / sizeof(Steps[0]) - 1];
+    for (int32_t Step : Steps) {
+        if (Step >= PixelHeight) {
+            Size = Step;
+            break;
+        }
+    }
+    for (int32_t i = 0; i < Count; i++) {
+        if (Cache[i].Size == Size)
+            return Cache[i].Font;
+    }
+    HZ_FONT *Font = HzLoadFont(Path, Size);
+    if (!Font)
+        HzPrint("hzuser: cannot load %s", Path);
+    if (Count < (int32_t)(sizeof(Cache) / sizeof(Cache[0]))) {
+        Cache[Count].Size = Size;
+        Cache[Count].Font = Font;
+        Count++;
+    }
+    return Font;
+}
+
 extern "C" int32_t HzFontAscent(const HZ_FONT *Font)
 {
     return Font ? Font->Ascent : 0;
@@ -371,4 +409,44 @@ extern "C" int32_t HzDrawTextN(HZ_CANVAS *Canvas, HZ_FONT *Font, int32_t X, int3
     if (!Font || !Text || !Length)
         return X;
     return DrawTextRange(Canvas, Font, X, Baseline, Text, Text + Length, Color);
+}
+
+extern "C" void HzDrawGlyphCentered(HZ_CANVAS *Canvas, HZ_FONT *Font, uint32_t CodePoint, int32_t CenterX,
+                                    int32_t CenterY, uint32_t Color)
+{
+    if (!Font || !Canvas)
+        return;
+    Glyph Temporary;
+    Glyph *G;
+    if (CodePoint < 256) {
+        G = &Font->Cache[CodePoint];
+        if (!G->Ready) {
+            FontLock(Font);
+            if (!G->Ready)
+                Rasterize(Font, CodePoint, G);
+            FontUnlock(Font);
+        }
+    } else if (!(G = CachedExtra(Font, CodePoint))) {
+        Rasterize(Font, CodePoint, &Temporary);
+        G = &Temporary;
+    }
+    if (G->Bitmap) {
+        /* OffsetX/OffsetY place the ink relative to the pen origin on the baseline, so putting the
+           ink's centre on (CenterX, CenterY) centres the picture itself, not the pen box. */
+        int32_t Left = CenterX - (G->OffsetX + G->Width / 2);
+        int32_t Top = CenterY - (G->OffsetY + G->Height / 2);
+        for (int32_t y = 0; y < G->Height; y++) {
+            int32_t Py = Top + y;
+            if (Py < Canvas->Clip.Top || Py >= Canvas->Clip.Bottom)
+                continue;
+            for (int32_t x = 0; x < G->Width; x++) {
+                int32_t Px = Left + x;
+                if (Px < Canvas->Clip.Left || Px >= Canvas->Clip.Right)
+                    continue;
+                HzBlendPixel(Canvas, Px, Py, Color, G->Bitmap[y * G->Width + x]);
+            }
+        }
+    }
+    if (G == &Temporary && Temporary.Bitmap)
+        stbtt_FreeBitmap(Temporary.Bitmap, nullptr);
 }

@@ -34,11 +34,13 @@ struct AppWindow {
 
 class Taskbar;
 class TopDock;
+class Desktop;
 
 struct Shell {
     Rect Screen, Work;
     Taskbar *Bar = nullptr;
     TopDock *Dock = nullptr;
+    Desktop *Desk = nullptr; /* the icon layer under every window */
     Window *Lock = nullptr;
     Window *Start = nullptr;
     Window *Quick = nullptr;
@@ -59,10 +61,14 @@ struct Shell {
     /* Settings (M10): C:\Nexora\Settings\shell.ini; saved only on an installed system. */
     hz::fs::Settings Config;
     hz::String UserName;  /* "" = Guest */
+    hz::String ProfilePicture; /* shell.ini "ProfilePicture": a 24-bit .bmp, or "" for the initial */
     hz::String PasswordSalt, PasswordHash; /* M11: no hash = no password (hzcrypto.h) */
     int UtcOffset = 0;                     /* M11: minutes; the clocks show local time */
     bool FirstBoot = false;
     bool Persistent = false;
+    bool ShowTopDock = false;      /* shell.ini "TopDock": the macOS-style dock at the top */
+    bool ShowDesktopIcons = true;  /* shell.ini "DesktopIcons": the desktop icon layer */
+    bool LightMode = false;        /* shell.ini "Theme": 0 dark, 1 light. Applied in LoadSettings(). */
     bool Started = false; /* unlocked once: Welcome or first-boot setup ran */
     /* Shutting down (M11): windows were asked to close; the timer checks until they are gone. */
     bool ShuttingDown = false, ShutdownAsked = false;
@@ -72,6 +78,12 @@ struct Shell {
     void LoadApps();
     void LoadSettings();
     void SaveSettings();
+    /* The Control Center (item 7.5): apply and save the shell's own appearance, then refresh the
+       surfaces that were painted in the old state. */
+    void ReloadChrome();             /* re-fills the taskbar/top dock/desktop and rebuilds an open flyout */
+    void SetLightMode(bool Light);   /* shell.ini "Theme" */
+    void SetTopDock(bool Show);      /* shell.ini "TopDock" */
+    void SetDesktopIcons(bool Show); /* shell.ini "DesktopIcons" */
     void SetWallpaper(uint32_t Index); /* applies, remembers and saves */
     void SetLockWallpaper(uint32_t Index);
     bool ShowLockWallpaper();

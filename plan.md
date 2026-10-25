@@ -1,168 +1,120 @@
-# Nexora OS driver and kernel expansion roadmap
+# Nexora OS project plan
 
-## Target and current baseline
+This project continues the existing Nexora OS foundation toward a dependable, polished installed
+desktop OS. The installation ISO remains installer-first; the installed OS boots through a separate
+first-run **Set up your device** experience before reaching the desktop.
 
-Target both the current VirtualBox reference machine and a practical baseline of modern UEFI
-x86-64 PCs. "All drivers" is not a finite target across arbitrary hardware; this roadmap defines
-specific devices and retains the UEFI framebuffer and current drivers as compatibility fallbacks.
+## Planning documents
 
-Already present: core HAL, scheduler, virtual memory, process/object/I/O managers, PCI
-enumeration, built-in driver registration, UEFI framebuffer compositor, PS/2 input, AHCI/SATA,
-FAT32, Ustar, E1000, DHCP, and bounded packet parsing. Network DNS, routing, TCP, sockets, USB,
-NVMe, audio, accelerated graphics, and an additional general-purpose filesystem are not complete.
+- [Implementation checklist and phased roadmap](./checklist.md) — installer validation steps,
+  installed-OS milestones, feature requirements, and acceptance gates. Its top section, **"Working
+  ledger — written, unverified"**, is the resume point after a lost history: read it first to see
+  what code exists, what is still unverified, and which item is next.
+- [Installer and OS product decisions](./NEXORA-OS-INSTALLER-AND-OS-DECISIONS.md) — agreed
+  experience, app catalog, desktop behavior, Control Center, privacy, and release priorities.
 
-## Delivery stages
+## Where we are (keep this current)
 
-1. **Stabilize boot and instrumentation.** Reproduce and fix the timer-calibration/degraded-boot
-   result; measure boot phase durations and compositor frame times on QEMU and VirtualBox. Keep
-   startup self-tests deterministic and identify tests that can safely move out of normal boot.
-   Gate: normal boot reports healthy, UI smoke cases pass, and startup/frame timing is recorded.
-2. **Driver framework and PCI resources.** Evolve the existing `.hzdrivers` and `DRIVER_OBJECT`
-   model rather than replacing it. Add explicit device matching, safe PCI BAR/resource ownership,
-   DMA allocation/mapping contracts, interrupt registration/masking/teardown, and driver/device
-   lifetime rules. Add unit tests for resource bounds and initialization failures.
-   Candidate files: `io/driver.c`, `io/resource.c`, `include/driver.h`, and focused tests.
-3. **Complete networking and browser HTTP.** Build on `NET_INTERFACE`, E1000, DHCP, and packet
-   parsers. Deliver in testable layers: ARP and IPv4 send/receive/routing; UDP checksums and DNS;
-   TCP connection state, retransmission, and timeouts; a bounded socket/user API; then a bounded
-   plain-HTTP client wired into browser navigation. Add a second practical NIC target after the
-   framework (VirtIO-net is suitable for VM testing; physical NIC choice must be pinned to tested
-   PCI IDs). Candidate files: `net/arp.c`, `net/ipv4.c`, `net/udp.c`, `net/dns.c`, `net/tcp.c`,
-   `net/socket.c`, `drivers/net/virtio_net.c`, and `include/uapi` API definitions.
-   Gate each layer with protocol tests; final gate is DNS plus HTTP reachability through QEMU NAT
-   and VirtualBox NAT with bounded response handling. HTTPS remains unavailable until a TLS
-   implementation verifies certificate chains and hostnames against a managed trust store.
-4. **USB xHCI and HID.** Add xHCI PCI discovery, DMA-safe command/event/transfer rings, controller
-   reset and timeouts, USB device enumeration, hub handling, and USB HID keyboard/mouse parsing.
-   Preserve PS/2 fallback. Candidate files: `drivers/usb/xhci.c`, `drivers/usb/usb.c`,
-   `drivers/usb/hid.c` and headers. Gate: supported QEMU/VirtualBox xHCI keyboard and mouse
-   input, plus enumeration failure and recovery tests.
-5. **Bluetooth host and device profiles.** Build only after the USB host controller and transfer
-   APIs are stable. Add Bluetooth USB transport/controller detection, HCI command/event handling,
-   device discovery and pairing, then BLE L2CAP/SMP/ATT/GATT and HID-over-GATT keyboard/mouse.
-   Add Classic Bluetooth L2CAP/RFCOMM/profile support and an audio path (A2DP) only when the
-   kernel audio-stream interface exists. Candidate files: `drivers/bluetooth/usb.c`,
-   `bluetooth/hci.c`, `bluetooth/l2cap.c`, `bluetooth/smp.c`, `bluetooth/att.c`,
-   `bluetooth/gatt.c`, and profile modules plus focused protocol tests.
-   Gate: tested, explicitly listed USB adapter IDs; BLE scan/pair/GATT and HID input; and Classic
-   pairing/audio tests on actual supported hardware. Do not advertise universal Bluetooth or audio
-   support from controller detection alone.
-6. **NVMe storage.** Add an NVMe PCI controller driver with queue setup, DMA-safe buffers,
-   timeouts/reset, and registration through the existing disk class path. Keep AHCI as fallback.
-   Candidate file: `drivers/nvme/nvme.c` plus focused queue/identify tests.
-   Gate: read-only identification first; then partition discovery and safe read/write tests on a
-   disposable virtual disk.
-7. **Additional filesystem.** Implement ext2 read-only first through the existing filesystem
-   registration/mount interfaces; only add write support after corruption and recovery tests.
-   Candidate files: `fs/ext2/ext2.c`, `fs/ext2/ext2dir.c`, and `fs/ext2/ext2.h`.
-   Gate: mount/read/path tests and malformed-image fuzz/regression corpus; FAT32 stays supported.
-8. **Audio.** Add an HDA controller and codec discovery path, then a small kernel audio-stream API.
-   Candidate files: `drivers/audio/hda.c`, `include/audio.h`, and a targeted playback diagnostic.
-   Gate: supported VirtualBox/QEMU device or explicitly selected real codec plays a known test tone.
-   Bluetooth A2DP depends on this API and is gated separately under Bluetooth.
-9. **Accelerated graphics.** Retain the UEFI framebuffer fallback. First choose and support a
-   documented virtual GPU (VirtIO-GPU or VirtualBox VMSVGA); implement command validation,
-   bounded buffers, synchronization, and display mode ownership before acceleration is exposed.
-   Candidate files: `drivers/gpu/virtio_gpu.c` or `drivers/gpu/vmsvga.c`, `include/gfx.h`, and
-   compositor integration. Generic Intel/AMD GPU support is explicitly outside this bounded
-   target and would require separate per-device roadmaps.
-10. **Integration and release gate.** Run the full QEMU suite on one and multiple CPUs, then
-   VirtualBox coverage for every selected device, including failure/recovery paths. Update
-   architecture, progress, and user documentation from measured results; keep unimplemented
-   capabilities explicit.
+No build, ISO, or VM run has been performed, by the user's standing instruction, since the current
+wave of changes began. Every implementation recorded in the ledger exists on disk and is
+**unverified**; no checklist gate has been ticked. One build plus a QEMU/VirtualBox pass is owed
+before any `written` item can be called working.
 
-## Change and validation policy
+**Resume point: the top of `checklist.md` — its "Handoff prompt — paste this to start the next
+session" block is self-contained and was refreshed 2026-10-25 (late); below it, the "Written and
+unverified" table and "Next up" are the state.** The newest list is § "Requested next steps" items
+14–19 (the 2026-10-25 late batch: driver reuse, `.exe`/Linux binaries, the missing apps, Explorer
+additions, dock hover/motion, volume controls, cleanup). Item 7 is the earlier one and is largely
+written: a real File Explorer (archive
+extract, create, rename), a bootable/real installer, Start/app-drawer re-polish, real icons from the
+internet, a working + polished Control Center, a clean Windows-like directory layout, Photo and Video
+Viewers, window snapping + multitasking with motion, removal of mock/beta apps, and Wi-Fi plus
+browsing. Item 7.4 (real icons) is **written**: Material Icons is vendored and `Painter::DrawIcon`
+draws it, with the 47 vector paths kept as fallback. **Item 7.1 is complete in code**: an archive
+engine (`hzarchive.h`/`hzarchive.cpp`, in `USER_RUNTIME_OBJS`), "Extract all..." in the Files context
+menu, archive/image icons and types, and a Windows 11 Quick access sidebar (Home/Desktop/Documents
+when they exist, then the volumes) with the current folder's row highlighted. **Item 7.5 (Control
+Center) is written**: it has an Appearance card whose three switches really change the light/dark
+scheme, the top dock and the desktop icons — each applied to the shell at once and saved to
+`shell.ini` (`Shell::SaveSettings` now writes `Theme`/`TopDock`/`DesktopIcons`, which before only
+`LoadSettings` read) — and the flyout slides its content into place on open (`RevealHost`,
+`Motion::FlyoutRevealMs`; hzui has no opacity layer, so the motion is position, never a fade).
+**Item 7.3 is written too**: `CreateStartMenu` builds one `AppSection` that owns the heading, the tile
+grid and an **All apps / Pinned** switch, so Start is a browsable app drawer and not pins only; the
+menu slides into place on open and `RecentRow` now fades its hover like the tiles. **Item 7.2 is
+written** as well: Setup measures what it will copy (`MeasurePayload`) and refuses a disk it cannot
+fill with `STATUS_DISK_FULL` and a named error **before the erase**, and the Ready page names the
+sizes — "bootable" itself stays a *verification* item because the ISO is already El-Torito
+UEFI-bootable by construction. **Item 7.6 is written**: the `Makefile` ramdisk recipe now creates the
+whole `C:\Nexora` folder set — `System`, `Fonts`, `Apps`, `Wallpapers`, `Licenses` and the `Settings`
+folder `hz::fs::SettingsPath()` writes into but the media never carried — and the orphan
+`rootfs/Nexora/welcome.txt` is gone. **Item 7.7 is written in both halves**: the picture decoder —
+`third_party/stb/stb_image.h` vendored with `third_party/stb/compat/{stdlib.h,string.h}` and
+`third_party/stb/LICENSE.txt`, compiled in `user/lib/hzrt/hzimage.cpp` behind `user/include/hzimage.h`
+(`STBI_NO_STDIO/THREAD_LOCALS/HDR/LINEAR/PSD/PIC`, the `STBI_*` hooks on the Nexora heap, signature
+detection, `0xAARRGGBB` output, PSD/HDR recognised but not decoded, rotation done on a copy) — and the
+viewer, `user/apps/photos/photos.cpp` + `rootfs/Nexora/Apps/photos.app` (`ImageStage`, File/View menu,
+nine-button toolbar, folder stepping, honest per-format failure text). **Video remains unwritten and
+unclaimed**: no demuxer, no codec, no audio device. The rest of item 7 — 7.8–7.13 — is not written;
+the Wi-Fi and remote-browsing work has **started** (see the paragraph below) but is far from done, and
+neither toggle may ever be faked. **Next: item 7.8 (window snapping + multitasking), or the next
+browsing step (`net/dns.c` onto `net/udp.c`) — see the Wi-Fi/browsing paragraph below.**
 
-Implement one stage at a time, build and test each before proceeding, preserve current working
-drivers and user changes, and do not claim support for hardware that was not exercised. Driver
-choices or real-machine tests requiring unavailable hardware must be called out rather than
-simulated as success.
+**Most recent request (2026-10-25, evening): add Wi-Fi and internet browsing.** The user asked how to
+add both and chose to **build both** — a real 802.11 driver *and* the browsing stack — so the plan is
+written into `checklist.md` §7 item 11 (with item 2 pointing at it), and **both tracks have now been
+started (written, unverified)**. Two parts, deliberately separated:
+- **Browsing** (delivers "internet browsing"; runs over the existing wired e1000, so no hardware
+  dependency) in the roadmap's Delivery-stage 3 order: `net/ipv4.c` → `net/udp.c` (and move DNS off
+  its hand-rolled frames) → `net/tcp.c` → `net/socket.c` + a bounded user API → a bounded HTTP client
+  → TLS (a maintained port, BearSSL or mbedTLS, with a trust store and hostname validation) → the
+  HTML/CSS renderer. Local-file browsing is preserved throughout and plaintext HTTP stays refused.
+  **Written so far: `net/netcore.c`** — the `NetTransmitFrame` that `net/arp.c` already called and
+  nothing defined (so the kernel net layer could not have linked without it), plus `NetProcessFrame`,
+  `NetReceiveWorker` (not started yet: DHCP polls the same ring) and `NetInitializeStack` — **
+  `net/ipv4.c`** (subnet/routing helpers, `NetIpSend` with DF and no fragmentation,
+  `NetIpResolveAndSend` over ARP, and a real ICMP echo reply so the machine is pingable) — **and
+  `net/udp.c`** (bounded port bindings each with a small receive queue, ephemeral ports, a real
+  checksum on send, and checksum-verified `NetUdpDeliver` as the enqueue path, now reached from
+  `NetIpReceive`'s UDP case; its receive polls the ring while the worker stays unstarted, and says
+  so). **Next browsing step: move `net/dns.c` onto `net/udp.c` (it still hand-rolls ARP/IPv4/UDP
+  frames and polls the ring), then write `net/tcp.c`.**
+- **A real 802.11 driver**, honestly scoped: there is no emulated 802.11 radio in QEMU/VirtualBox, the
+  Delivery-stage 2 PCI/DMA driver framework is not built yet, a WPA2/WPA3 supplicant is its own work,
+  and no-firmware ath9k-class cards are preferred to avoid a firmware blob and its licence.
+  **Written so far: `include/net80211.h`** — the shared-layer contract only (driver ops + an embedded
+  `NET_INTERFACE`, BSS/security/state types, shared entry points), so supporting many cards later means
+  adding a driver rather than rewriting the wireless logic. `net/net80211.c`, its supplicant and every
+  card driver under `net/80211/` are **not written**.
+**Blocking decision: the exact PCI ID of the 802.11 card to pin.**
 
-## Nexora OS installer delivery plan
+**Newest request (2026-10-25, evening) — a large batch, recorded as `checklist.md` §7 items 14–19
+plus a consolidated "what a proper OS still needs" list. No code written for it yet.** It asks for
+driver reuse from other projects (answered: **porting** is possible, **loading** is not — Linux
+drivers sit on Linux-internal APIs, `ath9k`/`iwlwifi`/`mt76` are GPL-2.0, and the actual blocker is
+the missing Delivery-stage 2 PCI/DMA/MSI framework); running Windows `.exe` and Linux ELF binaries
+(recorded as **three separate projects** with an incremental order — no single step delivers it);
+the missing apps (App Store, Media Player, Disk Manager, Device Manager, Screenshot Tool, Archive
+Manager, PDF Viewer, Email, Contacts, Software Update, Backup & Restore) where an App Store needs a
+package + trust story first and a Media Player needs an audio driver and a codec; more File Explorer
+features; dock hover/motion on **both** docks; **volume controls — recorded as blocked on an audio
+driver and explicitly not to be faked**; and removing `blockyard` plus the beta apps. Suggested
+order: cleanup (item 19) → Explorer (17) → dock hover/motion (18) → the apps with no new subsystem
+(16) → driver framework → essential drivers → audio → then volume and Media Player → App Store once
+packages and the network exist → compatibility layer one stage at a time.
 
-### Scope and decisions
+**To resume after a lost history:** paste the "Handoff prompt" block from `checklist.md` (top of the
+§ "Working ledger" section) as the first message of the new session. It carries the constraints, the
+exact state, the remaining queue and the facts that would otherwise have to be re-discovered.
 
-The user completed [NEXORA-OS-INSTALLER-AND-OS-DECISIONS.md](./NEXORA-OS-INSTALLER-AND-OS-DECISIONS.md).
-Treat those decisions as product requirements: retain Nexora identity while borrowing Windows 11
-usability patterns; installation media starts Setup automatically and exposes About, not the live
-desktop; install the full OS and apps to disk. Prioritize reliable functionality, persistent data,
-and verified installed-disk boot; defer dual boot, manual partitioning, automatic updates, and
-broad recovery until safe.
+## Guiding principles
 
-Nexora already has a native Setup wizard in `user/apps/setup/setup.cpp`, GPT/FAT32 builders in
-`user/apps/setup/installer.cpp`, and `install`/`diskboot` smoke cases in `scripts/smoke-test.py`.
-Improve these existing surfaces rather than creating a second installer. The destructive path must
-never guess a disk, silently erase an existing OS, or claim success without verification. Any
-VirtualBox validation must use a new disposable VDI, not the preserved old test disk.
+- Build on the existing kernel, shell, native apps, and installer rather than starting over.
+- Keep installation safe and verify that the installed disk boots independently of the ISO.
+- Make only implemented, tested capabilities appear functional; report unsupported hardware and
+  services honestly.
+- Prioritize responsiveness, accessibility, real functionality, persistent user data, and
+  purposeful motion over decorative effects.
+- Keep build artifacts, toolchains, VM disks, and test images on E: or F:.
 
-### Phased checklist
-
-#### Phase 1 — Reproduce and establish a trustworthy baseline
-
-- [ ] Build the current tree with the E-drive NexoraBuild toolchain and record the resulting ISO.
-- [ ] Run focused QEMU `install` and `diskboot` cases on fresh disposable images.
-- [ ] Investigate the known GPT/partition self-test failure independently from installer behavior.
-      Record whether it occurs in QEMU, VirtualBox, or both and fix its root cause before treating
-      the affected boot as healthy.
-- [ ] Inspect current disk enumeration, device identity, eligibility reasons, layout sizing, copy
-      progress, error paths, and first-boot/persistence path. Do not make unrelated subsystem
-      changes.
-
-#### Phase 2 — Make installation safe and genuinely verifiable
-
-- [ ] Keep the initial supported target as explicit full-disk UEFI/GPT/FAT32 installation. Exclude
-      the live medium, the running-system disk, read-only/in-use/unsupported disks, and disks below
-      the measured minimum capacity.
-- [ ] Present model, actual size, and existing partition information; require explicit target
-      selection and refresh; explain why a target is unavailable.
-- [ ] Before writing, show the exact selected disk and data-loss effect; require the user to type
-      `ERASE` and provide a final Cancel action. Do not start writes on an ambiguous selection.
-- [ ] Copy the actual boot and OS payload, configure the bootloader, and verify installed files and
-      boot configuration before showing success. Surface failures, preserve local diagnostics
-      where possible, and offer retry only when safe.
-- [ ] Keep offline installation supported. Label progress by actual operation/stage; provide
-      estimated time only when measured/reliable. Allow cancellation after writes begin only at
-      safe checkpoints with a warning.
-- [ ] Preserve or initialize first-boot account setup, secure password storage/authentication, and
-      persistent user files/settings. Do not bypass login or imply persistence unless verified.
-
-#### Phase 3 — Polish the setup experience to the agreed direction
-
-- [ ] Make the installer the default boot experience, start Setup automatically, and keep About
-      available on its welcome screen. Do not expose the app desktop in the release boot menu.
-- [ ] Refine the existing one-page wizard into responsive Welcome, optional locale/keyboard/network,
-      disk choice, supported install choice, final review, progress, verification, and completion
-      steps. Use sensible defaults and allow optional network setup without requiring internet.
-- [ ] Apply Nexora's charcoal/graphite, original branding, clean sans-serif, restrained transparency,
-      configurable accent, and subtle fast transitions. Keep it consistent with the installed
-      desktop and avoid audio by default.
-- [ ] Completion must state that verification passed, explain removing installation media, and offer
-      Restart and Shut Down. If verification fails, never show a success screen.
-
-#### Phase 4 — Validate installed OS and desktop requirements
-
-- [ ] Run QEMU `install` on a new blank disposable disk. Check GPT layout, both FAT32 partitions,
-      EFI loader/config, kernel/symbols, actual system payload, and first-boot marker with host-side
-      read-back tools.
-- [ ] Run `diskboot` from that output through first-boot account setup. Verify boot independent of
-      the ISO, actual password checks (when configured), app launch, file/settings persistence
-      after another restart, and expected wallpaper/theme/time-zone preferences.
-- [ ] Recreate a separate VirtualBox VM with the new ISO and a disposable blank VDI. Install,
-      detach the ISO, and verify boot from the VDI; do not reuse the preserved old test disk.
-- [ ] Where possible, inspect the desktop at 1024x768 and 1920x1080. Prioritize responsive input,
-      reliable window management, keyboard access/focus, accessibility defaults, and real controls.
-      Keep unimplemented settings clearly unavailable.
-
-#### Phase 5 — Document and deliver
-
-- [ ] Update README/build guidance for producing the bootable ISO and writing it to USB, tested
-      hardware/firmware, safe installation steps, and current limitations.
-- [ ] Report modified files and separate QEMU, VirtualBox, and physical-hardware results. Do not
-      claim any environment or persistence result that was not directly tested.
-
-### Completion gate
-
-The ISO builds; QEMU installation and installed-disk boot/persistence checks pass with read-back
-validation; and a clean VirtualBox VM installs to a disposable VDI and boots independently of the
-ISO. Destructive-disk safeguards and honest error reporting are verified. Any failing or
-environment-blocked gate remains explicitly incomplete.
+Detailed implementation steps and phase completion gates are maintained in [checklist.md](./checklist.md).

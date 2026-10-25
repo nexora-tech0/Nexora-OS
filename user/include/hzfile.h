@@ -92,6 +92,32 @@ private:
 
 /* C:\Nexora\Settings\<Name>.ini */
 String SettingsPath(const char *Name);
+
+/* ---- Trash (recycle bin) --------------------------------------------------------------------- */
+
+/* Deleted items are moved into TrashFolder() under a number, and an index remembers where each one
+   came from, so it can be put back and so the desktop can tell whether the bin has anything in it. */
+String TrashFolder(); /* "C:\Nexora\Trash" (the folder is created when something is deleted) */
+
+struct TrashItem {
+    String Name;        /* the stored name (a number), for Restore/Delete/Purge */
+    String OriginalName;/* the name the item had before it was deleted */
+    String OriginalPath;/* the full path it is restored to */
+    uint64_t DeletedAt; /* HZ time */
+};
+
+/* Moves Path (a file or a folder with everything in it) into the trash. */
+STATUS Trash(const String &Path);
+/* The trash's content, most recently deleted first. */
+STATUS TrashList(Vector<TrashItem> &Out);
+/* Puts an item back where it came from; a name already taken there gets a " (2)" suffix. */
+STATUS TrashRestore(const String &Name, String *RestoredPath = nullptr);
+/* Deletes one item for good. */
+STATUS TrashDelete(const String &Name);
+/* Deletes everything in the trash for good. */
+STATUS TrashEmpty();
+/* True when the trash holds at least one item. */
+bool TrashHasItems();
 /* True when C: is the read-only live image (nothing can be saved there). */
 bool IsLiveSystem();
 /* The user's documents folder (C:\Users\<name>\Documents on an installed system after first-boot
@@ -122,6 +148,7 @@ String FormatUtcOffset(int Minutes);   /* "UTC", "UTC+05:30", "UTC-03:00" */
 
 String FormatSize(uint64_t Bytes);                   /* "512 bytes", "1.5 KB", "12 MB" */
 String FormatTime(uint64_t HzTime);                  /* "2026-10-07 14:05" (UTC) */
+String FormatTime(uint64_t HzTime, int OffsetMinutes); /* local time; no daylight saving rules */
 const char *StatusText(STATUS Status);               /* short human description */
 
 }  // namespace hz::fs

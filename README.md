@@ -81,7 +81,8 @@ without writing. Setup rechecks the target immediately before writing and verifi
 sectors and copied files before reporting success. It partitions the disk (GPT: an EFI system
 partition and a FAT32 system partition), installs the boot loader and copies the complete system.
 Then restart without the ISO (VirtualBox:
-`scripts/create-vbox-vm.sh --boot-disk --start`).
+`scripts/create-vbox-vm.sh --boot-disk --start`). The installed Limine menu defaults to Nexora OS,
+so subsequent boots start the installed system automatically; first boot opens the account setup.
 
 ![Setup](docs/images/install.png)
 

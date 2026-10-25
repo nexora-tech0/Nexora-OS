@@ -67,7 +67,7 @@ public:
         case TaskKind::Quick:
             P.DrawIcon(Icon::Settings, Rect{B.X + (B.Width - IconSize) / 2, B.Y + (B.Height - IconSize) / 2,
                                             IconSize, IconSize},
-                       Compact_ ? 0xFFE4E8F0 : Theme::TextPrimary);
+                       Theme::TextPrimary);
             break;
         }
     }
@@ -208,17 +208,25 @@ public:
         Width = 78;
         Height = 28;
         VerticalAlignment = Align::Center;
-        Background = 0x523D424F;
-        BorderColor = 0x32FFFFFF;
+        Background = Theme::Glass;
+        BorderColor = Theme::CardStroke;
         CornerRadius = 14;
         HitTestVisible = false;
         ToolTip = "Network and accessibility indicators";
     }
 
+    /* Called when the shell switches colour scheme: the fill was captured at construction. */
+    void ApplyTheme()
+    {
+        Background = Theme::Glass;
+        BorderColor = Theme::CardStroke;
+        Invalidate();
+    }
+
     void Paint(Painter &P) override
     {
         const Rect &B = Bounds();
-        const Color Ink = 0xFFE4E8F0;
+        const Color Ink = Theme::TextPrimary;
         P.DrawIcon(Icon::Wifi, Rect{B.X + 8, B.Y + 7, 14, 14}, Ink);
         P.DrawIcon(Icon::Accessibility, Rect{B.X + 33, B.Y + 7, 14, 14}, Ink);
         P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 55, B.Y + 4, 15, B.Height - 8}, "A", Ink, Align::Center);
@@ -239,9 +247,9 @@ public:
     void Paint(Painter &P) override
     {
         const Rect &B = Bounds();
-        P.FillCircle(B.X + 5.0f, B.Y + 8.0f, 2.2f, 0xFF9AA8FF);
-        P.FillCircle(B.X + 15.0f, B.Y + 8.0f, 2.2f, 0x77717A90);
-        P.FillCircle(B.X + 25.0f, B.Y + 8.0f, 2.2f, 0x77717A90);
+        P.FillCircle(B.X + 5.0f, B.Y + 8.0f, 2.2f, Theme::Accent);
+        P.FillCircle(B.X + 15.0f, B.Y + 8.0f, 2.2f, Theme::TextTertiary);
+        P.FillCircle(B.X + 25.0f, B.Y + 8.0f, 2.2f, Theme::TextTertiary);
     }
 };
 
@@ -265,7 +273,7 @@ public:
         Weekday[3] = 0;
         HzFormat(Text, sizeof(Text), "%02u:%02u   %s, %u %s", T.Hour, T.Minute, Weekday,
                  T.Day, hz::fs::MonthNames[(T.Month - 1) % 12]);
-        P.TextLine(GetFont(FontRole::Caption), Bounds(), Text, 0xFFE4E8F0, Align::Center);
+        P.TextLine(GetFont(FontRole::Caption), Bounds(), Text, Theme::TextPrimary, Align::Center);
     }
 };
 
@@ -289,7 +297,18 @@ Taskbar::Taskbar(int32_t ScreenWidth)
     Tray->HorizontalAlignment = Align::End;
     Tray->Add<TaskButton>(TaskKind::Quick, (HWND)0, "");
     Clock_ = Tray->Add<ClockView>();
+    Tray_ = Tray;
     SetContent(Root);
+}
+
+void Taskbar::ApplyTheme()
+{
+    if (!Tray_)
+        return;
+    Tray_->Background = Theme::Glass;
+    Tray_->BorderColor = Theme::CardStroke;
+    Tray_->Invalidate();
+    InvalidateRect(ClientRect());
 }
 
 TopDock::TopDock(int32_t ScreenWidth)
@@ -305,6 +324,7 @@ TopDock::TopDock(int32_t ScreenWidth)
 
     DockStatus *Status = Root->Add<DockStatus>();
     Status->VerticalAlignment = Align::Center;
+    Status_ = Status;
 
     StackPanel *Brand = Root->Add<StackPanel>(Orientation::Horizontal, 6);
     Brand->GridColumn = 1;
@@ -312,19 +332,37 @@ TopDock::TopDock(int32_t ScreenWidth)
     Brand->Add<DockPages>();
     TextBlock *Name = Brand->Add<TextBlock>("Nexora OS", FontRole::BodyStrong);
     Name->VerticalAlignment = Align::Center;
-    Name->Foreground = 0xFFF3F4F7;
+    Name->Foreground = Theme::TextPrimary;
+    Name_ = Name;
 
     StackPanel *Tray = Root->Add<StackPanel>(Orientation::Horizontal, 5);
     Tray->GridColumn = 2;
     Tray->HorizontalAlignment = Align::End;
     Tray->VerticalAlignment = Align::Center;
     Tray->Padding = Thickness(7, 0);
-    Tray->Background = 0x523D424F;
-    Tray->BorderColor = 0x32FFFFFF;
+    Tray->Background = Theme::Glass;
+    Tray->BorderColor = Theme::CardStroke;
     Tray->CornerRadius = 16;
     Clock_ = Tray->Add<DockClock>();
     Tray->Add<TaskButton>(TaskKind::Quick, (HWND)0, "", "", true);
+    Tray_ = Tray;
     SetContent(Root);
+}
+
+void TopDock::ApplyTheme()
+{
+    if (Status_)
+        static_cast<DockStatus *>(Status_)->ApplyTheme();
+    if (Tray_) {
+        Tray_->Background = Theme::Glass;
+        Tray_->BorderColor = Theme::CardStroke;
+        Tray_->Invalidate();
+    }
+    if (Name_) {
+        Name_->Foreground = Theme::TextPrimary;
+        Name_->Invalidate();
+    }
+    InvalidateRect(ClientRect());
 }
 
 void TopDock::OnPaint(Painter &P)

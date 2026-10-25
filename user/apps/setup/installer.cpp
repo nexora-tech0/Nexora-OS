@@ -313,6 +313,7 @@ hz::String BootConfiguration(const Guid &SystemGuid)
         "interface_help_hidden: yes\n"
         "term_background: 0010122A\n"
         "term_foreground: E8EAF6\n"
+        "default_entry: /Nexora OS\n"
         "\n"
         "/Nexora OS\n"
         "    comment: Start Nexora OS from this disk.\n"

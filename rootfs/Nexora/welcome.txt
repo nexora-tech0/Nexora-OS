@@ -1,3 +1,0 @@
-Welcome to Nexora OS.
-
-This folder is the system root of the live session. On an installed system it becomes C:\Nexora.

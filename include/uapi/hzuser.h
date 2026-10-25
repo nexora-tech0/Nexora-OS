@@ -54,7 +54,10 @@ typedef struct _HZ_POINT {
 #define HZ_WS_TRANSPARENT 0x0200u /* per-pixel alpha over the windows below; no frame or shadow */
 #define HZ_WS_NOFRAME 0x0400u     /* square corners, no border, no shadow (taskbars, overlays) */
 #define HZ_WS_OWNED 0x0800u       /* a dialog of another window: not an app window (no taskbar button) */
-#define HZ_WS_VALID 0x0FFFu
+/* The desktop: it stays below every other window, and a click activates it without raising it, so
+   it can take the keyboard (F2, Delete, Ctrl+C/X/V) while the icons stay behind the windows. */
+#define HZ_WS_DESKTOP 0x1000u
+#define HZ_WS_VALID 0x1FFFu
 
 /* Window state (HZ_WINDOW_INFO.State) */
 #define HZ_WINDOW_STATE_VISIBLE 0x1u

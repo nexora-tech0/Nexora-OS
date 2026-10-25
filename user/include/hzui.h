@@ -84,39 +84,57 @@ constexpr uint32_t ScrollMs = 180;
 constexpr uint32_t FocusExpandMs = 150;
 constexpr uint32_t FocusCollapseMs = 250;
 constexpr uint32_t LockScreenExitMs = 260;
+constexpr uint32_t FlyoutRevealMs = 220; /* a flyout sliding its content into place on open */
 }  // namespace Motion
 
-/* ---- Theme (dark) ------------------------------------------------------------------------------- */
+/* ---- Theme -------------------------------------------------------------------------------------- */
 
+/* The palette is a set of plain variables, not constants, so a running program can switch between
+   the dark and the light scheme with Theme::ApplyScheme(). Every surface reads them as it paints,
+   so a window created after the switch is drawn in the new scheme; a window created before it keeps
+   the fills it captured at construction until it is recreated (its controls follow at once). */
 namespace Theme {
-constexpr Color TextPrimary = 0xFFFFFFFF;
-constexpr Color TextSecondary = 0xC8FFFFFF;
-constexpr Color TextTertiary = 0x8BFFFFFF;
-constexpr Color TextDisabled = 0x5DFFFFFF;
-constexpr Color TextOnAccent = 0xFF24150D;
-constexpr Color Accent = 0xFFFF9F5A; /* the sun on the horizon */
-constexpr Color AccentHover = 0xFFFFB37C;
-constexpr Color AccentPressed = 0xFFE58A48;
-constexpr Color AccentDisabled = 0x28FFFFFF;
-constexpr Color AccentSelection = 0x99FF9F5A;
-constexpr Color ControlFill = 0x0FFFFFFF;
-constexpr Color ControlFillHover = 0x17FFFFFF;
-constexpr Color ControlFillPressed = 0x08FFFFFF;
-constexpr Color ControlFillDisabled = 0x0BFFFFFF;
-constexpr Color ControlStroke = 0x14FFFFFF;
-constexpr Color ControlStrongStroke = 0x8BFFFFFF;
-constexpr Color ControlStrongStrokeDisabled = 0x28FFFFFF;
-constexpr Color SubtleFillHover = 0x0FFFFFFF;
-constexpr Color SubtleFillPressed = 0x0AFFFFFF;
-constexpr Color InputActive = 0xC01C1C24;
-constexpr Color CardBackground = 0x0DFFFFFF;
-constexpr Color CardStroke = 0x12FFFFFF;
-constexpr Color Divider = 0x15FFFFFF;
-constexpr Color SolidBackground = 0xFF202020;
-constexpr Color PopupBackground = 0xFF2B2A30;
-constexpr Color FocusStroke = 0xFFFFFFFF;
-constexpr Color FocusStrokeInner = 0xB3000000;
-constexpr Color KnobFill = 0xFFFFFFFF;
+enum class Scheme : uint8_t { Dark, Light };
+
+void ApplyScheme(Scheme S);       /* switches the palette; repaint afterwards */
+Scheme Current();
+
+/* The values below mirror the dark palette in painter.cpp; ApplyScheme() overwrites them. They are
+   inline so the one definition is shared by every translation unit that includes this header. */
+inline Color TextPrimary = 0xFFFFFFFF;
+inline Color TextSecondary = 0xC8FFFFFF;
+inline Color TextTertiary = 0x8BFFFFFF;
+inline Color TextDisabled = 0x5DFFFFFF;
+inline Color TextOnAccent = 0xFF24150D;
+inline Color Accent = 0xFFFF9F5A; /* the sun on the horizon */
+inline Color AccentHover = 0xFFFFB37C;
+inline Color AccentPressed = 0xFFE58A48;
+inline Color AccentDisabled = 0x28FFFFFF;
+inline Color AccentSelection = 0x99FF9F5A;
+inline Color ControlFill = 0x0FFFFFFF;
+inline Color ControlFillHover = 0x17FFFFFF;
+inline Color ControlFillPressed = 0x08FFFFFF;
+inline Color ControlFillDisabled = 0x0BFFFFFF;
+inline Color ControlStroke = 0x14FFFFFF;
+inline Color ControlStrongStroke = 0x8BFFFFFF;
+inline Color ControlStrongStrokeDisabled = 0x28FFFFFF;
+inline Color SubtleFillHover = 0x0FFFFFFF;
+inline Color SubtleFillPressed = 0x0AFFFFFF;
+inline Color InputActive = 0xC01C1C24;
+inline Color CardBackground = 0x0DFFFFFF;
+inline Color CardStroke = 0x12FFFFFF;
+inline Color Divider = 0x15FFFFFF;
+inline Color SolidBackground = 0xFF202020;
+inline Color PopupBackground = 0xFF2B2A30;
+inline Color FocusStroke = 0xFFFFFFFF;
+inline Color FocusStrokeInner = 0xB3000000;
+inline Color KnobFill = 0xFFFFFFFF;
+/* The fixed surfaces the shell draws: the glass of the taskbar and tray, the cards of the flyouts
+   and the band along the bottom of a flyout. Opaque, so they carry the scheme themselves. */
+inline Color Glass = 0x523D424F;
+inline Color FlyoutBackground = 0xB02B2E37;
+inline Color HoverRow = 0x1CFFFFFF;
+inline Color FooterBand = 0x26000000;
 constexpr float ControlRadius = 4.0f;
 constexpr float OverlayRadius = 8.0f;
 constexpr int32_t ControlHeight = 32;
@@ -136,7 +154,9 @@ enum class Icon : uint8_t {
     None, Check, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Close, Add, Remove, Search, More,
     Info, Clock, Home, Settings, Star, Power, Volume, Sun, Moon, Leaf, Plane,
     Folder, Document, Calendar, Drive, Prompt, Calculator, Chart, ArrowUp, Pencil, Palette, Stopwatch,
-    Globe, Trash, Save, Open, Refresh, Cut, Copy, Paste, Person, Cube, Wifi, Accessibility, AppWindow, Nexora
+    Globe, Trash, Save, Open, Refresh, Cut, Copy, Paste, Person, Cube, Wifi, Accessibility, AppWindow, Nexora,
+    /* Drawn from the icon font only (no vector path): blank when the font file is absent. */
+    Archive, Image, Play, Bluetooth
 };
 
 /* Draws into a canvas in its coordinates, through a stack of clip rectangles. Shapes are
@@ -173,6 +193,9 @@ public:
     void FocusRing(const Rect &R, float Radius);
 
 private:
+    /* Draws Kind from the Material Icons font; false when there is no glyph or the font is missing,
+       so DrawIcon can fall back to its vector path. */
+    bool DrawIconGlyph(Icon Kind, const Rect &Box, Color C);
     void RoundRectCoverage(float X, float Y, float W, float H, float Radius, float Thickness, Color Top, Color Bottom);
 
     HZ_CANVAS Canvas_;

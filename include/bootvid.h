@@ -30,6 +30,13 @@ void VidFillVerticalGradient(int X, int Y, int Width, int Height, uint32_t Top, 
 /* Linear blend: Alpha 0 = Background, 255 = Foreground. */
 uint32_t VidBlend(uint32_t Background, uint32_t Foreground, uint32_t Alpha);
 
+/*
+ * Fills an antialiased disc. Centre and Radius are Q16.16 pixels, so callers can place a dot at a
+ * sub-pixel position and animate it without it jumping from pixel to pixel. Edge pixels blend from
+ * Background to Color; nothing is read back from the framebuffer.
+ */
+void VidFillDiscAA(int32_t CenterX, int32_t CenterY, int32_t Radius, uint32_t Color, uint32_t Background);
+
 /* Width in pixels of Text rendered with Font (includes kerning). */
 int VidMeasureText(const BOOT_FONT *Font, const char *Text);
 

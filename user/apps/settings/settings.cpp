@@ -205,7 +205,104 @@ public:
         V->GridColumn = 1;
         return V;
     }
+
+    /* A plain paragraph that wraps: the notes under a card's rows. */
+    TextBlock *Note(const char *Text)
+    {
+        TextBlock *T = Add<TextBlock>(Text, FontRole::Caption);
+        T->Foreground = Theme::TextSecondary;
+        T->Wrap = true;
+        return T;
+    }
 };
+
+/* The circular profile picture on the Accounts page: the chosen 24-bit .bmp, or the initial of
+   the account's name on a disc. The matte behind the picture matches the fill, so the disc is
+   seamless whatever the card's background is. */
+class ProfilePreview final : public Element {
+public:
+    ProfilePreview()
+    {
+        Width = kSize;
+        Height = kSize;
+        HorizontalAlignment = Align::Start;
+        HitTestVisible = false;
+    }
+    ~ProfilePreview() override { delete[] Pixels_; }
+
+    /* Points the preview at a picture path; "" shows the initial instead. Repaints when it changes. */
+    void SetPicture(const hz::String &Path, char Initial)
+    {
+        Initial_ = Initial ? Initial : 'G';
+        Path_ = Path;
+        delete[] Pixels_;
+        Pixels_ = nullptr;
+        if (!Path_.Empty()) {
+            uint32_t *Buffer = new uint32_t[(size_t)kSize * kSize];
+            if (HZ_SUCCESS(hz::wallpaper::MakeRoundPicture(Path_.CStr(), kSize, Matte(), Buffer)))
+                Pixels_ = Buffer;
+            else
+                delete[] Buffer;
+        }
+        Invalidate();
+    }
+
+    void Paint(Painter &P) override
+    {
+        const Rect &B = Bounds();
+        P.FillCircle(B.X + kSize / 2.0f, B.Y + kSize / 2.0f, kSize / 2.0f, Matte());
+        if (Pixels_) {
+            P.DrawBitmap(B, Pixels_, kSize, kSize);
+            return;
+        }
+        char Text[2] = {Initial_, 0};
+        if (Text[0] >= 'a' && Text[0] <= 'z')
+            Text[0] = (char)(Text[0] - 32);
+        P.TextLine(GetFont(FontRole::Title), B, Text, 0xFFFFFFFF, Align::Center);
+    }
+
+private:
+    static constexpr int32_t kSize = 88;
+    static uint32_t Matte()
+    {
+        return Theme::Current() == Theme::Scheme::Light ? 0xFFE4E4EC : 0xFF3B3B46;
+    }
+    hz::String Path_;
+    char Initial_ = 'G';
+    uint32_t *Pixels_ = nullptr;
+};
+
+/* A card row: a label on the left, a toggle switch on the right. */
+ToggleSwitch *AddToggle(InfoCard *Card, const char *Label, bool On, hz::Function<void(bool)> Changed)
+{
+    Grid *G = Card->Add<Grid>();
+    G->Columns.Push(GridLength::Stars(1));
+    G->Columns.Push(GridLength::AutoSize());
+    TextBlock *Name = G->Add<TextBlock>(Label, FontRole::Body);
+    Name->VerticalAlignment = Align::Center;
+    ToggleSwitch *Switch = G->Add<ToggleSwitch>("On", "Off");
+    Switch->GridColumn = 1;
+    Switch->SetOn(On, false);
+    Switch->OnToggled = hz::Move(Changed);
+    return Switch;
+}
+
+/* A card row: a label on the left, a drop-down on the right. */
+ComboBox *AddChoice(InfoCard *Card, const char *Label, const hz::Vector<hz::String> &Items, size_t Selected,
+                    hz::Function<void(size_t)> Changed)
+{
+    Grid *G = Card->Add<Grid>();
+    G->Columns.Push(GridLength::Stars(1));
+    G->Columns.Push(GridLength::Pixels(168));
+    TextBlock *Name = G->Add<TextBlock>(Label, FontRole::Body);
+    Name->VerticalAlignment = Align::Center;
+    ComboBox *Box = G->Add<ComboBox>();
+    Box->GridColumn = 1;
+    Box->Items = Items;
+    Box->SetSelectedIndex(Selected, false);
+    Box->OnSelectionChanged = hz::Move(Changed);
+    return Box;
+}
 
 struct Page {
     const char *Title;
@@ -226,6 +323,8 @@ private:
     void AddAccounts();
     void ApplyName();
     void ApplyPassword();
+    void ChoosePicture();
+    void ClearPicture();
     void ChangeOffset(int Minutes);
     void AddSystem();
     hz::Function<void()> AddStorage(StackPanel *Parent);
@@ -238,6 +337,9 @@ private:
     void AddDevices();
     void AddAccessibility();
     void AddRecovery();
+    void AddDesktop();
+    void AddDefaultApps();
+    void AddKeyboard();
     void Show(size_t Index);
     void OpenPage(const char *Title);
     void FilterNavigation(const hz::String &Query);
@@ -256,28 +358,53 @@ private:
     /* Accounts */
     TextBox *AccountName_ = nullptr, *OldPassword_ = nullptr, *NewPassword_ = nullptr, *Confirm_ = nullptr;
     TextBlock *NameNote_ = nullptr, *PasswordNote_ = nullptr, *PasswordState_ = nullptr;
+    ProfilePreview *Profile_ = nullptr;
+    TextBlock *PictureNote_ = nullptr;
+    Button *RemovePicture_ = nullptr;
     TextBlock *TimeNote_ = nullptr;
     Button *ChangePassword_ = nullptr;
 };
 
-/* shell.ini, and the shell told to read it again. */
+/* Tells the shell that a settings file changed, so it reads it again at once (the desktop layer,
+   the dock and the wallpaper all live in the shell process). */
+bool NotifyShell()
+{
+    HWND Shell = 0;
+    STATUS Status = NtUserGetShellWindow(&Shell);
+    if (HZ_SUCCESS(Status) && Shell)
+        Status = NtUserPostMessage(Shell, HZ_WM_SHELLREQUEST, HZ_SHELL_REQUEST_SETTINGS, 0);
+    else if (HZ_SUCCESS(Status))
+        Status = STATUS_NOT_FOUND;
+    if (!HZ_SUCCESS(Status)) {
+        HzPrint("settings: saved the settings but the shell notification failed (0x%08X)", (uint32_t)Status);
+        return false;
+    }
+    return true;
+}
+
+/* Writes one of the shell's INI files, then asks the shell to re-read it. */
 STATUS SaveShellSettings(const hz::fs::Settings &S, bool *ShellNotified = nullptr)
 {
     if (hz::fs::IsLiveSystem())
         return STATUS_MEDIA_WRITE_PROTECTED;
     STATUS Status = S.Save(hz::fs::SettingsPath("shell"));
     bool Notified = false;
-    if (HZ_SUCCESS(Status)) {
-        HWND Shell = 0;
-        STATUS NotifyStatus = NtUserGetShellWindow(&Shell);
-        if (HZ_SUCCESS(NotifyStatus) && Shell)
-            NotifyStatus = NtUserPostMessage(Shell, HZ_WM_SHELLREQUEST, HZ_SHELL_REQUEST_SETTINGS, 0);
-        else if (HZ_SUCCESS(NotifyStatus))
-            NotifyStatus = STATUS_NOT_FOUND;
-        Notified = HZ_SUCCESS(NotifyStatus);
-        if (!Notified)
-            HzPrint("settings: saved shell settings but notification failed (0x%08X)", (uint32_t)NotifyStatus);
-    }
+    if (HZ_SUCCESS(Status))
+        Notified = NotifyShell();
+    if (ShellNotified)
+        *ShellNotified = Notified;
+    return Status;
+}
+
+/* desktop.ini: the icon size and the sort order of the desktop, read by the shell's desktop. */
+STATUS SaveDesktopSettings(const hz::fs::Settings &S, bool *ShellNotified = nullptr)
+{
+    if (hz::fs::IsLiveSystem())
+        return STATUS_MEDIA_WRITE_PROTECTED;
+    STATUS Status = S.Save(hz::fs::SettingsPath("desktop"));
+    bool Notified = false;
+    if (HZ_SUCCESS(Status))
+        Notified = NotifyShell();
     if (ShellNotified)
         *ShellNotified = Notified;
     return Status;
@@ -304,9 +431,39 @@ StackPanel *SettingsApp::NewPage(const char *Title, const char *Subtitle)
 void SettingsApp::AddPersonalization()
 {
     StackPanel *P = NewPage("Personalization",
-                            "Choose separate desktop and lock-screen images. Theme and accent-color controls are not implemented.");
+                            "Choose the colour mode, and separate desktop and lock-screen images. Accent-colour "
+                            "controls are not implemented yet.");
     TextBlock *Status = P->Add<TextBlock>("", FontRole::Caption);
     Status->Wrap = true;
+    /* The colour scheme (shell.ini "Theme"). The shell switches at once; other programs take it up
+       when they are next opened, because each one paints the palette it was built with. */
+    InfoCard *Appearance = P->Add<InfoCard>("Colour mode");
+    hz::fs::Settings ShellSettings;
+    LoadShellSettings(ShellSettings);
+    hz::Vector<hz::String> Modes;
+    Modes.Push("Dark");
+    Modes.Push("Light");
+    AddChoice(Appearance, "Colour mode", Modes, ShellSettings.GetInt("Theme", 0) != 0 ? 1 : 0, [Status](size_t Index) {
+        hz::fs::Settings S;
+        LoadShellSettings(S);
+        S.SetInt("Theme", Index == 1 ? 1 : 0);
+        bool Notified = false;
+        STATUS Result = SaveShellSettings(S, &Notified);
+        if (!HZ_SUCCESS(Result)) {
+            Status->Foreground = Theme::Accent;
+            Status->SetText(Result == STATUS_MEDIA_WRITE_PROTECTED
+                                ? "The live system is read-only. Install Nexora OS to keep this choice."
+                                : hz::String::Format("Could not save the colour mode (0x%08X).", (uint32_t)Result).CStr());
+            return;
+        }
+        Status->Foreground = Notified ? Theme::TextSecondary : Theme::Accent;
+        Status->SetText(Notified ? "Colour mode saved. The desktop switches now; programs take it up when they "
+                                   "are opened again."
+                                 : "Saved, but the shell did not pick the change up.");
+        HzPrint("settings: colour mode set to %s", Index == 1 ? "light" : "dark");
+    });
+    Appearance->Note("Light and dark. First-boot setup asks for this too, and the desktop, the taskbar and the "
+                     "flyouts follow the choice. Programs opened before the switch keep the mode they started in.");
     StackPanel *Targets = P->Add<StackPanel>(Orientation::Horizontal, 8);
     Button *DesktopTarget = Targets->Add<Button>("Desktop", ButtonStyle::Accent);
     Button *LockTarget = Targets->Add<Button>("Lock screen", ButtonStyle::Standard);
@@ -378,6 +535,18 @@ void SettingsApp::AddAccounts()
     NameNote_->Foreground = Theme::TextTertiary;
     NameNote_->Wrap = true;
 
+    InfoCard *Pic = P->Add<InfoCard>("Profile picture");
+    Profile_ = Pic->Add<ProfilePreview>();
+    StackPanel *PicRow = Pic->Add<StackPanel>(Orientation::Horizontal, 8);
+    Button *ChoosePic = PicRow->Add<Button>("Choose picture...", ButtonStyle::Accent);
+    ChoosePic->OnClick = [this]() { ChoosePicture(); };
+    RemovePicture_ = PicRow->Add<Button>("Remove picture");
+    RemovePicture_->OnClick = [this]() { ClearPicture(); };
+    PictureNote_ = Pic->Note("A 24-bit .bmp up to 512x512 (PNG and JPEG are not decoded yet). It appears on the "
+                             "Start menu's account row.");
+    Profile_->SetPicture(HZ_SUCCESS(LoadStatus) ? InitialSettings.Get("ProfilePicture") : hz::String(),
+                         AccountName_->Text().Empty() ? 'G' : AccountName_->Text()[0]);
+
     InfoCard *Pw = P->Add<InfoCard>("Password");
     PasswordState_ = Pw->Row("Status");
     if (Live)
@@ -404,7 +573,8 @@ void SettingsApp::AddAccounts()
     PasswordNote_->Foreground = Theme::TextSecondary;
     PasswordNote_->Wrap = true;
     if (Live) {
-        Element *Disabled[6] = {AccountName_, SaveName, OldPassword_, NewPassword_, Confirm_, ChangePassword_};
+        Element *Disabled[8] = {AccountName_, SaveName,      OldPassword_, NewPassword_,
+                                Confirm_,    ChangePassword_, ChoosePic,    RemovePicture_};
         for (Element *E : Disabled)
             E->SetEnabled(false);
     }
@@ -497,6 +667,77 @@ void SettingsApp::ApplyName()
                                             : "Saved to disk; the shell did not refresh this session.")
                            : hz::String::Format("The name could not be saved: %s. The folder was restored.",
                                                 hz::fs::StatusText(Status)).CStr());
+    if (HZ_SUCCESS(Status))
+        Profile_->SetPicture(S.Get("ProfilePicture"), Name[0]);
+}
+
+void SettingsApp::ChoosePicture()
+{
+    hz::String Folder = hz::fs::DocumentsFolder();
+    ShowFileDialog(Main_, FileDialogMode::Open, Folder.CStr(), nullptr, [this](const hz::String &Path) {
+        if (Path.Empty())
+            return;
+        /* Check the file before remembering it: a picture that cannot be decoded must not be saved. */
+        uint32_t *Probe = new uint32_t[88 * 88];
+        STATUS Check = hz::wallpaper::MakeRoundPicture(Path.CStr(), 88, 0xFF3B3B46, Probe);
+        delete[] Probe;
+        if (!HZ_SUCCESS(Check)) {
+            PictureNote_->Foreground = Theme::Accent;
+            PictureNote_->SetText("That file could not be used: choose an uncompressed 24-bit .bmp up to 512x512.");
+            return;
+        }
+        hz::fs::Settings S;
+        STATUS LoadStatus = LoadShellSettings(S);
+        if (!HZ_SUCCESS(LoadStatus)) {
+            PictureNote_->Foreground = Theme::Accent;
+            PictureNote_->SetText(hz::String::Format("Account settings could not be loaded: %s.",
+                                                     hz::fs::StatusText(LoadStatus)).CStr());
+            return;
+        }
+        S.Set("ProfilePicture", Path.CStr());
+        bool Notified = false;
+        STATUS Status = SaveShellSettings(S, &Notified);
+        PictureNote_->Foreground = HZ_SUCCESS(Status) ? Theme::TextSecondary : Theme::Accent;
+        if (!HZ_SUCCESS(Status)) {
+            PictureNote_->SetText(hz::String::Format("The picture could not be saved: %s.",
+                                                     hz::fs::StatusText(Status)).CStr());
+            return;
+        }
+        char Initial = AccountName_->Text().Empty() ? 'G' : AccountName_->Text()[0];
+        Profile_->SetPicture(Path, Initial);
+        PictureNote_->SetText(Notified ? "Saved. The Start menu's account row shows the new picture."
+                                       : "Saved to disk; the shell did not refresh this session.");
+        HzPrint("settings: profile picture '%s'", Path.CStr());
+    });
+}
+
+void SettingsApp::ClearPicture()
+{
+    hz::fs::Settings S;
+    STATUS LoadStatus = LoadShellSettings(S);
+    if (!HZ_SUCCESS(LoadStatus)) {
+        PictureNote_->Foreground = Theme::Accent;
+        PictureNote_->SetText(hz::String::Format("Account settings could not be loaded: %s.",
+                                                 hz::fs::StatusText(LoadStatus)).CStr());
+        return;
+    }
+    if (S.Get("ProfilePicture").Empty()) {
+        PictureNote_->SetText("There is no picture to remove; the account shows its initial.");
+        return;
+    }
+    S.Set("ProfilePicture", "");
+    bool Notified = false;
+    STATUS Status = SaveShellSettings(S, &Notified);
+    PictureNote_->Foreground = HZ_SUCCESS(Status) ? Theme::TextSecondary : Theme::Accent;
+    if (!HZ_SUCCESS(Status)) {
+        PictureNote_->SetText(hz::String::Format("The picture could not be removed: %s.",
+                                                 hz::fs::StatusText(Status)).CStr());
+        return;
+    }
+    char Initial = AccountName_->Text().Empty() ? 'G' : AccountName_->Text()[0];
+    Profile_->SetPicture("", Initial);
+    PictureNote_->SetText(Notified ? "Removed. The account shows its initial again."
+                                   : "Removed on disk; the shell did not refresh this session.");
 }
 
 void SettingsApp::ApplyPassword()
@@ -890,6 +1131,7 @@ void SettingsApp::AddHome()
     Shortcuts->Rows.Push(GridLength::AutoSize());
     Shortcuts->Rows.Push(GridLength::AutoSize());
     Shortcuts->Rows.Push(GridLength::AutoSize());
+    Shortcuts->Rows.Push(GridLength::AutoSize());
     Shortcuts->ColumnSpacing = 8;
     Shortcuts->RowSpacing = 8;
     struct ShortcutInfo {
@@ -899,10 +1141,12 @@ void SettingsApp::AddHome()
     const ShortcutInfo Targets[] = {
         {"System", "Display, mounted volumes, and basic system status."},
         {"Personalization", "Choose independent desktop and lock-screen wallpapers."},
+        {"Desktop & Dock", "Show or hide the desktop icons and the top dock, and arrange the icons."},
         {"Network & Internet", "Inspect adapter link and assigned IPv4 details."},
         {"Apps", "Browse and open installed Nexora applications."},
+        {"Default apps", "See which program opens which kind of file."},
         {"Accounts", "Manage the current account and sign-in password."},
-        {"About Nexora OS", "Review the OS version and live hardware information."},
+        {"Keyboard", "The key combinations the shell and its file windows understand."},
     };
     for (size_t Index = 0; Index < sizeof(Targets) / sizeof(Targets[0]); Index++) {
         InfoCard *Shortcut = Shortcuts->Add<InfoCard>(Targets[Index].Title);
@@ -963,7 +1207,8 @@ void SettingsApp::AddApps()
     StackPanel *P = NewPage("Apps", "Installed Nexora applications and their launch status.");
     InfoCard *Availability = P->Add<InfoCard>("App management");
     TextBlock *Note = Availability->Add<TextBlock>(
-        "Installed apps can be opened here. Default-app assignments and startup-app management are not implemented.",
+        "Installed apps can be opened here; Default apps lists the file types each one opens. "
+        "Startup-app management is not implemented.",
         FontRole::Body);
     Note->Wrap = true;
 
@@ -1044,6 +1289,193 @@ void SettingsApp::AddRecovery()
     Restore->Row("Recovery image")->SetText("No recovery partition or restore image is configured.");
     Restore->Row("Restart and shut down")->SetText("Use Start > Power.");
     List_.Push(Page{"Updates & Recovery", Icon::Info, Recovery, "updates recovery restore reset maintenance", {}});
+}
+
+/* ---- Desktop & Dock -------------------------------------------------------------------------- */
+
+void SettingsApp::AddDesktop()
+{
+    StackPanel *P = NewPage("Desktop & Dock",
+                            "The icon layer over the wallpaper, how it arranges its icons, and the top dock.");
+    TextBlock *Status = P->Add<TextBlock>("", FontRole::Caption);
+    Status->Wrap = true;
+    Status->Foreground = Theme::TextSecondary;
+
+    hz::fs::Settings Shell, Prefs;
+    STATUS ShellStatus = LoadShellSettings(Shell);
+    STATUS PrefsStatus = Prefs.Load(hz::fs::SettingsPath("desktop"));
+    if (!HZ_SUCCESS(ShellStatus) && ShellStatus != STATUS_NOT_FOUND)
+        HzPrint("settings: desktop page cannot read shell.ini (0x%08X)", (uint32_t)ShellStatus);
+    if (!HZ_SUCCESS(PrefsStatus) && PrefsStatus != STATUS_NOT_FOUND)
+        HzPrint("settings: desktop page cannot read desktop.ini (0x%08X)", (uint32_t)PrefsStatus);
+
+    /* Both files live in the shell's world: save, then let the shell re-read them. */
+    auto Save = [Status](hz::fs::Settings S, bool Desktop) {
+        bool Notified = false;
+        STATUS Result = Desktop ? SaveDesktopSettings(S, &Notified) : SaveShellSettings(S, &Notified);
+        if (!HZ_SUCCESS(Result)) {
+            Status->Foreground = Theme::Accent;
+            Status->SetText(Result == STATUS_MEDIA_WRITE_PROTECTED
+                                ? "The live system is read-only. Install Nexora OS to keep this choice."
+                                : hz::String::Format("Could not save the setting (0x%08X).", (uint32_t)Result).CStr());
+            return;
+        }
+        Status->Foreground = Notified ? Theme::TextSecondary : Theme::Accent;
+        Status->SetText(Notified ? "Saved." : "Saved, but the shell did not pick the change up.");
+        HzPrint("settings: desktop setting saved (%s)", Desktop ? "desktop.ini" : "shell.ini");
+    };
+
+    InfoCard *IconsCard = P->Add<InfoCard>("Desktop icons");
+    AddToggle(IconsCard, "Show desktop icons", Shell.GetInt("DesktopIcons", 1) != 0, [Save](bool On) {
+        hz::fs::Settings S;
+        LoadShellSettings(S);
+        S.SetInt("DesktopIcons", On ? 1 : 0);
+        Save(hz::Move(S), false);
+    });
+    IconsCard->Note("The shortcut icons on the wallpaper: every pinned app, then Trash. They stay under "
+                    "every window and take the keyboard when you click them.");
+
+    InfoCard *Layout = P->Add<InfoCard>("Icon layout");
+    hz::Vector<hz::String> Sizes;
+    Sizes.Push("Small");
+    Sizes.Push("Medium");
+    Sizes.Push("Large");
+    int Size = Prefs.GetInt("IconSize", 48);
+    AddChoice(Layout, "Icon size", Sizes, Size <= 36 ? 0 : Size >= 56 ? 2 : 1, [Save](size_t Index) {
+        static const int kSizes[] = {36, 48, 56};
+        hz::fs::Settings S;
+        S.Load(hz::fs::SettingsPath("desktop"));
+        S.SetInt("IconSize", kSizes[Index < 3 ? Index : 1]);
+        Save(hz::Move(S), true);
+    });
+    hz::Vector<hz::String> Keys;
+    Keys.Push("Name");
+    Keys.Push("Type");
+    Keys.Push("Size");
+    Keys.Push("Date modified");
+    int Sort = Prefs.GetInt("Sort", 0);
+    if (Sort < 0 || Sort > 3)
+        Sort = 0;
+    AddChoice(Layout, "Sort by", Keys, (size_t)Sort, [Save](size_t Index) {
+        hz::fs::Settings S;
+        S.Load(hz::fs::SettingsPath("desktop"));
+        S.SetInt("Sort", (int)Index);
+        Save(hz::Move(S), true);
+    });
+    AddToggle(Layout, "Descending order", Prefs.GetInt("Descending", 0) != 0, [Save](bool On) {
+        hz::fs::Settings S;
+        S.Load(hz::fs::SettingsPath("desktop"));
+        S.SetInt("Descending", On ? 1 : 0);
+        Save(hz::Move(S), true);
+    });
+    Layout->Note("The shortcuts always come first; below them the items of your Desktop folder are "
+                 "listed with the folders before the files.");
+
+    InfoCard *Dock = P->Add<InfoCard>("Top dock");
+    AddToggle(Dock, "Show the top dock", Shell.GetInt("TopDock", 0) != 0, [Save](bool On) {
+        hz::fs::Settings S;
+        LoadShellSettings(S);
+        S.SetInt("TopDock", On ? 1 : 0);
+        Save(hz::Move(S), false);
+    });
+    Dock->Note("A strip across the top of the screen with the pinned applications, next to the "
+               "taskbar at the bottom. Hidden by default.");
+
+    List_.Push(Page{"Desktop & Dock", Icon::AppWindow, P,
+                    "desktop icons dock top show hide icon size sort order arrange descending shortcuts",
+                    [Status]() { Status->SetText(""); }});
+}
+
+/* ---- Default apps ---------------------------------------------------------------------------- */
+
+void SettingsApp::AddDefaultApps()
+{
+    StackPanel *P = NewPage("Default apps",
+                            "Which installed application opens which kind of file. The assignments are read "
+                            "from the app manifests in C:\\Nexora\\Apps.");
+    hz::Vector<hz::apps::App> Apps = hz::apps::Load();
+    InfoCard *Card = P->Add<InfoCard>("Opens by default");
+    hz::Vector<hz::String> Extensions;
+    for (const hz::apps::App &Program : Apps)
+        for (const hz::String &Extension : Program.Opens)
+            if (!Extension.Empty() && !Extensions.Contains(Extension))
+                Extensions.Push(Extension);
+    for (size_t i = 1; i < Extensions.Size(); i++) { /* insertion sort: a readable table of file kinds */
+        hz::String Value = hz::Move(Extensions[i]);
+        size_t j = i;
+        while (j > 0 && strcmp(Extensions[j - 1].CStr(), Value.CStr()) > 0) {
+            Extensions[j] = hz::Move(Extensions[j - 1]);
+            j--;
+        }
+        Extensions[j] = hz::Move(Value);
+    }
+    for (const hz::String &Extension : Extensions) {
+        const hz::apps::App *Owner = hz::apps::FindForExtension(Apps, Extension);
+        Card->Row(hz::String::Format(".%s", Extension.CStr()).CStr())
+            ->SetText(Owner ? Owner->Name.CStr() : "No application");
+    }
+    if (Extensions.Empty())
+        Card->Note("No installed application declares the file types it opens.");
+    Card->Note("A file with no assignment opens in Notepad when its text can be read, and a program "
+               "listed in its own manifest takes the file. Changing an assignment is not implemented yet.");
+
+    InfoCard *Apps_ = P->Add<InfoCard>("Installed applications");
+    for (const hz::apps::App &Program : Apps) {
+        TextBlock *Assigned = Apps_->Row(Program.Name.CStr());
+        if (Program.Opens.Empty()) {
+            Assigned->SetText("Runs its own files");
+            continue;
+        }
+        hz::String List;
+        for (size_t i = 0; i < Program.Opens.Size(); i++) {
+            if (i)
+                List.Append(", ");
+            List.Append('.');
+            List.Append(Program.Opens[i]);
+        }
+        Assigned->SetText(List.CStr());
+    }
+    List_.Push(Page{"Default apps", Icon::AppWindow, P, "default apps file types extensions associations opens", {}});
+}
+
+/* ---- Keyboard -------------------------------------------------------------------------------- */
+
+void SettingsApp::AddKeyboard()
+{
+    StackPanel *P = NewPage("Keyboard", "The keys this build's shell and its file windows understand.");
+    InfoCard *System = P->Add<InfoCard>("Everywhere");
+    System->Row("Start menu")->SetText("The logo (Windows) key opens and closes Start.");
+    System->Row("Switch windows")->SetText("Alt+Tab, Alt+Shift+Tab for the other direction, Escape to cancel, "
+                                           "Alt+F4 to close the active window.");
+    System->Row("Move focus")->SetText("Tab and Shift+Tab move through the controls; the focus ring appears "
+                                       "after keyboard navigation.");
+    System->Row("Menus")->SetText("Shift+F10 opens the context menu of the focused item; the arrow keys and "
+                                  "Escape work inside it.");
+
+    InfoCard *Files = P->Add<InfoCard>("Files");
+    Files->Row("Open")->SetText("Enter, or a double click.");
+    Files->Row("Up / back / forward")->SetText("Backspace or Alt+Up; Alt+Left and Alt+Right.");
+    Files->Row("Rename")->SetText("F2.");
+    Files->Row("Delete")->SetText("Delete asks for confirmation and removes the item for good.");
+    Files->Row("Copy / Cut / Paste")->SetText("Ctrl+C, Ctrl+X, Ctrl+V.");
+    Files->Row("New folder")->SetText("Ctrl+Shift+N.");
+    Files->Row("Address bar / search")->SetText("Ctrl+L; Ctrl+F or Ctrl+E.");
+    Files->Row("Refresh")->SetText("F5.");
+
+    InfoCard *Desktop = P->Add<InfoCard>("Desktop icons");
+    Desktop->Row("Open")->SetText("Enter, or a double click.");
+    Desktop->Row("Rename")->SetText("F2.");
+    Desktop->Row("Delete to Trash")->SetText("Delete moves the item to the Trash folder instead of "
+                                             "removing it for good.");
+    Desktop->Row("Copy / Cut / Paste")->SetText("Ctrl+C, Ctrl+X, Ctrl+V.");
+    Desktop->Row("Context menu")->SetText("Shift+F10 on the selected icon, or the right mouse button.");
+    Desktop->Row("Move the selection")->SetText("The arrow keys; Escape clears it.");
+    Desktop->Row("Refresh")->SetText("F5.");
+
+    InfoCard *Layout = P->Add<InfoCard>("Layout");
+    Layout->Row("Keyboard layout")->SetText("The built-in US layout is fixed in this build; no layout "
+                                            "switching or IME.");
+    List_.Push(Page{"Keyboard", Icon::Prompt, P, "keyboard keys shortcuts hotkeys layout input tab focus", {}});
 }
 
 void SettingsApp::OpenPage(const char *Title)
@@ -1129,13 +1561,16 @@ bool SettingsApp::Create(const char *Initial)
     AddHome();
     AddSystem();
     AddPersonalization();
+    AddDesktop();
     AddNetwork();
     AddDevices();
     AddApps();
+    AddDefaultApps();
     AddAccounts();
     AddPrivacySecurity();
     AddAccessibility();
     AddTime();
+    AddKeyboard();
     AddRecovery();
     AddAbout();
 

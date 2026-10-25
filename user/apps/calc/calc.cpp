@@ -11,7 +11,8 @@ using namespace hzui;
 
 namespace {
 
-/* The two text lines at the top; the number shrinks to fit. */
+/* The two text lines at the top over a calm screen card; the number shrinks to fit and eases in
+   whenever the engine produces a new value. */
 class CalcDisplay final : public Element {
 public:
     explicit CalcDisplay(calc::Engine *E) : Engine_(E)
@@ -19,42 +20,102 @@ public:
         Large_ = HzLoadFont("C:\\Nexora\\Fonts\\Inter-SemiBold.ttf", 46);
         Medium_ = HzLoadFont("C:\\Nexora\\Fonts\\Inter-SemiBold.ttf", 30);
         Height = 112;
+        Settle_.Jump(1.0f);
+        Shown_ = Engine_->Display();
+        ShownExpression_ = Engine_->Expression();
+    }
+
+    /* Called after a key the engine accepted: a new number or expression eases into place. */
+    void ValueChanged()
+    {
+        if (Engine_->Display() == Shown_ && Engine_->Expression() == ShownExpression_) {
+            Invalidate();
+            return;
+        }
+        Shown_ = Engine_->Display();
+        ShownExpression_ = Engine_->Expression();
+        Settle_.Jump(0.0f);
+        if (GetWindow()) {
+            Settle_.To(1.0f, Motion::ControlStateMs);
+            StartAnimation();
+        } else {
+            Settle_.Jump(1.0f);
+        }
+        Invalidate();
+    }
+
+    void OnPointerEnter() override
+    {
+        Hover_.To(1, Motion::HoverEnterMs);
+        StartAnimation();
+    }
+
+    void OnPointerLeave() override
+    {
+        Hover_.To(0, Motion::HoverLeaveMs);
+        StartAnimation();
+    }
+
+    bool Animate() override
+    {
+        Invalidate();
+        return Hover_.Running() || Settle_.Running();
     }
 
     void Paint(Painter &P) override
     {
         const Rect &B = Bounds();
-        Rect Line{B.X + 12, B.Y + 6, B.Width - 24, 24};
-        P.TextLine(GetFont(FontRole::Body), Line, Engine_->Expression().CStr(), Theme::TextTertiary, Align::End);
+        float Hover = Hover_.Value(), Settle = Settle_.Value();
+        int32_t Rise = (int32_t)((1.0f - Settle) * 5.0f); /* a new number settles up into place */
+
+        /* The screen: a card that lifts a little under the pointer. */
+        P.FillRoundRect(B, 8, MixColors(Theme::CardBackground, Theme::ControlFillHover, Hover));
+        P.StrokeRoundRect(B, 8, 1, Theme::CardStroke);
+
+        P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 16, B.Y + 8, B.Width - 32, 20},
+                   Engine_->Expression().CStr(), Theme::TextTertiary, Align::End);
+        P.FillRect(Rect{B.X + 16, B.Y + 34, B.Width - 32, 1}, Theme::Divider);
+
         const hz::String &Text = Engine_->Display();
+        Color Number = ScaleAlpha(Engine_->HasError() ? Theme::TextSecondary : Theme::TextPrimary,
+                                  0.5f + 0.5f * Settle);
         HZ_FONT *F = Large_;
-        if (F && HzMeasureTextN(F, Text.CStr(), Text.Length()) > B.Width - 24)
+        if (F && HzMeasureTextN(F, Text.CStr(), Text.Length()) > B.Width - 32)
             F = Medium_;
         if (!F) {
-            P.TextLine(GetFont(FontRole::Title), Rect{B.X + 12, B.Y + 36, B.Width - 24, 60}, Text.CStr(), Theme::TextPrimary,
+            P.TextLine(GetFont(FontRole::Title), Rect{B.X + 16, B.Y + 36 + Rise, B.Width - 32, 60}, Text.CStr(), Number,
                        Align::End);
             return;
         }
         int32_t W = HzMeasureTextN(F, Text.CStr(), Text.Length());
-        int32_t X = B.Right() - 12 - W;
-        if (X < B.X + 12) { /* still too wide: show the end */
-            P.TextLine(F, Rect{B.X + 12, B.Y + 36, B.Width - 24, 64}, Text.CStr(), Theme::TextPrimary, Align::End);
+        int32_t X = B.Right() - 16 - W;
+        if (X < B.X + 16) { /* still too wide: show the end */
+            P.TextLine(F, Rect{B.X + 16, B.Y + 36 + Rise, B.Width - 32, 64}, Text.CStr(), Number, Align::End);
             return;
         }
-        P.Text(F, X, B.Y + 40 + HzFontAscent(F) - (F == Medium_ ? -8 : 0), Text.CStr(), Text.Length(),
-               Engine_->HasError() ? Theme::TextSecondary : Theme::TextPrimary);
+        P.Text(F, X, B.Y + 40 + Rise + HzFontAscent(F) - (F == Medium_ ? -8 : 0), Text.CStr(), Text.Length(), Number);
     }
 
 private:
     calc::Engine *Engine_;
     HZ_FONT *Large_, *Medium_;
+    hz::String Shown_, ShownExpression_;
+    Transition Hover_, Settle_;
 };
 
 class CalcRoot final : public Grid {
 public:
     hz::Function<bool(char)> OnInput;
+    Element *FocusTarget = nullptr; /* the screen: ringed while the keyboard focus feeds it */
 
     CalcRoot() { Focusable = true; }
+
+    /* Keys go to the root, so show the focus ring on the screen the keys write to. */
+    void PaintOverlay(Painter &P) override
+    {
+        if (ShowsFocusRing() && FocusTarget)
+            P.FocusRing(FocusTarget->Bounds(), 8);
+    }
 
     void OnKeyDown(KeyEvent &E) override
     {
@@ -96,7 +157,9 @@ public:
         Root_->Rows.Push(GridLength::AutoSize());
         Root_->Rows.Push(GridLength::Stars(1));
         Display_ = Root_->Add<CalcDisplay>(&Engine_);
+        Display_->Margin = Thickness(0, 0, 0, 4); /* room for the focus ring under the screen */
         Root_->OnInput = [this](char C) { return Input(C); };
+        Root_->FocusTarget = Display_;
 
         Grid *Pad = Root_->Add<Grid>();
         Pad->GridRow = 1;
@@ -130,6 +193,23 @@ public:
                 B->Glyph = Icon::ChevronLeft;
                 B->ToolTip = "Backspace";
             }
+            const char *Tip = nullptr;
+            switch (K.Code) {
+            case '%': Tip = "Percent"; break;
+            case 'E': Tip = "Clear entry"; break;
+            case 0x1B: Tip = "Clear"; break;
+            case 'r': Tip = "Reciprocal"; break;
+            case 'q': Tip = "Square"; break;
+            case '@': Tip = "Square root"; break;
+            case 'n': Tip = "Negate"; break;
+            case '/': Tip = "Divide"; break;
+            case '*': Tip = "Multiply"; break;
+            case '-': Tip = "Subtract"; break;
+            case '+': Tip = "Add"; break;
+            default: break;
+            }
+            if (Tip)
+                B->ToolTip = Tip;
             if (K.Kind == 1)
                 B->Background = 0x14FFFFFF;
             char Code = K.Code;
@@ -171,7 +251,7 @@ private:
         } else if (!Engine_.Key(C)) {
             return false;
         }
-        Display_->Invalidate();
+        Display_->ValueChanged();
         if (C == '=' || C == '\r')
             HzPrint("calc: %s %s", Engine_.Expression().CStr(), Engine_.Display().CStr());
         return true;

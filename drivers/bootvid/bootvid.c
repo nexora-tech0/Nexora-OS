@@ -133,6 +133,40 @@ void VidFillVerticalGradient(int X, int Y, int Width, int Height, uint32_t Top, 
     }
 }
 
+void VidFillDiscAA(int32_t CenterX, int32_t CenterY, int32_t Radius, uint32_t Color, uint32_t Background)
+{
+    if (!Vid.Ready || Radius <= 0)
+        return;
+    int32_t RadiusPixels = (Radius + 65535) >> 16;
+    int x0 = HZ_MAX((CenterX >> 16) - RadiusPixels - 1, Vid.ClipX0);
+    int x1 = HZ_MIN((CenterX >> 16) + RadiusPixels + 2, Vid.ClipX1);
+    int y0 = HZ_MAX((CenterY >> 16) - RadiusPixels - 1, Vid.ClipY0);
+    int y1 = HZ_MIN((CenterY >> 16) + RadiusPixels + 2, Vid.ClipY1);
+    if (x0 >= x1 || y0 >= y1)
+        return;
+    /*
+     * The fraction of a pixel that a disc covers is not needed exactly: for a pixel centre at
+     * distance d, (R^2 - d^2) / 2R is the disc area on the near side of a chord at d, which matches
+     * the covered area closely and, unlike a square root, stays in integers. Coverage is Q16.
+     */
+    int64_t RadiusSquared = (int64_t)Radius * (int64_t)Radius;
+    int64_t Diameter = 2 * (int64_t)Radius;
+    for (int y = y0; y < y1; y++) {
+        int64_t DeltaY = (((int64_t)y << 16) + 32768) - (int64_t)CenterY;
+        int64_t DeltaYSquared = DeltaY * DeltaY;
+        uint32_t *Row = VidRow(y);
+        for (int x = x0; x < x1; x++) {
+            int64_t DeltaX = (((int64_t)x << 16) + 32768) - (int64_t)CenterX;
+            int64_t Coverage = (RadiusSquared - (DeltaX * DeltaX + DeltaYSquared)) / Diameter;
+            if (Coverage <= 0)
+                continue;
+            uint32_t Alpha = Coverage >= 65536 ? 255 : (uint32_t)(Coverage >> 8);
+            if (Alpha)
+                Row[x] = VidEncode(VidBlend(Background, Color, Alpha));
+        }
+    }
+}
+
 /* ---- Text -------------------------------------------------------------------------------- */
 
 static int32_t VidKerning(const BOOT_FONT *Font, char Left, char Right)

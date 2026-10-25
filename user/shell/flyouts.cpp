@@ -123,8 +123,8 @@ public:
         const Rect &B = Bounds();
         if (IsPressed())
             P.FillRoundRect(B, Theme::ControlRadius, Theme::SubtleFillPressed);
-        else if (IsHovered())
-            P.FillRoundRect(B, Theme::ControlRadius, Theme::SubtleFillHover);
+        else if (Hover_.Value() > 0)
+            P.FillRoundRect(B, Theme::ControlRadius, ScaleAlpha(Theme::SubtleFillHover, Hover_.Value()));
         PaintAppIcon(P, Rect{B.X + 8, B.Y + 8, 32, 32}, &Program_, Program_.Name.CStr());
         P.TextLine(GetFont(FontRole::Body), Rect{B.X + 52, B.Y + 5, B.Width - 60, 20}, Program_.Name.CStr(), Theme::TextPrimary);
         P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 52, B.Y + 25, B.Width - 60, 18}, Program_.Description.CStr(),
@@ -137,8 +137,23 @@ public:
             P.FocusRing(Bounds(), Theme::ControlRadius);
     }
 
-    void OnPointerEnter() override { Invalidate(); }
-    void OnPointerLeave() override { Invalidate(); }
+    void OnPointerEnter() override
+    {
+        Hover_.To(1, Motion::HoverEnterMs);
+        StartAnimation();
+    }
+    void OnPointerLeave() override
+    {
+        Hover_.To(0, Motion::HoverLeaveMs);
+        StartAnimation();
+    }
+
+    bool Animate() override
+    {
+        Invalidate();
+        return Hover_.Running();
+    }
+
     void OnPointerDown(PointerEvent &E) override
     {
         if (E.Button == HZ_MOUSE_LEFT)
@@ -166,6 +181,7 @@ public:
 
 private:
     hz::apps::App Program_;
+    Transition Hover_;
 };
 
 /* Places the visible tiles row by row, best rank first (the manifest order within a rank).
@@ -201,6 +217,76 @@ int MatchRank(const hz::apps::App &A, const hz::String &Text)
     return -1;
 }
 
+/* Pinned and All apps are one section - the heading, the switch between the two views and the tile
+   grid - so the view lives in the tree and is freed with the window. The search box and the button
+   both reach it through this pointer, which is why the state is not a captured value. */
+class AppSection final : public Grid
+{
+public:
+    AppSection()
+    {
+        Rows.Push(GridLength::AutoSize());
+        Rows.Push(GridLength::AutoSize());
+
+        Grid *Header = Add<Grid>();
+        Header->Columns.Push(GridLength::Stars(1));
+        Header->Columns.Push(GridLength::AutoSize());
+        Heading_ = Header->Add<TextBlock>("Pinned", FontRole::BodyStrong);
+        Heading_->Margin = Thickness(8, 0, 0, 0); /* tiles sit at 24; the heading keeps Start's 32 */
+        Heading_->VerticalAlignment = Align::Center;
+        Button *Toggle = Header->Add<Button>("All apps", ButtonStyle::Subtle);
+        Toggle->GridColumn = 1;
+        Toggle->VerticalAlignment = Align::Center;
+        Toggle->ToolTip = "Show every installed program";
+        Toggle->OnClick = [this, Toggle]() {
+            ShowAll_ = !ShowAll_;
+            Toggle->SetText(ShowAll_ ? "Pinned" : "All apps");
+            Toggle->ToolTip = ShowAll_ ? "Show only the pinned programs" : "Show every installed program";
+            Apply();
+        };
+
+        Tiles_ = Add<Grid>();
+        Tiles_->GridRow = 1;
+        Tiles_->ColumnSpacing = 4;
+        Tiles_->RowSpacing = 4;
+        for (int i = 0; i < kTileColumns; i++)
+            Tiles_->Columns.Push(GridLength::Pixels(96));
+        for (size_t i = 0; i < (g_Shell.Apps.Size() + kTileColumns - 1) / kTileColumns; i++)
+            Tiles_->Rows.Push(GridLength::AutoSize());
+        for (const hz::apps::App &A : g_Shell.Apps)
+            All_.Push(Tiles_->Add<AppTile>(A));
+        Apply();
+    }
+
+    /* Narrows the section to what the search text matches; an empty text shows the current view. */
+    void Filter(const hz::String &Text)
+    {
+        Filter_ = Text;
+        Apply();
+    }
+
+    /* The best matching tile, or null; used by Return in the search box. */
+    AppTile *Best() { return FlowTiles(Tiles_, All_); }
+
+private:
+    void Apply()
+    {
+        for (AppTile *Tile : All_) {
+            Tile->Rank = Filter_.Empty() ? 0 : MatchRank(Tile->Target(), Filter_);
+            Tile->SetVisible(Filter_.Empty() ? (ShowAll_ || Tile->Target().Pinned) : Tile->Rank >= 0);
+        }
+        FlowTiles(Tiles_, All_);
+        /* Searching renames the section, exactly as Start did before this section owned the heading. */
+        Heading_->SetText(!Filter_.Empty() ? "Results" : (ShowAll_ ? "All apps" : "Pinned"));
+    }
+
+    Grid *Tiles_ = nullptr;
+    TextBlock *Heading_ = nullptr;
+    hz::Vector<AppTile *> All_;
+    hz::String Filter_;
+    bool ShowAll_ = false;
+};
+
 class Avatar final : public Element {
 public:
     Avatar()
@@ -210,18 +296,85 @@ public:
         VerticalAlignment = Align::Center;
         HitTestVisible = false;
     }
+    ~Avatar() override { delete[] Picture_; }
+
     void Paint(Painter &P) override
     {
         const Rect &B = Bounds();
-        P.FillCircle(B.X + 16.0f, B.Y + 16.0f, 16, 0xFF5B4BB7);
-        char Initial[2] = {g_Shell.DisplayName()[0], 0};
-        if (Initial[0] >= 'a' && Initial[0] <= 'z')
-            Initial[0] = (char)(Initial[0] - 32);
-        P.TextLine(GetFont(FontRole::BodyStrong), B, Initial, 0xFFFFFFFF, Align::Center);
+        if (PictureReady() && Picture_)
+            P.DrawBitmap(B, Picture_, kSize, kSize);
+        else {
+            P.FillCircle(B.X + 16.0f, B.Y + 16.0f, 16, kDisc);
+            char Initial[2] = {g_Shell.DisplayName()[0], 0};
+            if (Initial[0] >= 'a' && Initial[0] <= 'z')
+                Initial[0] = (char)(Initial[0] - 32);
+            P.TextLine(GetFont(FontRole::BodyStrong), B, Initial, 0xFFFFFFFF, Align::Center);
+        }
     }
+
+private:
+    static constexpr int32_t kSize = 32;
+    static constexpr Color kDisc = 0xFF5B4BB7; /* also the matte outside the picture's disc */
+
+    /* Decodes once per chosen path and remembers the result; a broken file falls back to initials. */
+    bool PictureReady()
+    {
+        if (Path_ == g_Shell.ProfilePicture)
+            return Picture_;
+        Path_ = g_Shell.ProfilePicture;
+        delete[] Picture_;
+        Picture_ = nullptr;
+        if (Path_.Empty())
+            return false;
+        uint32_t *Buffer = new uint32_t[(size_t)kSize * kSize];
+        if (HZ_SUCCESS(hz::wallpaper::MakeRoundPicture(Path_.CStr(), kSize, kDisc, Buffer)))
+            Picture_ = Buffer;
+        else
+            delete[] Buffer;
+        return Picture_;
+    }
+
+    hz::String Path_;
+    uint32_t *Picture_ = nullptr;
 };
 
 /* ---- Control Center ----------------------------------------------------------------------------- */
+
+/* How far the content travels while it slides into place. hzui has no opacity layer, so the motion
+   is the content's own position: it starts this much lower and moves up, with the window's clip
+   hiding the far edge until it arrives. */
+constexpr int32_t kRevealSlide = 16;
+
+class RevealHost final : public Element {
+public:
+    /* Starts the slide. The content must already be attached to its window. */
+    void Begin()
+    {
+        Reveal_.Jump(0);
+        Reveal_.To(1.0f, Motion::FlyoutRevealMs);
+        StartAnimation();
+    }
+
+    void ArrangeOverride(const Rect &Content) override { Slide(Content); }
+
+    bool Animate() override
+    {
+        if (ChildCount())
+            Slide(ContentBounds()); /* the slide continues between layout passes */
+        if (Window *W = GetWindow())
+            W->InvalidateRect(W->ClientRect());
+        return Reveal_.Running();
+    }
+
+private:
+    void Slide(const Rect &Content)
+    {
+        int32_t Offset = (int32_t)((1.0f - Reveal_.Value()) * kRevealSlide);
+        ChildAt(0)->Arrange(Rect{Content.X, Content.Y + Offset, Content.Width, Content.Height});
+    }
+
+    Transition Reveal_;
+};
 
 /* Compact fallback tints for the quick-settings wallpaper picker. */
 struct Swatch {
@@ -367,8 +520,8 @@ StackPanel *ControlCard(Element *Parent, const char *Title)
 {
     StackPanel *Card = Parent->Add<StackPanel>(Orientation::Vertical, 8);
     Card->Padding = Thickness(12);
-    Card->Background = 0xB02B2E37;
-    Card->BorderColor = 0x32FFFFFF;
+    Card->Background = Theme::FlyoutBackground;
+    Card->BorderColor = Theme::CardStroke;
     Card->CornerRadius = 16;
     Heading(Card, Title);
     return Card;
@@ -380,7 +533,9 @@ public:
     {
         Width = Height = 38;
         VerticalAlignment = Align::Center;
-        Background = Available ? 0xFF566BD0 : 0xFF454852;
+        /* An unavailable service keeps a muted tile: dim grey on dark, dim grey on light. */
+        Background = Available ? 0xFF566BD0
+                               : (Theme::Current() == Theme::Scheme::Light ? 0xFFD9DBE1 : 0xFF454852);
         CornerRadius = 19;
         HitTestVisible = false;
     }
@@ -402,7 +557,7 @@ StackPanel *ControlStatusRow(Element *Parent, Icon Glyph, const char *Title, con
 {
     StackPanel *Row = Parent->Add<StackPanel>(Orientation::Horizontal, 10);
     Row->Padding = Thickness(7, 5);
-    Row->Background = 0x1CFFFFFF;
+    Row->Background = Theme::HoverRow;
     Row->CornerRadius = 13;
     Row->Add<ControlGlyph>(Glyph, Available);
     StackPanel *Text = Row->Add<StackPanel>(Orientation::Vertical, 1);
@@ -411,6 +566,34 @@ StackPanel *ControlStatusRow(Element *Parent, Icon Glyph, const char *Title, con
     TextBlock *Description = Text->Add<TextBlock>(Detail, FontRole::Caption);
     Description->Foreground = Theme::TextSecondary;
     Description->Wrap = true;
+    return Row;
+}
+
+/* The same row, but the service really can be switched: the label is on the left and a switch sits
+   on the right, so the row's own state is what the switch shows. */
+Grid *ControlToggleRow(Element *Parent, Icon Glyph, const char *Title, const char *Detail, bool Value,
+                       hz::Function<void(bool)> OnChanged)
+{
+    Grid *Row = Parent->Add<Grid>();
+    Row->Padding = Thickness(7, 5);
+    Row->Background = Theme::HoverRow;
+    Row->CornerRadius = 13;
+    Row->Columns.Push(GridLength::Stars(1));
+    Row->Columns.Push(GridLength::AutoSize());
+    StackPanel *Text = Row->Add<StackPanel>(Orientation::Horizontal, 10);
+    Text->Add<ControlGlyph>(Glyph);
+    StackPanel *Labels = Text->Add<StackPanel>(Orientation::Vertical, 1);
+    Labels->VerticalAlignment = Align::Center;
+    Labels->Add<TextBlock>(Title, FontRole::BodyStrong);
+    TextBlock *Description = Labels->Add<TextBlock>(Detail, FontRole::Caption);
+    Description->Foreground = Theme::TextSecondary;
+    ToggleSwitch *Switch = new ToggleSwitch("", "");
+    Switch->SetOn(Value, false); /* set before it is attached: the first state does not animate in */
+    Switch->OnToggled = hz::Move(OnChanged);
+    Switch->VerticalAlignment = Align::Center;
+    Switch->HorizontalAlignment = Align::End;
+    Switch->GridColumn = 1;
+    Row->AddChild(Switch);
     return Row;
 }
 
@@ -525,38 +708,23 @@ void ChangeWallpaper(int Direction)
 
 Window *CreateStartMenu()
 {
-    const int32_t Width = 560, Height = 600;
+    const Rect &S = g_Shell.Screen;
+    const int32_t Width = HZ_MIN(560, HZ_MAX(1, S.Width - 24));
+    const int32_t Height = HZ_MIN(600, HZ_MAX(1, g_Shell.Work.Height));
     Flyout *Start = new Flyout("Start", Width, Height, &g_Shell.Start);
     Grid *Root = new Grid();
-    Root->Rows.Push(GridLength::AutoSize());
-    Root->Rows.Push(GridLength::AutoSize());
-    Root->Rows.Push(GridLength::AutoSize());
-    Root->Rows.Push(GridLength::Stars(1));
-    Root->Rows.Push(GridLength::Pixels(64));
+    Root->Rows.Push(GridLength::AutoSize()); /* the search box */
+    Root->Rows.Push(GridLength::AutoSize()); /* the app drawer */
+    Root->Rows.Push(GridLength::Stars(1));   /* recent */
+    Root->Rows.Push(GridLength::Pixels(64)); /* the user and power band */
 
     TextBox *Search = Root->Add<TextBox>("Search for programs");
     Search->Margin = Thickness(24, 24, 24, 0);
-    TextBlock *Pinned = Heading(Root, "Pinned");
-    Pinned->GridRow = 1;
-    Pinned->Margin = Thickness(32, 20, 24, 8);
-    Grid *Tiles = Root->Add<Grid>();
-    Tiles->GridRow = 2;
-    Tiles->Margin = Thickness(24, 0);
-    Tiles->ColumnSpacing = 4;
-    Tiles->RowSpacing = 4;
-    for (int i = 0; i < kTileColumns; i++)
-        Tiles->Columns.Push(GridLength::Pixels(96));
-    for (size_t i = 0; i < (g_Shell.Apps.Size() + kTileColumns - 1) / kTileColumns; i++)
-        Tiles->Rows.Push(GridLength::AutoSize());
-    hz::Vector<AppTile *> AllTiles;
-    for (const hz::apps::App &A : g_Shell.Apps) {
-        AppTile *Tile = Tiles->Add<AppTile>(A);
-        Tile->SetVisible(A.Pinned);
-        AllTiles.Push(Tile);
-    }
-    FlowTiles(Tiles, AllTiles);
+    AppSection *Apps = Root->Add<AppSection>();
+    Apps->GridRow = 1;
+    Apps->Margin = Thickness(24, 18, 24, 8);
     StackPanel *Recommended = Root->Add<StackPanel>(Orientation::Vertical, 2);
-    Recommended->GridRow = 3;
+    Recommended->GridRow = 2;
     Recommended->Margin = Thickness(32, 16, 32, 0);
     Heading(Recommended, "Recent")->Margin = Thickness(0, 0, 0, 6);
     size_t RecentCount = 0;
@@ -573,8 +741,8 @@ Window *CreateStartMenu()
     }
 
     Grid *Bottom = Root->Add<Grid>();
-    Bottom->GridRow = 4;
-    Bottom->Background = 0x26000000;
+    Bottom->GridRow = 3;
+    Bottom->Background = Theme::FooterBand;
     Bottom->Padding = Thickness(32, 0, 24, 0);
     Bottom->Columns.Push(GridLength::Stars(1));
     Bottom->Columns.Push(GridLength::AutoSize());
@@ -597,26 +765,22 @@ Window *CreateStartMenu()
         ShowMenu(Start, Point{O.X + Power->Bounds().X - 80, O.Y + Power->Bounds().Y - 3 * 32 - 16}, hz::Move(Items), 140);
     };
 
-    Search->OnTextChanged = [AllTiles, Tiles, Pinned](const hz::String &Text) {
-        for (AppTile *Tile : AllTiles) {
-            Tile->Rank = Text.Empty() ? 0 : MatchRank(Tile->Target(), Text);
-            Tile->SetVisible(Text.Empty() ? Tile->Target().Pinned : Tile->Rank >= 0);
-        }
-        Pinned->SetText(Text.Empty() ? "Pinned" : "Results");
-        FlowTiles(Tiles, AllTiles);
-    };
-    Search->OnSubmit = [AllTiles, Tiles](const hz::String &) {
-        if (AppTile *Best = FlowTiles(Tiles, AllTiles))
+    Search->OnTextChanged = [Apps](const hz::String &Text) { Apps->Filter(Text); };
+    Search->OnSubmit = [Apps](const hz::String &) {
+        if (AppTile *Best = Apps->Best())
             Best->Open();
     };
-    Start->SetContent(Root);
+    /* The tiles slide into place once the window - and so its clip - exists. */
+    RevealHost *Host = new RevealHost();
+    Host->AddChild(Root);
+    Start->SetContent(Host);
     Start->SetFocus(Search);
-    const Rect &S = g_Shell.Screen;
     if (!Start->ShowAt((S.Width - Width) / 2, g_Shell.Work.Bottom() - 12 - Height)) {
         g_Shell.Start = nullptr;
         delete Start;
         return nullptr;
     }
+    Host->Begin();
     return Start;
 }
 
@@ -624,7 +788,9 @@ Window *CreateQuickSettings()
 {
     const Rect &S = g_Shell.Screen;
     const int32_t Width = HZ_MIN(660, HZ_MAX(1, S.Width - 24));
-    const int32_t Height = HZ_MIN(530, HZ_MAX(1, g_Shell.Work.Height));
+    /* The Appearance card (three real switches) made the right column the taller one, so the flyout
+       is a little taller than the network/audio-only version was. */
+    const int32_t Height = HZ_MIN(640, HZ_MAX(1, g_Shell.Work.Height));
     Flyout *Quick = new Flyout("Control Center", Width, Height, &g_Shell.Quick);
     Grid *Root = new Grid();
     Root->Columns.Push(GridLength::Stars(1));
@@ -639,16 +805,28 @@ Window *CreateQuickSettings()
     Left->GridColumn = 0;
     StackPanel *Network = ControlCard(Left, "Network");
     ControlStatusRow(Network, Icon::Wifi, "Ethernet", NetworkStatus().CStr());
-    ControlStatusRow(Network, Icon::Globe, "Bluetooth", "Not available in this build", false);
+    /* Both of these really are missing: no 802.11/Bluetooth driver exists, and audio has no mixer.
+       The rows stay, but they say so rather than pretending to switch something. */
+    ControlStatusRow(Network, Icon::Bluetooth, "Bluetooth", "Not available in this build", false);
 
     StackPanel *Devices = ControlCard(Left, "Audio & display");
     ControlStatusRow(Devices, Icon::Volume, "Volume", "Audio controls are not implemented", false);
     ControlStatusRow(Devices, Icon::Sun, "Brightness", "Display brightness is not adjustable", false);
 
+    StackPanel *Focus = ControlCard(Left, "Focus");
+    ControlStatusRow(Focus, Icon::Moon, "Focus mode", "Not available in this build", false);
+
     StackPanel *Right = Root->Add<StackPanel>(Orientation::Vertical, 10);
     Right->GridColumn = 1;
-    StackPanel *Focus = ControlCard(Right, "Focus");
-    ControlStatusRow(Focus, Icon::Moon, "Focus mode", "Not available in this build", false);
+    /* These three switches really work: each one applies the change to the shell at once and saves
+       it to shell.ini, so it survives a restart. */
+    StackPanel *Appearance = ControlCard(Right, "Appearance");
+    ControlToggleRow(Appearance, Icon::Sun, "Light mode", "Applies to the whole shell", g_Shell.LightMode,
+                     [](bool On) { g_Shell.SetLightMode(On); });
+    ControlToggleRow(Appearance, Icon::AppWindow, "Top dock", "Show the dock along the top", g_Shell.ShowTopDock,
+                     [](bool On) { g_Shell.SetTopDock(On); });
+    ControlToggleRow(Appearance, Icon::Folder, "Desktop icons", "Show icons on the desktop", g_Shell.ShowDesktopIcons,
+                     [](bool On) { g_Shell.SetDesktopIcons(On); });
 
     StackPanel *Actions = ControlCard(Right, "Quick actions");
     StackPanel *ActionRow = Actions->Add<StackPanel>(Orientation::Horizontal, 4);
@@ -677,7 +855,11 @@ Window *CreateQuickSettings()
     TextBlock *Hint = Wallpaper->Add<TextBlock>("Choose a wallpaper to apply it to the desktop.", FontRole::Caption);
     Hint->Foreground = Theme::TextSecondary;
 
-    Quick->SetContent(Root);
+    /* The content slides into place once the window - and so its clip - exists, so the reveal is
+       started after ShowAt, not before. */
+    RevealHost *Host = new RevealHost();
+    Host->AddChild(Root);
+    Quick->SetContent(Host);
     int32_t X = HZ_MAX(0, S.Width - Width - 12);
     int32_t Y = HZ_MIN(kTopDockTop + kTopDockHeight + 8, S.Height - kTaskbarHeight - Height);
     if (!Quick->ShowAt(X, Y)) {
@@ -685,6 +867,7 @@ Window *CreateQuickSettings()
         delete Quick;
         return nullptr;
     }
+    Host->Begin();
     return Quick;
 }
 

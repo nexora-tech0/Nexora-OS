@@ -152,12 +152,19 @@ private:
     void Move(const CommandLine &C);
     void Stat(const CommandLine &C);
     void PathPart(const CommandLine &C, bool Parent);
+    void Tree(const CommandLine &C);
+    void FindFiles(const CommandLine &C);
+    void SortLines(const CommandLine &C);
+    void SetVariable(const CommandLine &C);
+    void ListEnvironment();
     void LinuxHelp();
     bool UnavailableLinuxCommand(const hz::String &Name);
 
     TerminalWindow *Main_ = nullptr;
     ConsoleView *View_ = nullptr;
     hz::String Cwd_;
+    /* Variables for '%NAME%' and $NAME expansion; USER, HOME and PATH are set at start-up. */
+    Environment Env_;
     /* Redirection of the current command */
     bool Capturing_ = false;
     hz::String Captured_;
@@ -192,6 +199,21 @@ int64_t TerminalWindow::HandleMessage(uint32_t Message, uint64_t WParam, uint64_
 bool Terminal::Create()
 {
     Cwd_ = hz::fs::DocumentsFolder(); /* the user's documents, else the first writable volume */
+    /* A small starting environment, so both conventions work from the first line: %USERNAME% and
+       $USER, %USERPROFILE% and $HOME, and a PATH that names the program folder. */
+    hz::String User = "Guest";
+    hz::fs::Settings Shell;
+    if (HZ_SUCCESS(Shell.Load(hz::fs::SettingsPath("shell")))) {
+        hz::String Saved = Shell.Get("UserName", "");
+        if (!Saved.Empty())
+            User = Saved;
+    }
+    Env_.Set("USERNAME", User);
+    Env_.Set("USER", User);
+    Env_.Set("HOME", Cwd_);
+    Env_.Set("USERPROFILE", Cwd_);
+    Env_.Set("OS", "Nexora OS");
+    Env_.Set("PATH", "C:\\Nexora\\System");
     Main_ = new TerminalWindow(this);
     Main_->SetMinimumSize(420, 240);
     Main_->Background = 0xF20C0C0E;
@@ -366,7 +388,9 @@ void Terminal::EndPaging()
 void Terminal::Run(const hz::String &Text)
 {
     HzLog("terminal: > %s", Text.CStr());
-    CommandLine C = Parse(Text.CStr());
+    /* %NAME% and $NAME are replaced before parsing, so one line can mix both conventions. */
+    hz::String Expanded = ExpandVariables(Text.CStr(), Env_);
+    CommandLine C = Parse(Expanded.CStr());
     if (!C.Valid) {
         Error(C.Error.CStr());
         FinishCommand();
@@ -495,7 +519,24 @@ void Terminal::Run(const hz::String &Text)
         }
     } else if (Name == "id") {
         Line("POSIX user and group IDs are not implemented; use whoami to display the Nexora account.");
-    } else if (Name == "which" || Name == "whereis") {
+    } else if (Name == "tree") {
+        Tree(C);
+    } else if (Name == "find") {
+        FindFiles(C);
+    } else if (Name == "sort") {
+        SortLines(C);
+    } else if (Name == "set" || Name == "export") {
+        SetVariable(C);
+    } else if (Name == "unset") {
+        if (C.Words.Size() < 2) {
+            Error("Use: unset NAME [NAME ...]");
+        } else {
+            for (size_t i = 1; i < C.Words.Size(); i++)
+                Env_.Unset(C.Words[i]);
+        }
+    } else if (Name == "env" || Name == "printenv") {
+        ListEnvironment();
+    } else if (Name == "which" || Name == "whereis" || Name == "where") {
         if (C.Words.Size() != 2) {
             Error("Use: which <program>");
         } else {
@@ -560,11 +601,14 @@ void Terminal::Help()
         "  date                 the date and time (UTC)",
         "  del <file|pattern>   delete files (* and ? patterns)",
         "  dir/ls [path]        list a folder (Linux ls alias)",
-        "  echo <text>          print text",
+        "  echo <text>          print text (variables are expanded first)",
+        "  env                  list the variables (same as 'set' with no argument)",
         "  exit                 close the terminal",
+        "  export NAME=value    set a variable (alias for set)",
+        "  find [path] <pattern>  search folders recursively for matching names",
         "  free                 physical memory use (alias for mem)",
-        "  grep [-i] <text> <file>  search text files for a literal string",
-        "  head/tail [-n N] <file>  show the first or last N lines",
+        "  grep [-i|-n] <text> <file>  search text files for a literal string",
+        "  head/tail [-n|-/n N] <file>  show the first or last N lines",
         "  help [linux]         this list or Linux command availability",
         "  history              commands typed so far (Up and Down recall them)",
         "  kill <pid or name>   end a process (by name: every one with that name)",
@@ -577,18 +621,25 @@ void Terminal::Help()
         "  ren <path> <name>    rename a file or folder",
         "  restart              restart (programs are asked to close first)",
         "  rmdir <path>         remove an empty folder",
+        "  set [NAME=value]     list the variables, set one, or clear one with 'set NAME='",
         "  sha256sum <file>     SHA-256 digest of a file",
         "  shutdown             shut down (programs are asked to close first)",
+        "  sort <file>          sort the lines of a file (or of 'command | sort')",
         "  start <program|file> start a program or open a file (no waiting; arguments follow)",
         "  stat <path>          show file or folder metadata",
         "  touch <file>         create an empty file if it does not exist",
+        "  tree [path]          folders and files under a path, indented",
         "  type <file>          print a text file",
         "  uname/whoami         Nexora OS and account information",
+        "  unset NAME           remove a variable",
         "  uptime               time since start-up",
         "  ver                  the Nexora OS version",
         "  vol/df               volumes and free space",
         "  wc <file>            count lines, words and bytes",
-        "  which <program>      locate an installed Nexora program",
+        "  where <program>      locate an installed Nexora program (alias for which)",
+        "Options take either style: '-i' as on Unix or '/i' as on Windows.",
+        "Variables are set with 'set NAME=value' (or 'export') and read as %NAME% or $NAME;",
+        "'\\$' and '\\%' give a literal character. A name that is not set is left as typed.",
         "Anything else runs as a program from the current folder or C:\\Nexora\\System;",
         "its output appears here. 'command > file' and '>> file' write the output to a file;",
         "'command | more' shows it a page at a time. Ctrl+C ends a running program.",
@@ -937,7 +988,7 @@ void Terminal::ShowHistory()
 void Terminal::HeadTail(const CommandLine &C, bool Tail)
 {
     size_t Count = 10, FileIndex = 1;
-    if (C.Words.Size() > 1 && C.Words[1] == "-n") {
+    if (C.Words.Size() > 1 && IsSwitch(C.Words[1], "n")) {
         if (C.Words.Size() < 4) {
             Error(Tail ? "Use: tail [-n count] <file>" : "Use: head [-n count] <file>");
             return;
@@ -1014,13 +1065,13 @@ void Terminal::Grep(const CommandLine &C)
 {
     bool IgnoreCase = false, ShowNumbers = false;
     size_t Index = 1;
-    while (Index < C.Words.Size() && C.Words[Index].Length() > 1 && C.Words[Index][0] == '-') {
-        hz::String Option = Lower(C.Words[Index]);
-        if (Option == "-i")
+    while (Index < C.Words.Size()) {
+        /* Both conventions are accepted: '-i' as on Unix, '/i' as on Windows. */
+        if (IsSwitch(C.Words[Index], "i"))
             IgnoreCase = true;
-        else if (Option == "-n")
+        else if (IsSwitch(C.Words[Index], "n"))
             ShowNumbers = true;
-        else if (Option == "-in" || Option == "-ni") {
+        else if (IsSwitch(C.Words[Index], "in") || IsSwitch(C.Words[Index], "ni")) {
             IgnoreCase = true;
             ShowNumbers = true;
         } else
@@ -1028,7 +1079,7 @@ void Terminal::Grep(const CommandLine &C)
         Index++;
     }
     if (C.Words.Size() < Index + 2) {
-        Error("Use: grep [-i] [-n] <text> <file>");
+        Error("Use: grep [-i|-n] <text> <file>");
         return;
     }
     const hz::String Pattern = C.Words[Index++];
@@ -1123,12 +1174,189 @@ void Terminal::PathPart(const CommandLine &C, bool Parent)
     Line(Parent ? hz::fs::Parent(File) : hz::fs::FileName(File));
 }
 
+/* Byte order, so 'sort' is predictable: digits, then upper-case, then lower-case. */
+static int32_t CompareText(const hz::String &A, const hz::String &B)
+{
+    size_t Limit = A.Length() < B.Length() ? A.Length() : B.Length();
+    for (size_t i = 0; i < Limit; i++) {
+        uint8_t X = (uint8_t)A[i], Y = (uint8_t)B[i];
+        if (X != Y)
+            return X < Y ? -1 : 1;
+    }
+    if (A.Length() == B.Length())
+        return 0;
+    return A.Length() < B.Length() ? -1 : 1;
+}
+
+/* 'tree [path]': the folders and files under a path, indented. The walk stops at a fixed depth and
+   says so, rather than appearing to have listed everything. */
+void Terminal::Tree(const CommandLine &C)
+{
+    hz::String Root = C.Words.Size() > 1 ? Path(C.Words[1]) : Cwd_;
+    bool Directory = false;
+    if (!hz::fs::Exists(Root, &Directory) || !Directory) {
+        Error("tree: the path is not a folder.");
+        return;
+    }
+    constexpr size_t kMaxDepth = 6;
+    size_t Folders = 0, Files = 0;
+    bool Truncated = false;
+    Line(Root);
+    hz::Function<void(const hz::String &, const hz::String &, size_t)> Walk;
+    Walk = [&](const hz::String &Folder, const hz::String &Prefix, size_t Depth) {
+        if (Depth >= kMaxDepth) {
+            Truncated = true;
+            return;
+        }
+        hz::Vector<hz::fs::Entry> Entries;
+        if (!HZ_SUCCESS(hz::fs::List(Folder, Entries))) {
+            Line(hz::String::Format("%s    (cannot be listed)", Prefix.CStr()));
+            return;
+        }
+        for (size_t i = 0; i < Entries.Size(); i++) {
+            const hz::fs::Entry &E = Entries[i];
+            bool Last = i + 1 == Entries.Size();
+            Line(hz::String::Format("%s%s%s", Prefix.CStr(), Last ? "`-- " : "|-- ", E.Name.CStr()));
+            if (!E.Directory) {
+                Files++;
+                continue;
+            }
+            Folders++;
+            hz::String Deeper = hz::String::Format("%s%s", Prefix.CStr(), Last ? "    " : "|   ");
+            Walk(hz::fs::Join(Folder, E.Name.CStr()), Deeper, Depth + 1);
+        }
+    };
+    Walk(Root, "", 0);
+    Line("");
+    Line(hz::String::Format("%zu folder(s), %zu file(s)", Folders, Files));
+    if (Truncated)
+        Line(hz::String::Format("Stopped at %zu levels deep; deeper folders were not listed.", kMaxDepth));
+}
+
+/* 'find [path] <pattern>': every file or folder whose name matches a * and ? pattern. This is the
+   Unix spelling of 'dir /s /b', so a Windows habit works too. */
+void Terminal::FindFiles(const CommandLine &C)
+{
+    if (C.Words.Size() < 2) {
+        Error("Use: find [path] <pattern>");
+        return;
+    }
+    bool HavePath = C.Words.Size() > 2;
+    hz::String Root = HavePath ? Path(C.Words[1]) : Cwd_;
+    hz::String Pattern = HavePath ? C.Words[2] : C.Words[1];
+    bool Directory = false;
+    if (!hz::fs::Exists(Root, &Directory) || !Directory) {
+        Error("find: the search path is not a folder.");
+        return;
+    }
+    constexpr size_t kMaxDepth = 8;
+    size_t Matches = 0;
+    bool Truncated = false;
+    hz::Function<void(const hz::String &, size_t)> Walk;
+    Walk = [&](const hz::String &Folder, size_t Depth) {
+        if (Depth >= kMaxDepth) {
+            Truncated = true;
+            return;
+        }
+        hz::Vector<hz::fs::Entry> Entries;
+        if (!HZ_SUCCESS(hz::fs::List(Folder, Entries)))
+            return;
+        for (const hz::fs::Entry &E : Entries) {
+            hz::String Full = hz::fs::Join(Folder, E.Name.CStr());
+            if (hz::fs::MatchPattern(Pattern.CStr(), E.Name.CStr())) {
+                Line(Full);
+                Matches++;
+            }
+            if (E.Directory)
+                Walk(Full, Depth + 1);
+        }
+    };
+    Walk(Root, 0);
+    Line(hz::String::Format("%zu match(es) for '%s' under %s", Matches, Pattern.CStr(), Root.CStr()));
+    if (Truncated)
+        Line(hz::String::Format("Stopped at %zu levels deep.", kMaxDepth));
+}
+
+/* 'sort [file]': the lines of a file, or of the output captured by a pipe, in byte order. */
+void Terminal::SortLines(const CommandLine &C)
+{
+    hz::String Text;
+    if (C.Words.Size() > 1) {
+        hz::String File = Path(C.Words[1]);
+        STATUS Status = hz::fs::ReadAll(File, Text, 4 * 1024 * 1024);
+        if (!HZ_SUCCESS(Status)) {
+            FileError("Cannot read", File, Status);
+            return;
+        }
+    } else if (Capturing_) {
+        Text = Captured_;
+    } else {
+        Error("Use: sort <file> (or pipe another command into it)");
+        return;
+    }
+    hz::Vector<hz::String> Lines;
+    size_t Start = 0;
+    for (size_t i = 0; i <= Text.Length(); i++) {
+        if (i != Text.Length() && Text[i] != '\n')
+            continue;
+        hz::String Line = Text.Substring(Start, i - Start);
+        if (!Line.Empty())
+            Lines.Push(hz::Move(Line));
+        Start = i + 1;
+    }
+    /* Insertion sort: terminal output is short, and it keeps the comparison in one place. */
+    for (size_t i = 1; i < Lines.Size(); i++) {
+        hz::String Key = Lines[i];
+        size_t j = i;
+        while (j > 0 && CompareText(Lines[j - 1], Key) > 0) {
+            Lines[j] = hz::Move(Lines[j - 1]);
+            j--;
+        }
+        Lines[j] = hz::Move(Key);
+    }
+    for (const hz::String &Text2 : Lines)
+        Line(Text2);
+}
+
+/* 'set' alone lists the variables; 'set NAME=value' stores one and 'set NAME=' clears it.
+   'export NAME=value' is accepted as the same thing, so a Unix habit still works. */
+void Terminal::SetVariable(const CommandLine &C)
+{
+    if (C.Words.Size() < 2) {
+        ListEnvironment();
+        return;
+    }
+    hz::String Assignment = C.Rest;
+    size_t Equals = Assignment.Find("=");
+    if (Equals == hz::NotFound) {
+        Error("Use: set NAME=value (or set NAME= to clear it)");
+        return;
+    }
+    hz::String Name = Assignment.Substring(0, Equals);
+    hz::String Value = Assignment.Substring(Equals + 1, Assignment.Length() - Equals - 1);
+    if (Name.Empty()) {
+        Error("The variable name is empty.");
+        return;
+    }
+    if (Value.Empty())
+        Env_.Unset(Name);
+    else
+        Env_.Set(Name, Value);
+}
+
+void Terminal::ListEnvironment()
+{
+    for (size_t i = 0; i < Env_.Count(); i++)
+        Line(Env_.EntryAt(i));
+}
+
 void Terminal::LinuxHelp()
 {
     Line("Linux A-Z command names are not a Linux compatibility layer.");
-    Line("Native Nexora commands and aliases: cat, cd, clear, cp, df, free, grep, head, history,");
-    Line("kill, ls, mkdir, more, mv, ps, pwd, rm, rmdir, sha256sum, stat, tail, touch, uname,");
-    Line("uptime, wc, which, who, whoami. These use Nexora OS paths, APIs, and permissions.");
+    Line("Native Nexora commands and aliases: cat, cd, clear, cp, df, env, export, find, free, grep,");
+    Line("head, history, kill, ls, mkdir, more, mv, printenv, ps, pwd, rm, rmdir, set, sha256sum,");
+    Line("sort, stat, tail, touch, tree, uname, unset, uptime, wc, where, which, who, whoami. These");
+    Line("use Nexora OS paths, APIs, and permissions.");
     Line("sudo/su, package managers, Linux services, POSIX shell syntax, and device/network");
     Line("administration are unavailable; use 'help' for supported Nexora commands.");
 }

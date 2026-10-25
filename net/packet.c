@@ -11,6 +11,82 @@ static uint16_t NetpReadBe16(const uint8_t *Data)
     return (uint16_t)(((uint16_t)Data[0] << 8) | Data[1]);
 }
 
+static uint32_t NetpReadBe32(const uint8_t *Data)
+{
+    return ((uint32_t)Data[0] << 24) | ((uint32_t)Data[1] << 16) | ((uint32_t)Data[2] << 8) | Data[3];
+}
+
+uint32_t NetChecksumPartial(uint32_t Sum, const void *Data, uint32_t Length)
+{
+    if (!Data)
+        return Sum;
+    const uint8_t *Bytes = Data;
+    while (Length >= 2) {
+        Sum += NetpReadBe16(Bytes);
+        Bytes += 2;
+        Length -= 2;
+    }
+    if (Length)
+        Sum += (uint16_t)Bytes[0] << 8;
+    return Sum;
+}
+
+uint16_t NetChecksumFold(uint32_t Sum)
+{
+    while (Sum >> 16)
+        Sum = (Sum & 0xFFFF) + (Sum >> 16);
+    return (uint16_t)Sum;
+}
+
+uint16_t NetPseudoHeaderSum(const uint8_t Source[4], const uint8_t Destination[4], uint8_t Protocol,
+                            uint16_t Length)
+{
+    uint32_t Sum = NetChecksumPartial(0, Source, 4);
+    Sum = NetChecksumPartial(Sum, Destination, 4);
+    Sum += Protocol;
+    Sum += Length;
+    return NetChecksumFold(Sum);
+}
+
+uint16_t NetUdpChecksum(const uint8_t Source[4], const uint8_t Destination[4], const void *Segment,
+                        uint32_t Length)
+{
+    uint32_t Sum = NetPseudoHeaderSum(Source, Destination, NET_IP_PROTOCOL_UDP, (uint16_t)Length);
+    Sum = NetChecksumPartial(Sum, Segment, Length);
+    uint16_t Result = (uint16_t)~NetChecksumFold(Sum);
+    return Result ? Result : 0xFFFF; /* a computed zero is transmitted as 0xFFFF */
+}
+
+bool NetUdpChecksumValid(const uint8_t Source[4], const uint8_t Destination[4], const void *Segment,
+                         uint32_t Length)
+{
+    if (!Segment || Length < NET_UDP_HEADER_SIZE)
+        return false;
+    uint32_t Sum = NetPseudoHeaderSum(Source, Destination, NET_IP_PROTOCOL_UDP, (uint16_t)Length);
+    Sum = NetChecksumPartial(Sum, Segment, 6); /* source port .. length, skipping the checksum field */
+    Sum = NetChecksumPartial(Sum, (const uint8_t *)Segment + 8, Length - 8);
+    return NetChecksumFold(Sum) == 0xFFFF;
+}
+
+uint16_t NetTcpChecksum(const uint8_t Source[4], const uint8_t Destination[4], const void *Segment,
+                        uint32_t Length)
+{
+    uint32_t Sum = NetPseudoHeaderSum(Source, Destination, NET_IP_PROTOCOL_TCP, (uint16_t)Length);
+    Sum = NetChecksumPartial(Sum, Segment, Length);
+    return (uint16_t)~NetChecksumFold(Sum);
+}
+
+bool NetTcpChecksumValid(const uint8_t Source[4], const uint8_t Destination[4], const void *Segment,
+                         uint32_t Length)
+{
+    if (!Segment || Length < NET_TCP_HEADER_MIN_SIZE)
+        return false;
+    uint32_t Sum = NetPseudoHeaderSum(Source, Destination, NET_IP_PROTOCOL_TCP, (uint16_t)Length);
+    Sum = NetChecksumPartial(Sum, Segment, 16); /* skipping the checksum field at bytes 16-17 */
+    Sum = NetChecksumPartial(Sum, (const uint8_t *)Segment + 18, Length - 18);
+    return NetChecksumFold(Sum) == 0xFFFF;
+}
+
 uint16_t NetIpv4Checksum(const void *Data, uint32_t Length)
 {
     if (!Data)
@@ -100,6 +176,29 @@ STATUS NetParseUdp(const NET_IPV4_VIEW *Ipv4, NET_UDP_VIEW *View)
     View->DestinationPort = NetpReadBe16(Ipv4->Payload + 2);
     View->Payload = Ipv4->Payload + NET_UDP_HEADER_SIZE;
     View->PayloadLength = (uint16_t)(Length - NET_UDP_HEADER_SIZE);
+    return STATUS_SUCCESS;
+}
+
+STATUS NetParseTcp(const NET_IPV4_VIEW *Ipv4, NET_TCP_VIEW *View)
+{
+    if (!Ipv4 || !View || Ipv4->Protocol != NET_IP_PROTOCOL_TCP || !Ipv4->Payload ||
+        Ipv4->PayloadLength < NET_TCP_HEADER_MIN_SIZE)
+        return STATUS_DEVICE_DATA_ERROR;
+    const uint8_t *Tcp = Ipv4->Payload;
+    uint32_t DataOffset = (uint32_t)(Tcp[12] >> 4) * 4;
+    if (DataOffset < NET_TCP_HEADER_MIN_SIZE || DataOffset > Ipv4->PayloadLength)
+        return STATUS_DEVICE_DATA_ERROR;
+    View->SourcePort = NetpReadBe16(Tcp);
+    View->DestinationPort = NetpReadBe16(Tcp + 2);
+    View->Sequence = NetpReadBe32(Tcp + 4);
+    View->Acknowledgement = NetpReadBe32(Tcp + 8);
+    View->DataOffset = (uint8_t)DataOffset;
+    View->Flags = Tcp[13];
+    View->Window = NetpReadBe16(Tcp + 14);
+    View->Segment = Tcp;
+    View->SegmentLength = Ipv4->PayloadLength;
+    View->Payload = Tcp + DataOffset;
+    View->PayloadLength = (uint16_t)(Ipv4->PayloadLength - DataOffset);
     return STATUS_SUCCESS;
 }
 

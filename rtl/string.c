@@ -6,6 +6,11 @@
  */
 #include "rtl.h"
 
+int abs(int Value)
+{
+    return Value < 0 ? -Value : Value;
+}
+
 void *memcpy(void *Dest, const void *Src, size_t Count)
 {
     void *Ret = Dest;

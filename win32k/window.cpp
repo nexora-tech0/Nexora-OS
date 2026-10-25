@@ -119,9 +119,21 @@ static void WmUnlink(WINDOW *W)
     W->Above = W->Below = nullptr;
 }
 
-/* Inserts at the top of its band (topmost windows above everything else). */
+/* Inserts at the top of its band (topmost windows above everything else). A desktop window goes
+   to the very back instead: it belongs under every other window. */
 static void WmLinkTop(WINDOW *W)
 {
+    if (W->Style & HZ_WS_DESKTOP) {
+        WINDOW *Above = WmBottom;
+        W->Below = nullptr;
+        W->Above = Above;
+        if (Above)
+            Above->Below = W;
+        else
+            WmTop = W;
+        WmBottom = W;
+        return;
+    }
     WINDOW *Under = WmTop; /* W goes right above Under */
     if (!(W->Style & HZ_WS_TOPMOST)) {
         while (Under && (Under->Style & HZ_WS_TOPMOST))
@@ -170,14 +182,16 @@ void WmActivate(WINDOW *W)
     if (W && (W->Style & HZ_WS_NOACTIVATE))
         return;
     WINDOW *Old = WmActive;
-    if (W)
-        WmBringToTop(W);
+    if (W && !(W->Style & HZ_WS_DESKTOP))
+        WmBringToTop(W); /* the desktop takes the keyboard without coming to the front */
     if (Old == W)
         return;
     InpCancelCapture(); /* menus and other captures end when activation moves */
     WmActive = W;
     if (!W || WmIsAppWindow(W))
         WmShellNotify(HZ_SHELL_WINDOW_ACTIVATED, W);
+    else if (W->Style & HZ_WS_DESKTOP)
+        WmShellEvent(HZ_SHELL_WINDOW_ACTIVATED, W->Handle); /* no app is active any more */
     if (Old) {
         WmPostMessage(Old, HZ_WM_ACTIVATE, 0, 0);
         WmInvalidateWindowArea(Old); /* weaker shadow */

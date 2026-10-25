@@ -64,7 +64,7 @@ KERNEL_COMMON_FLAGS := $(KERNEL_TARGET_FLAGS) -ffreestanding -fno-stack-protecto
     -fno-asynchronous-unwind-tables -fno-unwind-tables -ffunction-sections -fdata-sections \
     -O2 -g -Wall -Wextra -Werror -Wno-unused-parameter \
     -nostdinc -isystem $(CLANG_RESOURCE_DIR)/include \
-    -Iinclude -Ithird_party/limine-protocol -I$(BUILD)/gen -MMD -MP
+    -Iinclude -Inet -Ithird_party/limine-protocol -I$(BUILD)/gen -MMD -MP
 
 KERNEL_CFLAGS := -std=c17 $(KERNEL_COMMON_FLAGS)
 KERNEL_CXXFLAGS := -std=c++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics -nostdinc++ \
@@ -117,7 +117,8 @@ RUST_KERNEL_FLAGS := -C code-model=kernel -C relocation-model=static -C force-fr
 # probes: the user stack is fully reserved up front with one guard page at the bottom.
 USER_COMMON_FLAGS := --target=x86_64-pc-windows-msvc -ffreestanding -fno-stack-protector -mno-stack-arg-probe \
     -O2 -Wall -Wextra -Werror -Wno-unused-parameter \
-    -nostdinc -isystem $(CLANG_RESOURCE_DIR)/include -Iinclude -Iuser/include -MMD -MP
+    -nostdinc -isystem $(CLANG_RESOURCE_DIR)/include -Iinclude -Iuser/include \
+    -Ithird_party/stb/compat -MMD -MP
 USER_CFLAGS := -std=c17 $(USER_COMMON_FLAGS)
 USER_CXXFLAGS := -std=c++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics $(USER_COMMON_FLAGS)
 USER_NASMFLAGS := -f win64 -w+all
@@ -127,6 +128,8 @@ UOBJ := $(BUILD)/uobj
 USER_RUNTIME_OBJS := $(UOBJ)/user/lib/hzsys/hzsys.asm.obj $(UOBJ)/user/lib/hzrt/crt.cpp.obj \
     $(UOBJ)/user/lib/hzrt/heap.cpp.obj $(UOBJ)/user/lib/hzrt/hzcore.cpp.obj $(UOBJ)/user/lib/hzrt/hzfile.cpp.obj \
     $(UOBJ)/user/lib/hzrt/hzapps.cpp.obj $(UOBJ)/user/lib/hzrt/hzcrypto.cpp.obj \
+    $(UOBJ)/user/lib/hzrt/hzarchive.cpp.obj \
+    $(UOBJ)/user/lib/hzrt/hzimage.cpp.obj \
     $(UOBJ)/rtl/string.c.obj \
     $(UOBJ)/rtl/format.c.obj
 # hzuser (windows, drawing, fonts) is an archive: programs pull in only what they use.
@@ -140,7 +143,8 @@ HZUI_LIB := $(BUILD)/user/hzui.lib
 USER_PROGRAMS := hello usertest crash fstest wintest uitest welcome apptest
 UI_FONTS := third_party/inter/Inter-Regular.ttf third_party/inter/Inter-SemiBold.ttf \
     third_party/inter/InterDisplay-SemiBold.ttf \
-    third_party/jetbrains-mono/JetBrainsMono-Regular.ttf
+    third_party/jetbrains-mono/JetBrainsMono-Regular.ttf \
+    third_party/icons/material/MaterialIcons-Regular.ttf
 # Programs built from every .cpp in a directory (name:directory).
 USER_APP_DIRS := user/shell $(patsubst %/,%,$(sort $(dir $(wildcard user/apps/*/*.cpp))))
 USER_APP_NAMES := $(notdir $(USER_APP_DIRS))
@@ -274,16 +278,23 @@ $(foreach d,$(USER_APP_DIRS),$(eval $(call USER_APP_RULE,$(notdir $(d)),$(d))))
 ROOTFS_FILES := $(shell find rootfs -type f 2>/dev/null)
 
 LICENSE_FILES := THIRD_PARTY_NOTICES.md third_party/inter/LICENSE.txt \
-    third_party/jetbrains-mono/OFL.txt third_party/limine-protocol/LICENSE
+    third_party/jetbrains-mono/OFL.txt third_party/limine-protocol/LICENSE \
+    third_party/icons/material/LICENSE.txt third_party/stb/LICENSE.txt
 
 .PHONY: prepare-wallpapers
 prepare-wallpapers:
 	$(Q)$(PYTHON) tools/prepare-wallpapers.py assets/Wallpapers $(BUILD)/wallpapers
 
+# The system tree, the same one Setup copies to an installed disk: C:\Nexora holds System (the
+# programs), Fonts, Apps (the manifests), Wallpapers, Licenses and Settings (the .ini files that
+# SettingsPath() reads and writes); rootfs/ supplies Apps and anything else a clean install starts
+# with. C:\Users and its per-user folders are not here: they belong to an installation, not to the
+# installation media.
 $(RAMDISK): $(USER_EXES) $(ROOTFS_FILES) $(LICENSE_FILES) $(UI_FONTS) prepare-wallpapers
 	rm -rf $(BUILD)/ramdisk_root
-	mkdir -p $(BUILD)/ramdisk_root/Nexora/System $(BUILD)/ramdisk_root/Nexora/Licenses \
-	    $(BUILD)/ramdisk_root/Nexora/Fonts $(BUILD)/ramdisk_root/Nexora/Wallpapers
+	mkdir -p $(BUILD)/ramdisk_root/Nexora/System $(BUILD)/ramdisk_root/Nexora/Fonts \
+	    $(BUILD)/ramdisk_root/Nexora/Apps $(BUILD)/ramdisk_root/Nexora/Wallpapers \
+	    $(BUILD)/ramdisk_root/Nexora/Licenses $(BUILD)/ramdisk_root/Nexora/Settings
 	cp -R rootfs/. $(BUILD)/ramdisk_root/
 	cp $(USER_EXES) $(BUILD)/ramdisk_root/Nexora/System/
 	cp $(UI_FONTS) $(BUILD)/ramdisk_root/Nexora/Fonts/
@@ -291,7 +302,9 @@ $(RAMDISK): $(USER_EXES) $(ROOTFS_FILES) $(LICENSE_FILES) $(UI_FONTS) prepare-wa
 	cp THIRD_PARTY_NOTICES.md $(BUILD)/ramdisk_root/Nexora/Licenses/ThirdPartyNotices.md
 	cp third_party/inter/LICENSE.txt $(BUILD)/ramdisk_root/Nexora/Licenses/Inter-OFL.txt
 	cp third_party/jetbrains-mono/OFL.txt $(BUILD)/ramdisk_root/Nexora/Licenses/JetBrainsMono-OFL.txt
+	cp third_party/icons/material/LICENSE.txt $(BUILD)/ramdisk_root/Nexora/Licenses/MaterialIcons-Apache-2.0.txt
 	cp third_party/limine-protocol/LICENSE $(BUILD)/ramdisk_root/Nexora/Licenses/Limine-protocol-0BSD.txt
+	cp third_party/stb/LICENSE.txt $(BUILD)/ramdisk_root/Nexora/Licenses/stb-MIT.txt
 	cp $(LIMINE_DIR)/LICENSE $(BUILD)/ramdisk_root/Nexora/Licenses/Limine-BSD-2-Clause.txt
 	tar --format=ustar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@$(SOURCE_DATE_EPOCH) \
 	    -cf $@ -C $(BUILD)/ramdisk_root Nexora

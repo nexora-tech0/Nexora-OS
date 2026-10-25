@@ -63,7 +63,8 @@ CASES = {
                    "Process self-tests: 12/12 passed", "fstest: ", "File system self-tests: 16/16 passed",
                    "wintest: display ", "Window manager self-tests: wintest.exe exit 0x00000000", "uitest.exe exit 0x00000000",
                    "apptest: ", "apptest.exe exit 0x00000000",
-                   "surfaces left: OK", "[HZ] BOOT OK", "shell: lock screen shown", "shell: ready", "[HZ] HEARTBEAT"],
+                   "surfaces left: OK", "[HZ] BOOT OK", "Installer: Setup launched automatically", "setup: started",
+                   "[HZ] HEARTBEAT"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:"],
         "check_disk": True,
     },
@@ -373,7 +374,8 @@ CASES = {
                     ("setup: disk 0 ", ["sleep 1", "screenshot:installer-disk-selection.png", "sendkey ret"]),
                     ("setup: chose disk 0", ["sleep 1", "screenshot:installer-erase-review.png",
                                              "type:ERASE", "sendkey ret"]),
-                    ("setup: installing on disk 0", ["sleep 0.2", "screenshot:installer-progress.png"]),
+                    ("setup: formatted partition 2 as FAT32 'NEXORAOS'",
+                     ["sleep 0.5", "screenshot:installer-progress.png"]),
                     ("setup: done; Nexora OS is installed on disk 0",
                      ["sleep 0.5", "screenshot:installer-complete.png"])],
         "expect": ["[HZ] BOOT OK", "Ramdisk: ", "at \\Device\\Ramdisk1", "Installer: Setup launched automatically",
@@ -383,6 +385,10 @@ CASES = {
                    "setup: boot loader, kernel and system image written", "setup: read-back verification passed",
                    "setup: copied ",
                    "setup: done; Nexora OS is installed on disk 0"],
+        # Keep capturing functional installer milestones after a degraded boot, then fail the case
+        # explicitly rather than accepting installation as healthy.
+        "defer_fail": ["BOOT DEGRADED"],
+        "defer_expect": ["[HZ] BOOT OK"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "setup: failed", "FAIL"],
         "timeout": 360.0,
         "save_disk": os.path.join("build", "test", "installed.img"),
@@ -391,6 +397,7 @@ CASES = {
             (1, "::/boot/hzkrnl.elf", "same", os.path.join("build", "hzkrnl.elf")),
             (1, "::/boot/hzkrnl.sym", "same", os.path.join("build", "hzkrnl.sym")),
             (1, "::/boot/ramdisk.tar", "same", os.path.join("build", "ramdisk.tar")),
+            (1, "::/boot/limine/limine.conf", "contains", "default_entry: /Nexora OS"),
             (1, "::/boot/limine/limine.conf", "contains", "cmdline: hz.system=SYSTEM_GUID"),
             (1, "::/boot/limine/limine.conf", "contains", "module_string: symbols\n\n/Nexora OS (system image"),
             (2, "::/Nexora/System/shell.exe", "same", os.path.join("build", "user", "shell.exe")),
@@ -418,6 +425,8 @@ CASES = {
                    "shell: first boot: started first-boot setup", "shell: wallpaper 1 (requested)",
                    "setup: first boot done: user 'Ada', wallpaper 1 (settings saved: 0x00000000)",
                    "shell: first-boot setup finished; hello, Ada", "shell: launched welcome.exe"],
+        "defer_fail": ["BOOT DEGRADED"],
+        "defer_expect": ["[HZ] BOOT OK"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "FAIL", "shell: lock screen shown"],
         "timeout": 240.0,
         "save_disk": os.path.join("build", "test", "firstboot.img"),
@@ -449,6 +458,8 @@ CASES = {
                    "shell: launched welcome.exe", "settings: password set (0x00000000)",
                    "shell: settings loaded: user 'Ada', wallpaper 1, password", "shell: locked",
                    "shell: wrong password (1)", "shell: password accepted"],
+        "defer_fail": ["BOOT DEGRADED"],
+        "defer_expect": ["[HZ] BOOT OK"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "FAIL", "first-boot setup"],
         "timeout": 240.0,
         "save_disk": os.path.join("build", "test", "accounts.img"),
@@ -465,6 +476,8 @@ CASES = {
                     ("shell: password prompt", ["sleep 1", "type:sun\n"])],
         "expect": ["[HZ] BOOT OK", "shell: settings loaded: user 'Ada', wallpaper 1, password", "shell: password prompt",
                    "shell: password accepted", "shell: unlocked", "shell: launched welcome.exe"],
+        "defer_fail": ["BOOT DEGRADED"],
+        "defer_expect": ["[HZ] BOOT OK"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "FAIL", "shell: wrong password", "first-boot setup"],
         "timeout": 180.0,
     },
@@ -938,6 +951,7 @@ def run_case(case, timeout):
 
     ok = False
     reason = "timeout"
+    deferred_failure = ""
     started = time.time()
     text = ""
     expected = list(spec["expect"])
@@ -981,11 +995,18 @@ def run_case(case, timeout):
                             monitor_command(mon, f"sendkey {name}")
                     else:
                         monitor_command(mon, command)
-            bad = [m for m in spec["fail"] if m in text]
+            deferred = [m for m in spec.get("defer_fail", []) if m in text]
+            bad = [m for m in spec["fail"] if m in text and m not in deferred]
             if bad:
                 reason = f"unexpected serial output: {bad[0]!r}"
                 break
             counts_met = all(text.count(marker) >= count for marker, count in spec.get("expect_counts", {}).items())
+            if deferred:
+                required = [m for m in expected if m not in spec.get("defer_expect", [])]
+                if all(m in text for m in required) and counts_met:
+                    deferred_failure = deferred[0]
+                    ok = True
+                    break
             if all(m in text for m in expected) and counts_met and not spec.get("exit_ok"):
                 ok = True
                 break
@@ -1020,6 +1041,9 @@ def run_case(case, timeout):
                 reason = problem
         if ok and spec.get("save_disk") and "QEMU_DISK" in env:
             shutil.copyfile(env["QEMU_DISK"], os.path.join(ROOT, spec["save_disk"]))
+        if ok and deferred_failure:
+            ok = False
+            reason = f"unexpected serial output: {deferred_failure!r}"
         shutil.rmtree(tmp, ignore_errors=True)
 
     elapsed = time.time() - started

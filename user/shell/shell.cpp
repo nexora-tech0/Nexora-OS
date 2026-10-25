@@ -5,6 +5,7 @@
  * launching, activation from the taskbar and the switcher, requests from programs, flyouts,
  * program icons and the lock screen. Notable steps are logged ("shell: ...") for the smoke tests.
  */
+#include "desktop.h"
 #include "shell.h"
 #include "hzcrypto.h"
 #include "hzfile.h"
@@ -55,6 +56,7 @@ void Shell::LoadSettings()
     Config = hz::fs::Settings();
     STATUS Status = Config.Load(hz::fs::SettingsPath("shell"));
     UserName = Config.Get("UserName");
+    ProfilePicture = Config.Get("ProfilePicture");
     PasswordSalt = Config.Get("PasswordSalt");
     PasswordHash = Config.Get("PasswordHash");
     UtcOffset = hz::fs::ClampUtcOffset(Config.GetInt("UtcOffsetMinutes", 0));
@@ -88,12 +90,25 @@ void Shell::LoadSettings()
             TaskbarPins.Push(Id);
         P = *End ? End + 1 : End;
     }
-    if (Bar)
-        Bar->Rebuild();
-    HzPrint("shell: settings %s: user '%s', wallpaper %u%s%s%s, lock wallpaper %u",
+    /* The shell's own appearance (M10/M11): the top dock and the desktop icon layer. Settings
+       writes both and asks for HZ_SHELL_REQUEST_SETTINGS, so a change takes effect at once. */
+    ShowTopDock = Config.GetInt("TopDock", 0) != 0;
+    ShowDesktopIcons = Config.GetInt("DesktopIcons", 1) != 0;
+    if (Dock && !Locked)
+        NtUserShowWindow(Dock->Handle(), ShowTopDock ? HZ_SW_SHOWNOACTIVATE : HZ_SW_HIDE);
+    if (Desk && !Locked)
+        NtUserShowWindow(Desk->Handle(), ShowDesktopIcons ? HZ_SW_SHOWNOACTIVATE : HZ_SW_HIDE);
+    /* The colour scheme (shell.ini "Theme": 0 dark, 1 light). It is switched before the desktop,
+       the lock screen and the flyouts are built, so they are painted in the chosen scheme; the
+       taskbar and the dock, which already exist, are re-filled by ReloadChrome(). */
+    LightMode = Config.GetInt("Theme", 0) == 1;
+    Theme::ApplyScheme(LightMode ? Theme::Scheme::Light : Theme::Scheme::Dark);
+    ReloadChrome();
+    HzPrint("shell: settings %s: user '%s', wallpaper %u%s%s%s, lock wallpaper %u, dock %s, desktop icons %s, %s mode",
             HZ_SUCCESS(Status) ? "loaded" : "not found", DisplayName(), Wallpaper,
             HasPassword() ? ", password" : "", FirstBoot ? ", first boot" : "",
-            Persistent ? "" : " (live system: not saved)", LockWallpaper);
+            Persistent ? "" : " (live system: not saved)", LockWallpaper, ShowTopDock ? "on" : "off",
+            ShowDesktopIcons ? "on" : "off", LightMode ? "light" : "dark");
 }
 
 void Shell::SaveSettings()
@@ -102,6 +117,10 @@ void Shell::SaveSettings()
         return;
     Config.SetInt("Wallpaper", (int)Wallpaper);
     Config.SetInt("LockWallpaper", (int)LockWallpaper);
+    /* The shell's own appearance, so the Control Center's switches survive a restart. */
+    Config.SetInt("Theme", LightMode ? 1 : 0);
+    Config.SetInt("TopDock", ShowTopDock ? 1 : 0);
+    Config.SetInt("DesktopIcons", ShowDesktopIcons ? 1 : 0);
     hz::String List;
     for (size_t i = 0; i < Recent.Size(); i++) {
         if (i)
@@ -119,6 +138,59 @@ void Shell::SaveSettings()
     STATUS Status = Config.Save(hz::fs::SettingsPath("shell"));
     if (!HZ_SUCCESS(Status))
         HzPrint("shell: cannot save the settings (0x%08X)", (uint32_t)Status);
+}
+
+/* Re-fills everything that captured the palette when it was built. The Control Center holds the
+   fills of the scheme it was created in, so it is closed and built again (which also replays its
+   reveal); the desktop draws with the live palette, so a repaint is enough. */
+void Shell::ReloadChrome()
+{
+    if (Bar) {
+        Bar->ApplyTheme();
+        Bar->Rebuild();
+    }
+    if (Dock)
+        Dock->ApplyTheme();
+    if (Desk)
+        Desk->InvalidateRect(Desk->ClientRect());
+    if (Quick) {
+        static_cast<Flyout *>(Quick)->Dismiss();
+        if (!CreateQuickSettings())
+            HzPrint("shell: cannot reopen the Control Center");
+    }
+}
+
+void Shell::SetLightMode(bool Light)
+{
+    if (Light == LightMode)
+        return;
+    LightMode = Light;
+    Theme::ApplyScheme(Light ? Theme::Scheme::Light : Theme::Scheme::Dark);
+    ReloadChrome();
+    SaveSettings();
+    HzPrint("shell: %s colour scheme", Light ? "light" : "dark");
+}
+
+void Shell::SetTopDock(bool Show)
+{
+    if (Show == ShowTopDock)
+        return;
+    ShowTopDock = Show;
+    if (Dock && !Locked)
+        NtUserShowWindow(Dock->Handle(), Show ? HZ_SW_SHOWNOACTIVATE : HZ_SW_HIDE);
+    SaveSettings();
+    HzPrint("shell: top dock %s", Show ? "shown" : "hidden");
+}
+
+void Shell::SetDesktopIcons(bool Show)
+{
+    if (Show == ShowDesktopIcons)
+        return;
+    ShowDesktopIcons = Show;
+    if (Desk && !Locked)
+        NtUserShowWindow(Desk->Handle(), Show ? HZ_SW_SHOWNOACTIVATE : HZ_SW_HIDE);
+    SaveSettings();
+    HzPrint("shell: desktop icons %s", Show ? "shown" : "hidden");
 }
 
 bool Shell::IsTaskbarPinned(const hz::String &Id) const
@@ -376,6 +448,8 @@ void Shell::OnShellRequest(uint64_t Request, uint64_t Detail)
     } else if (Request == HZ_SHELL_REQUEST_SETTINGS) {
         bool WasFirstBoot = FirstBoot;
         LoadSettings();
+        if (Desk)
+            Desk->RefreshPrefs(); /* Settings may have changed the icon size or the sort order */
         if (Start)
             static_cast<Flyout *>(Start)->Dismiss();
         if (WasFirstBoot && !FirstBoot) {
@@ -549,6 +623,9 @@ void PaintLogo(Painter &P, const Rect &Box)
     P.DrawIcon(Icon::Nexora, Box, 0xFFC5CDD4, 2.5f);
 }
 
+/* A manifest icon name (or a semantic alias) to a glyph. Every unknown or missing name falls back
+   to the default application icon, so an app without an "Icon=" line still gets a real icon tile
+   instead of a bare letter. */
 Icon IconByName(const hz::String &Name)
 {
     static const struct {
@@ -563,12 +640,26 @@ Icon IconByName(const hz::String &Name)
         {"Stopwatch", Icon::Stopwatch}, {"Globe", Icon::Globe},     {"Trash", Icon::Trash},
         {"Save", Icon::Save},         {"Cube", Icon::Cube},         {"Open", Icon::Open},       {"Volume", Icon::Volume},
         {"Power", Icon::Power},       {"Nexora", Icon::Nexora},     {"Wifi", Icon::Wifi},       {"Network", Icon::Wifi},
-        {"Accessibility", Icon::Accessibility}, {"AppWindow", Icon::AppWindow},
+        {"Accessibility", Icon::Accessibility}, {"AppWindow", Icon::AppWindow}, {"Check", Icon::Check},
+        {"ChevronDown", Icon::ChevronDown}, {"ChevronUp", Icon::ChevronUp}, {"ChevronLeft", Icon::ChevronLeft},
+        {"ChevronRight", Icon::ChevronRight}, {"Close", Icon::Close}, {"Add", Icon::Add}, {"Remove", Icon::Remove},
+        {"More", Icon::More}, {"Leaf", Icon::Leaf}, {"Plane", Icon::Plane}, {"Refresh", Icon::Refresh},
+        {"Cut", Icon::Cut}, {"Copy", Icon::Copy}, {"Paste", Icon::Paste}, {"Person", Icon::Person},
+        {"ArrowUp", Icon::ArrowUp},
+        /* Aliases: the same glyph under the words a manifest is likely to use. */
+        {"Files", Icon::Folder},      {"FolderExplorer", Icon::Folder}, {"Text", Icon::Document},
+        {"Editor", Icon::Document},   {"Terminal", Icon::Prompt},       {"Console", Icon::Prompt},
+        {"Blockyard", Icon::Cube},    {"Block", Icon::Cube},            {"Sound", Icon::Volume},
+        {"Audio", Icon::Volume},      {"Speaker", Icon::Volume},        {"Battery", Icon::Power},
+        {"Image", Icon::Palette},     {"Photo", Icon::Palette},         {"Timer", Icon::Stopwatch},
+        {"Web", Icon::Globe},         {"Browser", Icon::Globe},         {"Wireless", Icon::Wifi},
+        {"Apps", Icon::AppWindow},    {"Window", Icon::AppWindow},      {"Gear", Icon::Settings},
+        {"Wallpaper", Icon::Sun},     {"Theme", Icon::Palette},
     };
     for (const auto &E : Table)
         if (hz::fs::EqualNames(E.Name, Name.CStr()))
             return E.Glyph;
-    return Icon::None;
+    return Icon::AppWindow; /* the default app icon */
 }
 
 void PaintAppIcon(Painter &P, const Rect &Box, const hz::apps::App *App, const char *Title)
@@ -954,8 +1045,12 @@ void Shell::Unlock()
     }
     if (Bar)
         NtUserShowWindow(Bar->Handle(), HZ_SW_SHOWNOACTIVATE); /* hidden while locked */
-    if (Dock)
+    if (Dock && ShowTopDock)
         NtUserShowWindow(Dock->Handle(), HZ_SW_SHOWNOACTIVATE);
+    if (Desk && ShowDesktopIcons) { /* hidden while locked; re-read so the icons replay their reveal */
+        NtUserShowWindow(Desk->Handle(), HZ_SW_SHOWNOACTIVATE);
+        Desk->Reload();
+    }
     HzPrint("shell: unlocked");
     if (Started)
         return; /* unlocked again after Lock */
@@ -1060,6 +1155,8 @@ void Shell::LockNow()
         NtUserShowWindow(Bar->Handle(), HZ_SW_HIDE);
     if (Dock)
         NtUserShowWindow(Dock->Handle(), HZ_SW_HIDE);
+    if (Desk)
+        NtUserShowWindow(Desk->Handle(), HZ_SW_HIDE);
     HzPrint("shell: locked");
 }
 
@@ -1104,6 +1201,12 @@ extern "C" int main(int argc, char **argv)
     g_Shell.RefreshWindows();
 
     g_Shell.LoadSettings(); /* after registering: the wallpaper may change */
+    /* The desktop icon layer: at the very back of the z-order (HZ_WS_DESKTOP), so the wallpaper
+       and the icons sit under every window. It is hidden while the lock screen is up, whose scrim
+       is translucent and would otherwise let the icons show through. */
+    g_Shell.Desk = CreateDesktop();
+    if (g_Shell.Desk)
+        NtUserShowWindow(g_Shell.Desk->Handle(), HZ_SW_HIDE);
     /* Restarted by the session after it exited (M11): no lock screen, no Welcome. */
     bool Restarted = argc > 1 && strcmp(argv[1], "restart") == 0;
     if (Restarted) {
@@ -1119,7 +1222,12 @@ extern "C" int main(int argc, char **argv)
         if (!g_Shell.Locked || !g_Shell.Lock) {
             g_Shell.Locked = false;
             NtUserShowWindow(Bar->Handle(), HZ_SW_SHOWNOACTIVATE);
-            NtUserShowWindow(Dock->Handle(), HZ_SW_SHOWNOACTIVATE);
+            if (g_Shell.ShowTopDock)
+                NtUserShowWindow(Dock->Handle(), HZ_SW_SHOWNOACTIVATE);
+            if (g_Shell.Desk && g_Shell.ShowDesktopIcons) {
+                NtUserShowWindow(g_Shell.Desk->Handle(), HZ_SW_SHOWNOACTIVATE);
+                g_Shell.Desk->Reload();
+            }
         }
         HzPrint("shell: ready");
         return RunMessageLoop();

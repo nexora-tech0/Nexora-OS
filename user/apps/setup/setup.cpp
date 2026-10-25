@@ -20,10 +20,27 @@ using namespace hzui;
 
 namespace {
 
-constexpr uint32_t kMsgProgress = HZ_WM_USER + 1; /* WParam = per mille, LParam = hz::String * */
+constexpr uint32_t kMsgProgress = HZ_WM_USER + 1; /* LParam = ProgressUpdate * */
 constexpr uint32_t kMsgFinished = HZ_WM_USER + 2; /* WParam = STATUS, LParam = hz::String * */
 constexpr uint32_t kMaxDisks = 16;
 constexpr uint32_t kChunk = 64 * 1024;
+
+/*
+ * Installation is reported as named stages, and each stage owns a band of the progress bar. The bar
+ * moves inside a band as the work of that stage completes, so the label names the step that is
+ * actually running instead of a percentage that means nothing to the user.
+ */
+constexpr uint32_t kInstallStages = 6;
+constexpr uint32_t kStageBand[kInstallStages + 1] = {0, 40, 90, 140, 900, 950, 1000};
+
+struct ProgressUpdate {
+    uint32_t PerMille = 0;
+    uint32_t Stage = 0; /* 1-based */
+    uint32_t StageCount = 0;
+    uint64_t ElapsedMs = 0;
+    hz::String StageName;
+    hz::String Detail; /* the file or partition being worked on right now */
+};
 
 /* ---- Disks --------------------------------------------------------------------------------------- */
 
@@ -136,20 +153,48 @@ struct InstallJob {
     uint32_t Files = 0;
     hz::String Error;
     setup::Guid SystemGuid;
+    uint64_t StartUs = 0;
+    uint32_t Stage = 0; /* 1-based; 0 before the first stage begins */
+    hz::String StageName;
+
+    uint64_t ElapsedMs() const
+    {
+        uint64_t Now = 0;
+        NtQueryUptime(&Now);
+        return Now > StartUs ? (Now - StartUs) / 1000 : 0;
+    }
 };
 
-void Progress(InstallJob &Job, uint32_t PerMille, const hz::String &Text)
+void Progress(InstallJob &Job, uint32_t PerMille, const hz::String &Detail)
 {
-    hz::String *Message = new hz::String(Text);
-    if (!HZ_SUCCESS(NtUserPostMessage(Job.Window, kMsgProgress, PerMille, reinterpret_cast<uint64_t>(Message))))
-        delete Message;
+    ProgressUpdate *Update = new ProgressUpdate();
+    Update->PerMille = PerMille;
+    Update->Stage = Job.Stage;
+    Update->StageCount = kInstallStages;
+    Update->ElapsedMs = Job.ElapsedMs();
+    Update->StageName = Job.StageName;
+    Update->Detail = Detail;
+    if (!HZ_SUCCESS(NtUserPostMessage(Job.Window, kMsgProgress, 0, reinterpret_cast<uint64_t>(Update))))
+        delete Update;
 }
 
-uint32_t CopyPerMille(const InstallJob &Job)
+/* Begins a named stage: the label changes at once and the bar jumps to the start of the stage band. */
+void BeginStage(InstallJob &Job, uint32_t Index, const char *Name)
 {
-    /* Partitioning and formatting take the first 5 %, copying the rest. */
-    uint64_t Total = Job.TotalBytes ? Job.TotalBytes : 1;
-    return 50 + (uint32_t)hz::Min<uint64_t>(Job.DoneBytes * 950 / Total, 950);
+    Job.Stage = Index + 1;
+    Job.StageName = Name;
+    Progress(Job, kStageBand[Index], Job.StageName);
+}
+
+/* The bar position inside the current stage's band for a stage that is Completed out of Total done. */
+uint32_t StagePerMille(const InstallJob &Job, uint64_t Completed, uint64_t Total)
+{
+    uint32_t Index = Job.Stage ? Job.Stage - 1 : 0;
+    if (Index >= kInstallStages)
+        Index = kInstallStages - 1;
+    uint32_t Start = kStageBand[Index], End = kStageBand[Index + 1];
+    uint64_t Fraction = Total ? hz::Min<uint64_t>(Completed, Total) * 1000 / Total : 0;
+    return Start + (uint32_t)((End - Start) * Fraction / 1000);
 }
 
 STATUS WriteSectors(HANDLE Device, uint64_t Lba, const void *Data, uint32_t Count)
@@ -375,6 +420,23 @@ void Measure(const hz::String &Folder, uint64_t &Bytes, uint32_t &Files)
     }
 }
 
+/* What Install writes where, measured before anything is erased: the EFI system partition keeps the
+   install image (boot loader, kernel, symbols, the system image) and the live boot image, and the
+   system partition keeps C:\Nexora. A real installer knows the numbers before it touches the disk. */
+void MeasurePayload(uint64_t &EspBytes, uint64_t &SystemBytes)
+{
+    uint32_t Files = 0;
+    Measure(hz::String("\\Device\\Ramdisk1\\"), EspBytes, Files);
+    HZ_DISK_GEOMETRY Live = {};
+    HANDLE Handle;
+    if (HZ_SUCCESS(NtCreateFile(&Handle, FILE_READ_DATA, "\\Device\\Ramdisk0", FILE_OPEN, 0, nullptr))) {
+        NtDeviceIoControlFile(Handle, IOCTL_DISK_GET_GEOMETRY, nullptr, 0, &Live, sizeof(Live), nullptr);
+        NtClose(Handle);
+    }
+    EspBytes += Live.SectorCount * Live.BytesPerSector;
+    Measure(hz::String("C:\\Nexora"), SystemBytes, Files);
+}
+
 STATUS CopyTree(InstallJob &Job, const hz::String &From, const hz::String &To, const char *Skip)
 {
     hz::Vector<hz::fs::Entry> Entries;
@@ -398,7 +460,7 @@ STATUS CopyTree(InstallJob &Job, const hz::String &From, const hz::String &To, c
                 return Status;
             continue;
         }
-        Progress(Job, CopyPerMille(Job), hz::String::Format("Copying %s", E.Name.CStr()));
+        Progress(Job, StagePerMille(Job, Job.DoneBytes, Job.TotalBytes), hz::String::Format("Copying %s", E.Name.CStr()));
         Status = hz::fs::Copy(Source, Target);
         if (!HZ_SUCCESS(Status)) {
             Job.Error = hz::String::Format("%s cannot be copied (%s).", Source.CStr(), hz::fs::StatusText(Status));
@@ -446,7 +508,7 @@ STATUS CopyDevice(InstallJob &Job, const char *DevicePath, const hz::String &Tar
         Offset += Chunk;
         Job.DoneBytes += Chunk;
         if ((Offset / kChunk) % 16 == 0)
-            Progress(Job, CopyPerMille(Job), hz::String("Copying the system image"));
+            Progress(Job, StagePerMille(Job, Job.DoneBytes, Job.TotalBytes), hz::String("Copying the system image"));
     }
     NtClose(File);
     NtClose(Device);
@@ -473,20 +535,195 @@ STATUS WriteText(InstallJob &Job, const hz::String &Path, const hz::String &Text
     return Status;
 }
 
+/* ---- Verification (the last stage) ------------------------------------------------------------------ */
+
+STATUS ReadSector(HANDLE Device, uint64_t Lba, void *Buffer, uint32_t Bytes)
+{
+    uint64_t Offset = Lba * setup::kSectorSize;
+    uint32_t Got = 0;
+    STATUS Status = NtReadFile(Device, Buffer, Bytes, &Offset, &Got);
+    if (HZ_SUCCESS(Status) && Got != Bytes)
+        Status = STATUS_DEVICE_DATA_ERROR;
+    return Status;
+}
+
+/* Reads the GPT sectors back off the disk and compares them with the bytes Setup wrote. */
+STATUS VerifyPartitionTable(InstallJob &Job, const setup::Layout &Layout)
+{
+    HANDLE Disk;
+    STATUS Status = NtCreateFile(&Disk, FILE_READ_DATA, DiskPath(Job.Disk).CStr(), FILE_OPEN, 0, nullptr);
+    if (!HZ_SUCCESS(Status)) {
+        Job.Error = "The disk cannot be reopened to verify its partition table.";
+        return Status;
+    }
+    static uint8_t Mbr[setup::kSectorSize], Primary[setup::kSectorSize], Backup[setup::kSectorSize];
+    static uint8_t Entries[setup::kGptEntrySectors * setup::kSectorSize];
+    static uint8_t ReadBack[setup::kGptEntrySectors * setup::kSectorSize];
+    setup::BuildGpt(Layout, Mbr, Primary, Entries, Backup);
+    uint64_t Last = Layout.DiskSectors - 1;
+    struct Check {
+        uint64_t Lba;
+        const uint8_t *Expected;
+        uint32_t Bytes;
+        const char *What;
+    } Checks[] = {
+        {0, Mbr, sizeof(Mbr), "protective MBR"},
+        {1, Primary, sizeof(Primary), "primary GPT header"},
+        {2, Entries, sizeof(Entries), "GPT entry array"},
+        {Last - setup::kGptEntrySectors, Entries, sizeof(Entries), "backup GPT entry array"},
+        {Last, Backup, sizeof(Backup), "backup GPT header"},
+    };
+    for (const Check &C : Checks) {
+        Status = ReadSector(Disk, C.Lba, ReadBack, C.Bytes);
+        if (!HZ_SUCCESS(Status) || memcmp(ReadBack, C.Expected, C.Bytes) != 0) {
+            NtClose(Disk);
+            Job.Error = hz::String::Format("The %s could not be read back as written.", C.What);
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+    }
+    NtClose(Disk);
+    return STATUS_SUCCESS;
+}
+
+/* Reads a freshly formatted volume back and checks its boot sector is the one Setup wrote (both
+   copies, the FAT32 signature, the volume label and the boot record signature). */
+STATUS VerifyVolume(InstallJob &Job, uint32_t Partition, const char *Label)
+{
+    hz::String Path = hz::String::Format("\\Device\\Harddisk%u\\Partition%u", Job.Disk, Partition);
+    HANDLE Device;
+    STATUS Status = NtCreateFile(&Device, FILE_READ_DATA, Path.CStr(), FILE_OPEN, 0, nullptr);
+    if (!HZ_SUCCESS(Status)) {
+        Job.Error = hz::String::Format("%s cannot be reopened to verify it (0x%08X).", Path.CStr(), (uint32_t)Status);
+        return Status;
+    }
+    static uint8_t Boot[setup::kSectorSize], Backup[setup::kSectorSize];
+    Status = ReadSector(Device, 0, Boot, sizeof(Boot));
+    if (HZ_SUCCESS(Status))
+        Status = ReadSector(Device, 6, Backup, sizeof(Backup));
+    NtClose(Device);
+    if (!HZ_SUCCESS(Status)) {
+        Job.Error = hz::String::Format("%s could not be read back.", Path.CStr());
+        return Status;
+    }
+    if (memcmp(Boot, Backup, sizeof(Boot)) != 0 || Boot[510] != 0x55 || Boot[511] != 0xAA ||
+        memcmp(Boot + 82, "FAT32   ", 8) != 0) {
+        Job.Error = hz::String::Format("%s does not carry the FAT32 boot sector Setup wrote.", Path.CStr());
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+    char Expected[11];
+    uint32_t Length = 0;
+    while (Label[Length])
+        Length++;
+    for (uint32_t i = 0; i < 11; i++)
+        Expected[i] = i < Length ? Label[i] : ' ';
+    if (memcmp(Boot + 71, Expected, 11) != 0) {
+        Job.Error = hz::String::Format("%s has an unexpected volume label.", Path.CStr());
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+    return STATUS_SUCCESS;
+}
+
+/* Walks the source tree again and confirms every file Setup copied is on the target with the size it
+   was copied with. File contents were already read back sector by sector as they were written. */
+STATUS CompareTree(const hz::String &From, const hz::String &To, const char *Skip, uint32_t &Checked)
+{
+    hz::Vector<hz::fs::Entry> Entries;
+    STATUS Status = hz::fs::List(From, Entries);
+    if (!HZ_SUCCESS(Status))
+        return Status;
+    for (const hz::fs::Entry &E : Entries) {
+        hz::String Source = hz::fs::Join(From, E.Name.CStr()), Target = hz::fs::Join(To, E.Name.CStr());
+        if (Skip && hz::fs::EqualNames(Source.CStr(), Skip))
+            continue;
+        if (E.Directory) {
+            Status = CompareTree(Source, Target, Skip, Checked);
+            if (!HZ_SUCCESS(Status))
+                return Status;
+            continue;
+        }
+        hz::fs::Entry Info;
+        Status = hz::fs::Stat(Target, Info);
+        if (!HZ_SUCCESS(Status) || Info.Directory || Info.Size != E.Size)
+            return STATUS_DEVICE_DATA_ERROR;
+        Checked++;
+    }
+    return STATUS_SUCCESS;
+}
+
+/* The verification stage: the partition table, both volumes, the boot configuration and the whole
+   installed tree are read back from the disk. Setup reports success only if all of them hold. */
+STATUS VerifyInstall(InstallJob &Job, const setup::Layout &Layout, const hz::String &Esp, const hz::String &System,
+                     const hz::String &InstallImage)
+{
+    Progress(Job, kStageBand[5], hz::String("Reading the partition table back"));
+    STATUS Status = VerifyPartitionTable(Job, Layout);
+    if (!HZ_SUCCESS(Status))
+        return Status;
+
+    Progress(Job, kStageBand[5] + 10, hz::String("Reading the formatted volumes back"));
+    Status = VerifyVolume(Job, 1, "EFI");
+    if (HZ_SUCCESS(Status))
+        Status = VerifyVolume(Job, 2, "NEXORAOS");
+    if (!HZ_SUCCESS(Status))
+        return Status;
+
+    Progress(Job, kStageBand[5] + 18, hz::String("Reading the boot configuration back"));
+    hz::String Configured, Expected = setup::BootConfiguration(Job.SystemGuid);
+    Status = hz::fs::ReadAll(hz::fs::Join(Esp, "boot\\limine\\limine.conf"), Configured, Expected.Length() + 1);
+    if (!HZ_SUCCESS(Status) || Configured != Expected) {
+        Job.Error = "The boot configuration on the EFI system partition does not match what Setup wrote.";
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    Progress(Job, kStageBand[5] + 22, hz::String("Checking every installed file"));
+    uint32_t Checked = 0;
+    Status = CompareTree(InstallImage, Esp, nullptr, Checked);
+    if (HZ_SUCCESS(Status))
+        Status = CompareTree(hz::String("C:\\Nexora"), hz::fs::Join(System, "Nexora"), "C:\\Nexora\\Apps\\setup.app", Checked);
+    if (!HZ_SUCCESS(Status)) {
+        if (Job.Error.Empty())
+            Job.Error = "A file is missing from the installed system or has the wrong size.";
+        return Status;
+    }
+    HzPrint("setup: verification passed (%u files present at their copied sizes; GPT, FAT32 and the boot menu)", Checked);
+    return STATUS_SUCCESS;
+}
+
 STATUS Install(InstallJob &Job)
 {
-    uint64_t Start = 0;
-    NtQueryUptime(&Start);
-    Progress(Job, 0, hz::String("Writing the partition table"));
+    NtQueryUptime(&Job.StartUs);
+
+    /* Before a single sector is written: does what Setup is about to copy fit? The check happens
+       here rather than after the erase, so a disk that cannot hold the installation is refused while
+       it is still intact. */
+    setup::Layout Planned;
+    uint64_t EspBytes = 0, SystemBytes = 0;
+    if (setup::PlanLayout(Job.ExpectedInfo.SectorCount, &Planned)) {
+        MeasurePayload(EspBytes, SystemBytes);
+        if (EspBytes > Planned.Esp.Sectors() * setup::kSectorSize) {
+            Job.Error = hz::String::Format("The EFI system partition (%s) cannot hold the boot files (%s).",
+                                           hz::fs::FormatSize(Planned.Esp.Sectors() * setup::kSectorSize).CStr(),
+                                           hz::fs::FormatSize(EspBytes).CStr());
+            return STATUS_DISK_FULL;
+        }
+        if (SystemBytes > Planned.System.Sectors() * setup::kSectorSize) {
+            Job.Error = hz::String::Format("The Nexora OS partition (%s) cannot hold the system (%s).",
+                                           hz::fs::FormatSize(Planned.System.Sectors() * setup::kSectorSize).CStr(),
+                                           hz::fs::FormatSize(SystemBytes).CStr());
+            return STATUS_DISK_FULL;
+        }
+    }
+
     setup::Layout Layout;
+    BeginStage(Job, 0, "Partitioning the disk");
     STATUS Status = Partition(Job, Layout);
     if (!HZ_SUCCESS(Status))
         return Status;
-    Progress(Job, 20, hz::String("Formatting the EFI system partition"));
+    BeginStage(Job, 1, "Formatting the EFI system partition");
     Status = Format(Job, 1, Layout.Esp, "EFI");
     if (!HZ_SUCCESS(Status))
         return Status;
-    Progress(Job, 35, hz::String("Formatting the Nexora OS partition"));
+    BeginStage(Job, 2, "Formatting the Nexora OS partition");
     Status = Format(Job, 2, Layout.System, "NEXORAOS");
     if (!HZ_SUCCESS(Status))
         return Status;
@@ -494,33 +731,34 @@ STATUS Install(InstallJob &Job)
     hz::String Esp = hz::String::Format("\\Device\\Harddisk%u\\Partition1\\", Job.Disk);
     hz::String System = hz::String::Format("\\Device\\Harddisk%u\\Partition2\\", Job.Disk);
     hz::String InstallImage("\\Device\\Ramdisk1\\"), SystemRoot("C:\\Nexora");
-    HZ_DISK_GEOMETRY LiveGeometry = {};
-    HANDLE Live;
-    if (HZ_SUCCESS(NtCreateFile(&Live, FILE_READ_DATA, "\\Device\\Ramdisk0", FILE_OPEN, 0, nullptr))) {
-        NtDeviceIoControlFile(Live, IOCTL_DISK_GET_GEOMETRY, nullptr, 0, &LiveGeometry, sizeof(LiveGeometry), nullptr);
-        NtClose(Live);
-    }
-    uint32_t Files = 0;
-    Measure(InstallImage, Job.TotalBytes, Files);
-    Measure(SystemRoot, Job.TotalBytes, Files);
-    Job.TotalBytes += LiveGeometry.SectorCount * LiveGeometry.BytesPerSector;
+    /* The measurement the pre-flight check already made is the progress total. */
+    Job.TotalBytes = EspBytes + SystemBytes;
 
-    /* The EFI system partition: boot loader, kernel, symbols, the system image, the menu. */
+    /* The EFI system partition: boot loader, kernel, symbols, the system image; and the system
+       partition: \Nexora (Setup's manifest unpinned: it is not offered as an installer there). */
+    BeginStage(Job, 3, "Copying system files");
     Status = CopyTree(Job, InstallImage, Esp, nullptr);
     if (HZ_SUCCESS(Status))
         Status = CopyDevice(Job, "\\Device\\Ramdisk0", hz::fs::Join(Esp, "boot\\ramdisk.tar"));
-    if (HZ_SUCCESS(Status))
-        Status = WriteText(Job, hz::fs::Join(Esp, "boot\\limine\\limine.conf"), setup::BootConfiguration(Job.SystemGuid));
     if (!HZ_SUCCESS(Status))
         return Status;
-    HzPrint("setup: boot loader, kernel and system image written to the EFI system partition");
-
-    /* The system partition: \Nexora (Setup's manifest unpinned: it is not offered as an
-       installer there), \Users, the first-boot marker. */
     hz::String Target = hz::fs::Join(System, "Nexora");
     Status = hz::fs::CreateDirectory(Target);
     if (HZ_SUCCESS(Status))
         Status = CopyTree(Job, SystemRoot, Target, "C:\\Nexora\\Apps\\setup.app");
+    if (!HZ_SUCCESS(Status))
+        return Status;
+    HzPrint("setup: boot loader, kernel and system image written to the EFI system partition");
+    HzPrint("setup: read-back verification passed (%u copied files; GPT, FAT32 and file contents)", Job.Files);
+    uint64_t End = 0;
+    NtQueryUptime(&End);
+    HzPrint("setup: copied %u files (%s) in %llu ms", Job.Files, hz::fs::FormatSize(Job.DoneBytes).CStr(),
+            (unsigned long long)((End - Job.StartUs) / 1000));
+
+    /* The files that turn the copied bytes into a Nexora OS installation: the boot menu, the
+       system-side copy of Setup's manifest, the first-boot marker and \Users. */
+    BeginStage(Job, 4, "Configuring the installed system");
+    Status = WriteText(Job, hz::fs::Join(Esp, "boot\\limine\\limine.conf"), setup::BootConfiguration(Job.SystemGuid));
     if (HZ_SUCCESS(Status)) {
         hz::fs::Settings Manifest;
         Manifest.Load(hz::String("C:\\Nexora\\Apps\\setup.app"));
@@ -546,12 +784,14 @@ STATUS Install(InstallJob &Job)
     }
     if (!HZ_SUCCESS(Status))
         return Status;
-    HzPrint("setup: read-back verification passed (%u copied files; GPT, FAT32 and file contents)", Job.Files);
-    uint64_t End = 0;
-    NtQueryUptime(&End);
-    HzPrint("setup: copied %u files (%s) in %llu ms", Job.Files, hz::fs::FormatSize(Job.DoneBytes).CStr(),
-            (unsigned long long)((End - Start) / 1000));
-    Progress(Job, 1000, hz::String("Finished"));
+
+    /* The installation is complete only if the disk reads back as written. */
+    BeginStage(Job, 5, "Verifying the installation");
+    Status = VerifyInstall(Job, Layout, Esp, System, InstallImage);
+    if (!HZ_SUCCESS(Status))
+        return Status;
+
+    Progress(Job, 1000, Job.StageName);
     return STATUS_SUCCESS;
 }
 
@@ -569,9 +809,47 @@ uint32_t InstallThread(void *Parameter)
 
 class Wizard;
 
+/* Windows 11 Setup paints its pages on a bloom of light over a deep, even background; this is the
+   same backdrop in the current colour scheme, and it covers the whole window as the first child. */
+class SetupBackdrop final : public Element {
+public:
+    void Paint(Painter &P) override
+    {
+        const Rect &B = Bounds();
+        bool Light = Theme::Current() == Theme::Scheme::Light;
+        P.FillVerticalGradient(B, 0.0f, Light ? 0xFFF7F8FB : 0xFF191C26, Light ? 0xFFE2E6EF : 0xFF0B0D13);
+        /* The bloom: wide, very soft rings of the accent colour, brightest near the wordmark. */
+        float Cx = B.X + B.Width * 0.78f, Cy = B.Y + B.Height * 0.10f;
+        for (int32_t i = 7; i >= 1; i--)
+            P.FillCircle(Cx, Cy, 34.0f + 26.0f * i, ScaleAlpha(Theme::Accent, Light ? 0.020f : 0.030f));
+    }
+};
+
+/* The product mark: the Nexora glyph on its accent tile, as Setup carries the Windows logo. */
+class LogoMark final : public Element {
+public:
+    LogoMark()
+    {
+        Width = 30;
+        Height = 30;
+        HitTestVisible = false;
+    }
+
+    void Paint(Painter &P) override
+    {
+        const Rect &B = Bounds();
+        P.FillRoundRect(B, 8, Theme::Accent);
+        P.DrawIcon(Icon::Nexora, Rect{B.X + 5, B.Y + 5, B.Width - 10, B.Height - 10}, Theme::TextOnAccent, 1.2f);
+    }
+};
+
 class WizardWindow final : public Window {
 public:
-    WizardWindow(Wizard *Owner, const char *Title) : Window(Title, 760, 540, HZ_WS_CAPTION | HZ_WS_MICA | HZ_WS_MINIMIZEBOX | HZ_WS_VISIBLE), Owner_(Owner) {}
+    /* Borderless and large, like the Windows 11 setup experience: the page is the window. */
+    WizardWindow(Wizard *Owner, const char *Title)
+        : Window(Title, 900, 620, HZ_WS_NOFRAME | HZ_WS_VISIBLE), Owner_(Owner)
+    {
+    }
     int64_t HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam) override;
 
 private:
@@ -583,7 +861,7 @@ class Wizard {
 public:
     virtual ~Wizard() = default;
     bool Create(const char *Title);
-    virtual void OnProgress(uint32_t PerMille, const hz::String &Text) {}
+    virtual void OnProgress(const ProgressUpdate &Update) {}
     virtual void OnFinished(STATUS Status, const hz::String &Error) {}
 
 protected:
@@ -595,22 +873,24 @@ protected:
     virtual void Back() {}
     virtual void PageShown(size_t Index) {}
     virtual void Cancel() {}
+    virtual void SecondaryAction() {} /* the extra action button some last pages need */
 
     Window *Main_ = nullptr;
     TextBlock *Title_ = nullptr, *Step_ = nullptr;
     Grid *Pages_ = nullptr;
     hz::Vector<StackPanel *> PageList_;
     size_t Page_ = 0;
-    Button *Back_ = nullptr, *Cancel_ = nullptr, *Primary_ = nullptr;
+    size_t StartPage_ = 0; /* where Create() opens the wizard; a first-boot wizard resumes here */
+    Button *Back_ = nullptr, *Cancel_ = nullptr, *Primary_ = nullptr, *Secondary_ = nullptr;
     hz::Vector<const char *> Titles_;
 };
 
 int64_t WizardWindow::HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam)
 {
     if (Message == kMsgProgress) {
-        hz::String *Text = reinterpret_cast<hz::String *>(LParam);
-        Owner_->OnProgress((uint32_t)WParam, *Text);
-        delete Text;
+        ProgressUpdate *Update = reinterpret_cast<ProgressUpdate *>(LParam);
+        Owner_->OnProgress(*Update);
+        delete Update;
         return 0;
     }
     if (Message == kMsgFinished) {
@@ -626,33 +906,57 @@ bool Wizard::Create(const char *Title)
 {
     Main_ = new WizardWindow(this, Title);
     Grid *Root = new Grid();
-    Root->Rows.Push(GridLength::AutoSize());
-    Root->Rows.Push(GridLength::Stars(1));
-    Root->Rows.Push(GridLength::Pixels(72));
-    StackPanel *Header = Root->Add<StackPanel>(Orientation::Vertical, 2);
-    Header->Padding = Thickness(32, 16, 32, 8);
-    Step_ = Header->Add<TextBlock>("", FontRole::Caption);
-    Step_->Foreground = Theme::Accent;
-    Title_ = Header->Add<TextBlock>("", FontRole::Title);
+    Root->Rows.Push(GridLength::AutoSize()); /* the product mark and the step */
+    Root->Rows.Push(GridLength::AutoSize()); /* the page title */
+    Root->Rows.Push(GridLength::Stars(1));   /* the page */
+    Root->Rows.Push(GridLength::AutoSize()); /* Back and the primary button */
+
+    SetupBackdrop *Backdrop = Root->Add<SetupBackdrop>();
+    Backdrop->GridRowSpan = 4;
+
+    Grid *Masthead = Root->Add<Grid>();
+    Masthead->Padding = Thickness(56, 44, 56, 0);
+    Masthead->Columns.Push(GridLength::AutoSize());
+    Masthead->Columns.Push(GridLength::Stars(1));
+    Masthead->Columns.Push(GridLength::AutoSize());
+    StackPanel *Brand = Masthead->Add<StackPanel>(Orientation::Horizontal, 10);
+    Brand->VerticalAlignment = Align::Center;
+    Brand->Add<LogoMark>();
+    TextBlock *Product = Brand->Add<TextBlock>("Nexora OS", FontRole::BodyStrong);
+    Product->VerticalAlignment = Align::Center;
+    Product->Foreground = Theme::TextPrimary;
+    Step_ = Masthead->Add<TextBlock>("", FontRole::Caption);
+    Step_->GridColumn = 2;
+    Step_->VerticalAlignment = Align::Center;
+    Step_->Foreground = Theme::TextSecondary;
+
+    Title_ = Root->Add<TextBlock>("", FontRole::Display);
+    Title_->GridRow = 1;
+    Title_->Margin = Thickness(56, 26, 56, 0);
+
     Pages_ = Root->Add<Grid>();
-    Pages_->GridRow = 1;
-    Pages_->Padding = Thickness(32, 8, 32, 8);
+    Pages_->GridRow = 2;
+    Pages_->Padding = Thickness(56, 18, 56, 18);
+
     Grid *Bar = Root->Add<Grid>();
-    Bar->GridRow = 2;
-    Bar->Background = 0x26000000;
-    Bar->Padding = Thickness(24, 0);
+    Bar->GridRow = 3;
+    Bar->Padding = Thickness(56, 0, 56, 44);
     Bar->Columns.Push(GridLength::Stars(1));
     Bar->Columns.Push(GridLength::AutoSize());
-    StackPanel *Buttons = Bar->Add<StackPanel>(Orientation::Horizontal, 8);
-    Buttons->GridColumn = 1;
-    Buttons->VerticalAlignment = Align::Center;
-    Back_ = Buttons->Add<Button>("Back");
-    Back_->MinWidth = 110;
-    Back_->OnClick = [this]() { Back(); };
-    Cancel_ = Buttons->Add<Button>("Cancel");
-    Cancel_->MinWidth = 110;
+    Cancel_ = Bar->Add<Button>("Cancel setup", ButtonStyle::Subtle);
+    Cancel_->VerticalAlignment = Align::Center;
     Cancel_->SetVisible(false);
     Cancel_->OnClick = [this]() { Cancel(); };
+    StackPanel *Buttons = Bar->Add<StackPanel>(Orientation::Horizontal, 12);
+    Buttons->GridColumn = 1;
+    Buttons->VerticalAlignment = Align::Center;
+    Back_ = Buttons->Add<Button>("Back", ButtonStyle::Subtle);
+    Back_->MinWidth = 110;
+    Back_->OnClick = [this]() { Back(); };
+    Secondary_ = Buttons->Add<Button>("", ButtonStyle::Standard);
+    Secondary_->MinWidth = 110;
+    Secondary_->SetVisible(false);
+    Secondary_->OnClick = [this]() { SecondaryAction(); };
     Primary_ = Buttons->Add<Button>("Next", ButtonStyle::Accent);
     Primary_->MinWidth = 110;
     Primary_->OnClick = [this]() { Next(); };
@@ -664,7 +968,7 @@ bool Wizard::Create(const char *Title)
         }
     };
     Build();
-    ShowPage(0);
+    ShowPage(StartPage_ < PageList_.Size() ? StartPage_ : 0);
     if (!Main_->Show())
         return false;
     Main_->SetFocus(Primary_);
@@ -673,7 +977,11 @@ bool Wizard::Create(const char *Title)
 
 StackPanel *Wizard::AddPage()
 {
-    StackPanel *P = Pages_->Add<StackPanel>(Orientation::Vertical, 12);
+    StackPanel *P = Pages_->Add<StackPanel>(Orientation::Vertical, 14);
+    /* Left-aligned in a column of a readable width, as Windows Setup lays its pages out. */
+    P->Width = 640;
+    P->HorizontalAlignment = Align::Start;
+    P->VerticalAlignment = Align::Start;
     P->SetVisible(false);
     PageList_.Push(P);
     return P;
@@ -693,7 +1001,7 @@ void Wizard::ShowPage(size_t Index)
         PageList_[i]->SetVisible(i == Index);
     Page_ = Index;
     Title_->SetText(Index < Titles_.Size() ? Titles_[Index] : "");
-    Step_->SetText(hz::String::Format("STEP %zu OF %zu", Index + 1, PageList_.Size()).CStr());
+    Step_->SetText(hz::String::Format("Step %zu of %zu", Index + 1, PageList_.Size()).CStr());
     Main_->InvalidateLayout();
     PageShown(Index);
 }
@@ -702,25 +1010,57 @@ void Wizard::ShowPage(size_t Index)
 
 class InstallWizard final : public Wizard {
 public:
-    void OnProgress(uint32_t PerMille, const hz::String &Text) override
+    void OnProgress(const ProgressUpdate &Update) override
     {
-        Bar_->SetValue(PerMille / 10.0f);
-        Status_->SetText(Text.CStr());
-        Percent_->SetText(hz::String::Format("%u%%", PerMille / 10).CStr());
+        TargetProgress_ = Update.PerMille / 10.0f;
+        Stage_->SetText(Update.StageCount ? hz::String::Format("Step %u of %u  %s", Update.Stage, Update.StageCount,
+                                                              Update.StageName.CStr()).CStr()
+                                          : Update.StageName.CStr());
+        Status_->SetText(Update.Detail.CStr());
+        Elapsed_->SetText(hz::String::Format("Elapsed %llu:%02llu", (unsigned long long)(Update.ElapsedMs / 60000),
+                                             (unsigned long long)((Update.ElapsedMs / 1000) % 60))
+                              .CStr());
+        if (!ProgressTimer_) {
+            DisplayedProgress_ = TargetProgress_;
+            Bar_->SetValue(DisplayedProgress_);
+            Percent_->SetText(hz::String::Format("%u%%", Update.PerMille / 10).CStr());
+        }
     }
 
     void OnFinished(STATUS Status, const hz::String &Error) override
     {
         Installing_ = false;
+        if (ProgressTimer_) {
+            Main_->KillTimer(ProgressTimer_);
+            ProgressTimer_ = 0;
+        }
+        if (Activity_)
+            Activity_->SetIndeterminate(false);
         Succeeded_ = HZ_SUCCESS(Status);
         if (Succeeded_) {
+            TargetProgress_ = DisplayedProgress_ = 100.0f;
+            Bar_->SetValue(100.0f);
+            Percent_->SetText("100%");
+            Stage_->SetText("Verification passed");
+            Status_->SetText("Finished");
             HzPrint("setup: done; Nexora OS is installed on disk %u", Disks_[Chosen_].Number);
-            DoneText_->SetText("Nexora OS is installed. Remove the installation media (detach the ISO) and restart; "
-                               "the computer then starts from the disk, and first-boot setup asks for your name.");
+            DoneText_->SetText(hz::String::Format(
+                                   "Nexora OS is installed on Disk %u. The partition table, both volumes, the boot "
+                                   "menu and all %u copied files were read back from the disk and match what Setup "
+                                   "wrote.\n\nRemove the installation media now (detach the ISO or unplug the USB "
+                                   "drive), then restart. The installed system is the default boot choice and "
+                                   "starts with first-boot setup, which asks for your name.",
+                                   Disks_[Chosen_].Number, Job_ ? Job_->Files : 0)
+                                   .CStr());
         } else {
             HzPrint("setup: failed: %s (0x%08X)", Error.CStr(), (uint32_t)Status);
-            DoneText_->SetText(hz::String::Format("Setup could not finish: %s The disk may hold a partial installation; "
-                                                  "you can run Setup again.", Error.CStr())
+            Stage_->SetText("Verification failed");
+            Status_->SetText("Stopped");
+            DoneText_->SetText(hz::String::Format(
+                                   "Setup could not finish: %s\n\nThe disk may hold a partial installation and is "
+                                   "not a working Nexora OS. Choose Try again to inspect the disks once more, or "
+                                   "Close and start Setup again from the installation media.",
+                                   Error.CStr())
                                    .CStr());
         }
         Titles_[4] = Succeeded_ ? "Installation complete" : "Installation failed";
@@ -747,6 +1087,21 @@ protected:
                                               "Limine boot loader (BSD license); see C:\\Nexora\\Licenses.",
                                               hz::fs::FormatSize(setup::MinimumDiskSectors() * 512).CStr())
                                .CStr());
+        /* This build installs with one locale, so the list has one entry rather than offering a switch
+           that would silently do nothing. Region and keyboard changes are a Settings task for later. */
+        Grid *Locale = Welcome->Add<Grid>();
+        Locale->Columns.Push(GridLength::AutoSize());
+        Locale->Columns.Push(GridLength::Stars(1));
+        TextBlock *LocaleLabel = Locale->Add<TextBlock>("Language and keyboard", FontRole::Body);
+        LocaleLabel->VerticalAlignment = Align::Center;
+        LocaleLabel->Foreground = Theme::TextPrimary;
+        ComboBox *LocaleBox = Locale->Add<ComboBox>();
+        LocaleBox->GridColumn = 1;
+        LocaleBox->Width = 320;
+        LocaleBox->HorizontalAlignment = Align::Start;
+        LocaleBox->Items.Push("English (United States) - US keyboard");
+        LocaleBox->SetSelectedIndex(0, false);
+        Paragraph(Welcome, "No other language or keyboard layout is available in this build.");
         Button *About = Welcome->Add<Button>("About Nexora OS", ButtonStyle::Standard);
         About->Glyph = Icon::Info;
         About->HorizontalAlignment = Align::Start;
@@ -820,17 +1175,29 @@ protected:
             if (Text == "ERASE")
                 StartInstall();
         };
+        Paragraph(Confirm, "Setup cannot be cancelled once the erase starts: its controls lock until the disk has "
+                           "been written and read back. Cancel setup here first if you want another disk.");
 
         StackPanel *Copying = AddPage();
-        Paragraph(Copying, "This takes a minute or two. Do not turn off the computer.");
+        Paragraph(Copying, "Installing Nexora OS. Keep your computer powered on while Setup prepares the disk and "
+                           "copies the complete system.");
+        Stage_ = Copying->Add<TextBlock>("Preparing", FontRole::BodyStrong);
+        Stage_->Foreground = Theme::TextPrimary;
         Bar_ = Copying->Add<ProgressBar>(0);
-        Bar_->Margin = Thickness(0, 12, 0, 0);
+        Bar_->Height = 8;
+        Bar_->Margin = Thickness(0, 4, 0, 0);
+        Activity_ = Copying->Add<ProgressBar>(0);
+        Activity_->Height = 4;
+        Activity_->Margin = Thickness(0, 2, 0, 0);
+        Activity_->SetEnabled(false);
+        Activity_->SetIndeterminate(true);
         Grid *Line = Copying->Add<Grid>();
         Line->Columns.Push(GridLength::Stars(1));
         Line->Columns.Push(GridLength::AutoSize());
         Status_ = Line->Add<TextBlock>("Preparing", FontRole::Body);
         Percent_ = Line->Add<TextBlock>("0%", FontRole::Body);
         Percent_->GridColumn = 1;
+        Elapsed_ = Copying->Add<TextBlock>("Elapsed 0:00", FontRole::Caption);
 
         StackPanel *Done = AddPage();
         DoneText_ = Paragraph(Done, "", Theme::TextPrimary);
@@ -845,6 +1212,10 @@ protected:
         Cancel_->SetVisible(Index == 2);
         Primary_->SetVisible(Index != 3);
         Primary_->SetText(Index == 2 ? "Install" : Index == 4 ? (Succeeded_ ? "Restart now" : "Close") : "Next");
+        /* The last page offers the second choice a finished installer has: restart or power off, and a
+           way back to the disk list after a failure. No page is shown while the disk is being written. */
+        Secondary_->SetVisible(Index == 4);
+        Secondary_->SetText(Succeeded_ ? "Shut down" : "Try again");
         if (Index == 1)
             Scan();
         if (Index == 2) {
@@ -863,16 +1234,31 @@ protected:
                                            : hz::String::Format("Existing partitions (%u); all will be erased:",
                                                                 D.Info.PartitionCount).CStr());
             Partitions_->SetItemCount(D.Partitions.Size());
+            /* The same measurement Install makes before it writes anything, so this page says whether
+               the installation fits instead of the copy running out of room. It goes in the layout
+               paragraph rather than a line of its own: the page already fills the window. */
+            uint64_t EspBytes = 0, SystemBytes = 0;
+            MeasurePayload(EspBytes, SystemBytes);
+            SpaceFits_ = EspBytes <= L.Esp.Sectors() * setup::kSectorSize &&
+                         SystemBytes <= L.System.Sectors() * setup::kSectorSize;
             Layout_->SetText(hz::String::Format("Partitions: EFI system partition, %s (FAT32); Nexora OS, %s (FAT32). "
-                                                "The live image's files are copied.",
+                                                "Setup copies about %s of boot files and %s of Nexora OS.%s",
                                                 hz::fs::FormatSize(L.Esp.Sectors() * 512).CStr(),
-                                                hz::fs::FormatSize(L.System.Sectors() * 512).CStr())
+                                                hz::fs::FormatSize(L.System.Sectors() * 512).CStr(),
+                                                hz::fs::FormatSize(EspBytes).CStr(),
+                                                hz::fs::FormatSize(SystemBytes).CStr(),
+                                                SpaceFits_ ? "" : " This disk is too small: Setup cannot continue.")
                                  .CStr());
+            Layout_->Foreground = SpaceFits_ ? Theme::TextSecondary : Theme::Accent;
             EraseText_->SetText("", false);
             Main_->SetFocus(EraseText_);
         } else if (Index == 1) {
             Main_->SetFocus(List_);
-        } else if (Index != 3) {
+        } else if (Index == 3) {
+            Stage_->SetText("Starting");
+            Status_->SetText("Preparing");
+            Elapsed_->SetText("Elapsed 0:00");
+        } else {
             Main_->SetFocus(Primary_);
         }
         UpdateButtons();
@@ -897,7 +1283,7 @@ protected:
             break;
         case 4:
             if (Succeeded_) {
-                HzPrint("setup: restarting");
+                HzPrint("setup: restarting into installed Nexora OS");
                 NtShutdownSystem(HZ_SHUTDOWN_REBOOT);
             } else {
                 Main_->Close();
@@ -919,6 +1305,21 @@ private:
     {
         if (Page_ == 2) {
             EraseText_->SetText("", false);
+            ShowPage(1);
+        }
+    }
+
+    /* The second button on the completion page: power off after a success, or re-inspect the disks
+       after a failure (the disk list is scanned again, so a changed layout is picked up). */
+    void SecondaryAction() override
+    {
+        if (Page_ != 4)
+            return;
+        if (Succeeded_) {
+            HzPrint("setup: shutting down after installing Nexora OS");
+            NtShutdownSystem(HZ_SHUTDOWN_POWER_OFF);
+        } else {
+            HzPrint("setup: retrying; inspecting the disks again");
             ShowPage(1);
         }
     }
@@ -948,7 +1349,7 @@ private:
         if (Page_ == 1)
             Enabled = Selectable();
         else if (Page_ == 2)
-            Enabled = EraseText_->Text() == "ERASE";
+            Enabled = EraseText_->Text() == "ERASE" && SpaceFits_; /* a disk too small is never erased */
         Primary_->SetEnabled(Enabled);
     }
 
@@ -961,6 +1362,18 @@ private:
         Job_->ExpectedPartitions = Disks_[Chosen_].Partitions;
         Installing_ = true;
         ShowPage(3);
+        ProgressTimer_ = Main_->SetTimer(16, [this]() {
+            float Difference = TargetProgress_ - DisplayedProgress_;
+            if (Difference > -0.1f && Difference < 0.1f)
+                DisplayedProgress_ = TargetProgress_;
+            else
+                DisplayedProgress_ += Difference * 0.2f;
+            Bar_->SetValue(DisplayedProgress_);
+            uint32_t Percent = (uint32_t)(DisplayedProgress_ + 0.5f);
+            Percent_->SetText(hz::String::Format("%u%%", Percent).CStr());
+        });
+        if (!ProgressTimer_)
+            HzPrint("setup: smooth progress animation unavailable; continuing with measured progress");
         HzPrint("setup: installing on disk %u", Job_->Disk);
         HANDLE Thread = 0;
         if (!HZ_SUCCESS(HzCreateThread(InstallThread, Job_, &Thread, nullptr))) {
@@ -975,11 +1388,15 @@ private:
     ListView *List_ = nullptr;
     ListView *Partitions_ = nullptr;
     TextBlock *Summary_ = nullptr, *PartitionSummary_ = nullptr, *Layout_ = nullptr, *Status_ = nullptr,
-              *Percent_ = nullptr, *DoneText_ = nullptr;
+              *Percent_ = nullptr, *DoneText_ = nullptr, *Stage_ = nullptr, *Elapsed_ = nullptr;
     TextBox *EraseText_ = nullptr;
-    ProgressBar *Bar_ = nullptr;
+    ProgressBar *Bar_ = nullptr, *Activity_ = nullptr;
     InstallJob *Job_ = nullptr;
+    uint64_t ProgressTimer_ = 0;
+    float DisplayedProgress_ = 0, TargetProgress_ = 0;
     bool Installing_ = false, Succeeded_ = false;
+    /* Whether the measurement on the Ready page says the installation fits the disk. */
+    bool SpaceFits_ = true;
 };
 
 /* ---- First-boot setup --------------------------------------------------------------------------------- */
@@ -1067,23 +1484,129 @@ private:
     uint32_t *Selected_;
 };
 
+/* A miniature desktop in one colour scheme; Space or a click chooses it. The preview is drawn from
+   fixed colours on purpose: it must show the scheme, not the one that is currently in force. */
+class LookChoice final : public Element {
+public:
+    hz::Function<void(bool)> OnChoose;
+
+    LookChoice(bool Light, bool *Selected) : Light_(Light), Selected_(Selected)
+    {
+        Width = 240;
+        Height = 158;
+        Focusable = true;
+    }
+
+    void Paint(Painter &P) override
+    {
+        const Rect &B = Bounds();
+        const Color Back = Light_ ? 0xFFF2F3F7 : 0xFF1B1E27;
+        const Color Ink = Light_ ? 0xFF1A1A1A : 0xFFFFFFFF;
+        const Color Panel = Light_ ? 0xFFFFFFFF : 0xFF23262F;
+        P.FillRoundRect(Rect{B.X + 4, B.Y + 4, B.Width - 8, 126}, 8, Back);
+        /* A window with a caption stripe, a page of text, and the taskbar with its tray. */
+        P.FillRoundRect(Rect{B.X + 20, B.Y + 20, B.Width - 40, 80}, 6, Panel);
+        P.FillRoundRect(Rect{B.X + 20, B.Y + 20, B.Width - 40, 13}, 6, Light_ ? 0xFFEAECF1 : 0xFF2E323D);
+        P.FillRoundRect(Rect{B.X + 32, B.Y + 43, 68, 7}, 3, WithAlpha(Ink, 0xB0));
+        P.FillRoundRect(Rect{B.X + 32, B.Y + 56, 102, 6}, 3, WithAlpha(Ink, 0x60));
+        P.FillRoundRect(Rect{B.X + 32, B.Y + 69, 82, 6}, 3, WithAlpha(Ink, 0x60));
+        P.FillRoundRect(Rect{B.X + 152, B.Y + 44, 38, 20}, 5, Theme::Accent);
+        P.FillRoundRect(Rect{B.X + 4, B.Y + 116, B.Width - 8, 14}, 5, Light_ ? 0xE6FFFFFF : 0xE62A2E38);
+        P.FillCircle(B.X + 26.0f, B.Y + 123.0f, 4.0f, Theme::Accent);
+        P.FillRoundRect(Rect{B.X + 104, B.Y + 121, 28, 4}, 2, WithAlpha(Ink, 0x70));
+        P.FillRoundRect(Rect{B.X + 142, B.Y + 121, 28, 4}, 2, WithAlpha(Ink, 0x70));
+        P.FillRoundRect(Rect{B.X + B.Width - 46, B.Y + 121, 28, 4}, 2, WithAlpha(Ink, 0x70));
+
+        if (*Selected_ == Light_)
+            P.StrokeRoundRect(Rect{B.X, B.Y, B.Width, 134}, 8, 3, Theme::Accent);
+        else if (IsHovered())
+            P.StrokeRoundRect(Rect{B.X, B.Y, B.Width, 134}, 8, 1, Theme::ControlStrongStroke);
+        P.TextLine(GetFont(*Selected_ == Light_ ? FontRole::BodyStrong : FontRole::Body),
+                   Rect{B.X + 4, B.Y + 138, B.Width - 8, 22}, Light_ ? "Light" : "Dark", Theme::TextPrimary);
+    }
+
+    void PaintOverlay(Painter &P) override
+    {
+        if (ShowsFocusRing())
+            P.FocusRing(Rect{Bounds().X, Bounds().Y, Bounds().Width, 134}, 8);
+    }
+    void OnPointerEnter() override { Invalidate(); }
+    void OnPointerLeave() override { Invalidate(); }
+    void OnPointerDown(PointerEvent &E) override
+    {
+        if (E.Button == HZ_MOUSE_LEFT)
+            E.Handled = true;
+    }
+    void OnPointerUp(PointerEvent &E) override
+    {
+        if (Bounds().Contains(E.Position))
+            Choose();
+    }
+    void OnKeyDown(KeyEvent &E) override
+    {
+        if (E.Key == HZ_VK_SPACE) {
+            E.Handled = true;
+            Choose();
+        }
+    }
+
+private:
+    void Choose()
+    {
+        if (*Selected_ == Light_)
+            return;
+        *Selected_ = Light_;
+        if (OnChoose)
+            OnChoose(Light_);
+        if (Parent())
+            Parent()->Invalidate();
+    }
+
+    bool Light_;
+    bool *Selected_;
+};
+
 class FirstBootWizard final : public Wizard {
 protected:
     void Build() override
     {
-        HZ_DISPLAY_INFO Display;
-        memset(&Display, 0, sizeof(Display));
-        NtUserGetDisplayInfo(&Display);
-        Wallpaper_ = Display.Wallpaper;
-        Titles_.Push("Welcome to Nexora OS");
+        if (!DefaultsLoaded_) {
+            HZ_DISPLAY_INFO Display;
+            memset(&Display, 0, sizeof(Display));
+            NtUserGetDisplayInfo(&Display);
+            Wallpaper_ = Display.Wallpaper;
+            /* The scheme the user last chose, so a rebuild (a scheme switch) keeps the choice. */
+            hz::fs::Settings Shell;
+            Shell.Load(hz::fs::SettingsPath("shell"));
+            Light_ = Shell.GetInt("Theme", 0) != 0;
+            /* Resume where an interrupted first boot stopped, so a power loss does not restart the
+               whole experience. The page is written after every Next(). */
+            int32_t Resume = Shell.GetInt("SetupPage", 0);
+            StartPage_ = (size_t)(Resume > 0 ? Resume : 0);
+            DefaultsLoaded_ = true;
+        }
+        Titles_.Push("Set up your device");
         Titles_.Push("Who is using this computer?");
+        Titles_.Push("Choose a look");
         Titles_.Push("Choose a wallpaper");
+        Titles_.Push("Region and time");
+        Titles_.Push("Choose your apps");
+        Titles_.Push("Connect");
+        Titles_.Push("Review your choices");
         Titles_.Push("You are all set");
 
         StackPanel *Hello = AddPage();
-        Paragraph(Hello, "Nexora OS now starts from this computer's disk. A couple of questions, and it is ready.",
+        Paragraph(Hello, "Nexora OS is installed and starts from this computer's disk. This one-time setup "
+                         "covers your account, how the desktop looks, which extra apps to keep and your "
+                         "network. Nothing here needs the internet.",
                   Theme::TextPrimary);
-        Paragraph(Hello, "Everything here can be changed later in Settings.");
+        Paragraph(Hello, "Everything can be changed later in Settings. Use Next to continue.");
+        Paragraph(Hello, "About Nexora OS: an independent 64-bit desktop system with a hybrid Windows 11 "
+                         "and macOS look. It is local-first: no account is required and nothing is sent "
+                         "anywhere.", Theme::TextSecondary);
+        Paragraph(Hello, "Accessibility: the whole wizard is keyboard-operable, Tab moves between controls "
+                         "and Enter confirms. Reduced motion and contrast options live in Settings.",
+                  Theme::TextSecondary);
 
         StackPanel *Who = AddPage();
         Paragraph(Who, "Your name appears on the lock screen and in Start, and names your documents folder.");
@@ -1110,10 +1633,90 @@ protected:
         Mismatch_ = Paragraph(Who, "", Theme::Accent);
 
         StackPanel *Look = AddPage();
-        Paragraph(Look, "Pick the desktop you like. It changes right away.");
-        Cards_ = Look->Add<StackPanel>(Orientation::Horizontal, 16);
+        Paragraph(Look, "Pick the colour of Nexora OS. It changes as soon as you choose, and Settings can change "
+                        "it again later.");
+        Looks_ = Look->Add<StackPanel>(Orientation::Horizontal, 16);
+        LookChoice *Dark = Looks_->Add<LookChoice>(false, &Light_);
+        Dark->OnChoose = [this](bool NowLight) { ChooseLook(NowLight); };
+        LookChoice *Light = Looks_->Add<LookChoice>(true, &Light_);
+        Light->OnChoose = [this](bool NowLight) { ChooseLook(NowLight); };
+
+        StackPanel *Backdrop = AddPage();
+        Paragraph(Backdrop, "Pick the desktop you like. It changes right away.");
+        Cards_ = Backdrop->Add<StackPanel>(Orientation::Horizontal, 16);
         for (uint32_t i = 0; i <= HZ_MAX_WALLPAPER; i++)
             Cards_->Add<WallpaperChoice>(i, &Wallpaper_);
+
+        StackPanel *Region = AddPage();
+        Paragraph(Region, "Nexora OS keeps the time and date the computer's firmware reports. This build "
+                          "installs one locale.");
+        Grid *RegionRow = Region->Add<Grid>();
+        RegionRow->Columns.Push(GridLength::AutoSize());
+        RegionRow->Columns.Push(GridLength::Stars(1));
+        RegionRow->ColumnSpacing = 12;
+        TextBlock *RegionLabel = RegionRow->Add<TextBlock>("Language and keyboard", FontRole::Body);
+        RegionLabel->VerticalAlignment = Align::Center;
+        RegionLabel->Foreground = Theme::TextPrimary;
+        ComboBox *RegionBox = RegionRow->Add<ComboBox>();
+        RegionBox->GridColumn = 1;
+        RegionBox->Width = 320;
+        RegionBox->HorizontalAlignment = Align::Start;
+        RegionBox->Items.Push("English (United States) - US keyboard");
+        RegionBox->SetSelectedIndex(0, false);
+        Paragraph(Region, "No other language or keyboard layout is available in this build, so the list has "
+                          "one entry rather than offering a switch that would do nothing. Region and time "
+                          "zone are a Settings task for later.", Theme::TextTertiary);
+
+        StackPanel *Apps = AddPage();
+        Paragraph(Apps, "Required system components are always installed. Choose the apps to keep; clear an "
+                        "app to leave it off. Apps come from the installation media, so this works offline.");
+        Grid *Locked = Apps->Add<Grid>();
+        Locked->Columns.Push(GridLength::AutoSize());
+        Locked->Columns.Push(GridLength::AutoSize());
+        Locked->ColumnSpacing = 24;
+        CheckBox *RequiredShell = Locked->Add<CheckBox>("Nexora shell (required)", true);
+        RequiredShell->SetEnabled(false);
+        CheckBox *RequiredSettings = Locked->Add<CheckBox>("Settings (required)", true);
+        RequiredSettings->GridColumn = 1;
+        RequiredSettings->SetEnabled(false);
+        Grid *Catalog = Apps->Add<Grid>();
+        Catalog->Columns.Push(GridLength::Stars(1));
+        Catalog->Columns.Push(GridLength::Stars(1));
+        Catalog->ColumnSpacing = 8;
+        Catalog->RowSpacing = 6;
+        struct AppEntry {
+            const char *Name;
+            bool Optional;
+        };
+        const AppEntry Entries[] = {
+            {"Files", false},        {"Browser", false},          {"Terminal", false},
+            {"Notepad", false},      {"Calculator", false},       {"Calendar", false},
+            {"Clock", false},        {"Stopwatch", false},        {"System Information", false},
+            {"Task Manager", false}, {"Photo Viewer", false},     {"Music Player", false},
+            {"Video Player", false}, {"Screenshot Tool", false},  {"Paint", true},
+            {"Email", true},         {"Contacts", true},          {"Archive Manager", true},
+            {"App Store", true},     {"PDF Viewer", true},
+        };
+        for (size_t i = 0; i < sizeof(Entries) / sizeof(Entries[0]); i++) {
+            CheckBox *Box = Catalog->Add<CheckBox>(Entries[i].Name, !Entries[i].Optional);
+            Box->GridColumn = (int32_t)(i % 2);
+            Box->GridRow = (int32_t)(i / 2);
+            AppBoxes_.Push(Box);
+            AppNames_.Push(Entries[i].Name);
+        }
+        Paragraph(Apps, "The catalog matches what this build can actually install and run; an app is listed "
+                        "only when it is present on the installation media.", Theme::TextTertiary);
+
+        StackPanel *Connect = AddPage();
+        Paragraph(Connect, "Nexora OS currently connects with wired Ethernet, which is set up automatically "
+                           "after setup. Wi-Fi and Bluetooth are not implemented in this build, so there is "
+                           "nothing to configure here.", Theme::TextPrimary);
+        Paragraph(Connect, "Choose Skip to continue. The desktop shows the real network state once it starts; "
+                           "no connection is simulated.", Theme::TextSecondary);
+
+        StackPanel *Review = AddPage();
+        Review_ = Paragraph(Review, "", Theme::TextPrimary);
+        Paragraph(Review, "Use Back to change anything. Finish saves your choices and starts the desktop.");
 
         StackPanel *Done = AddPage();
         Summary_ = Paragraph(Done, "", Theme::TextPrimary);
@@ -1124,20 +1727,30 @@ protected:
     void PageShown(size_t Index) override
     {
         Back_->SetVisible(Index > 0);
-        Primary_->SetText(Index == 3 ? "Finish" : "Next");
+        Primary_->SetText(Index == 8 ? "Finish" : "Next");
+        /* The connect page is the one page whose second action is a real escape hatch, not a retry. */
+        Secondary_->SetVisible(Index == 6);
+        Secondary_->SetText("Skip");
         if (Index == 1)
             Main_->SetFocus(Name_);
         else if (Index == 2)
+            Main_->SetFocus(Looks_->ChildAt(Light_ ? 1 : 0));
+        else if (Index == 3)
             Main_->SetFocus(Cards_->ChildAt(Wallpaper_ <= HZ_MAX_WALLPAPER ? Wallpaper_ : 0));
         else
             Main_->SetFocus(Primary_);
-        if (Index == 3)
-            Summary_->SetText(hz::String::Format("Hello, %s. Your documents go to C:\\Users\\%s\\Documents.%s",
-                                                 Name_->Text().CStr(), Name_->Text().CStr(),
-                                                 Password_->Text().Empty() ? ""
-                                                                           : " The lock screen asks for your password.")
-                                  .CStr());
+        if (Index == 7)
+            UpdateReview();
+        if (Index == 8)
+            UpdateSummary();
         UpdateButtons();
+    }
+
+    /* Skipping the connect page has the same effect as Next: the page has no state to keep. */
+    void SecondaryAction() override
+    {
+        if (Page_ == 6)
+            Next();
     }
 
     bool PasswordsMatch() const { return Password_->Text() == Confirm_->Text(); }
@@ -1146,7 +1759,8 @@ protected:
     {
         if (Page_ == 1 && (!setup::IsValidUserName(Name_->Text().CStr()) || !PasswordsMatch()))
             return;
-        if (Page_ < 3) {
+        if (Page_ < 8) {
+            SaveProgress(Page_ + 1);
             ShowPage(Page_ + 1);
             return;
         }
@@ -1155,11 +1769,110 @@ protected:
 
     void Back() override
     {
-        if (Page_ > 0)
+        if (Page_ > 0) {
+            SaveProgress(Page_ - 1);
             ShowPage(Page_ - 1);
+        }
     }
 
 private:
+    void UpdateSummary()
+    {
+        const char *Name = Name_->Text().CStr();
+        Summary_->SetText(hz::String::Format("Hello, %s. Your documents go to C:\\Users\\%s\\Documents.%s Nexora OS "
+                                             "will start in %s mode.",
+                                             Name, Name,
+                                             Password_->Text().Empty() ? ""
+                                                                       : " The lock screen asks for your password.",
+                                             Light_ ? "light" : "dark")
+                              .CStr());
+    }
+
+    /* The review page: every choice the earlier pages hold, in one place, so Back can be used to fix
+       any of them before the desktop starts. */
+    void UpdateReview()
+    {
+        const char *Name = Name_->Text().CStr();
+        uint32_t Count = 0;
+        for (const CheckBox *Box : AppBoxes_) {
+            if (Box->IsChecked())
+                Count++;
+        }
+        Review_->SetText(hz::String::Format(
+                             "Account: %s%s. Appearance: %s, wallpaper %u of %u. Language: English "
+                             "(United States). Apps kept: %u of %u. Network: not configured here; wired "
+                             "Ethernet is set up automatically once the desktop starts.",
+                             Name, Password_->Text().Empty() ? ", no password" : ", password at sign-in",
+                             Light_ ? "light" : "dark", Wallpaper_, (uint32_t)HZ_MAX_WALLPAPER + 1, Count,
+                             (uint32_t)AppBoxes_.Size())
+                             .CStr());
+    }
+
+    /* Writes the page's choices before moving on, so a power loss during setup resumes here rather
+       than at the beginning. The account is written again in Finish(), which also ends onboarding. */
+    void SaveProgress(size_t Index)
+    {
+        hz::fs::Settings Shell;
+        hz::String Path = hz::fs::SettingsPath("shell");
+        Shell.Load(Path);
+        Shell.SetInt("SetupPage", (int32_t)Index);
+        Shell.Set("UserName", Name_->Text().CStr());
+        Shell.SetInt("Theme", Light_ ? 1 : 0);
+        Shell.SetInt("Wallpaper", (int32_t)Wallpaper_);
+        Shell.Save(Path);
+    }
+
+    /* The scheme switches in place. Every element reads the palette when it is built, so the whole
+       page tree is rebuilt — through a timer, because this runs inside a card's own event handler. */
+    void ChooseLook(bool Light)
+    {
+        Light_ = Light;
+        Theme::ApplyScheme(Light ? Theme::Scheme::Light : Theme::Scheme::Dark);
+        HzPrint("setup: colour scheme set to %s", Light ? "light" : "dark");
+        if (RebuildTimer_)
+            return;
+        RebuildTimer_ = Main_->SetTimer(1, [this]() {
+            Main_->KillTimer(RebuildTimer_);
+            RebuildTimer_ = 0;
+            RebuildPages();
+        });
+    }
+
+    void RebuildPages()
+    {
+        hz::String Name = Name_->Text(), Password = Password_->Text(), Confirm = Confirm_->Text();
+        hz::Vector<hz::String> Kept;
+        for (size_t i = 0; i < AppBoxes_.Size(); i++) {
+            if (AppBoxes_[i]->IsChecked())
+                Kept.Push(AppNames_[i]);
+        }
+        size_t Index = Page_;
+        Pages_->ClearChildren();
+        PageList_.Clear();
+        Titles_.Clear();
+        /* The pages are gone with the tree; clear the pointers before ShowPage() reads them. */
+        Name_ = Password_ = Confirm_ = nullptr;
+        Hint_ = Summary_ = Mismatch_ = nullptr;
+        Cards_ = Looks_ = nullptr;
+        Review_ = nullptr;
+        AppBoxes_.Clear();
+        AppNames_.Clear();
+        Build();
+        Name_->SetText(Name.CStr(), false);
+        Password_->SetText(Password.CStr(), false);
+        Confirm_->SetText(Confirm.CStr(), false);
+        /* Re-tick the apps the user had chosen before the tree was rebuilt for a scheme switch. */
+        for (size_t i = 0; i < AppBoxes_.Size(); i++) {
+            for (const hz::String &App : Kept) {
+                if (App == AppNames_[i]) {
+                    AppBoxes_[i]->SetChecked(true, false);
+                    break;
+                }
+            }
+        }
+        ShowPage(Index);
+    }
+
     void UpdateButtons()
     {
         bool Valid = setup::IsValidUserName(Name_->Text().CStr());
@@ -1188,6 +1901,26 @@ private:
         Shell.SetInt("FirstBoot", 0);
         Shell.Set("UserName", Name.CStr());
         Shell.SetInt("Wallpaper", (int)Wallpaper_);
+        Shell.SetInt("Theme", Light_ ? 1 : 0); /* 0 dark, 1 light: the shell applies it at start-up */
+        /* The apps the user kept. The shell reads this when it builds Start and the app drawer, so an
+           app cleared here must not appear as an installed entry or a desktop shortcut. */
+        hz::String Kept;
+        for (size_t i = 0; i < AppBoxes_.Size(); i++) {
+            if (!AppBoxes_[i]->IsChecked())
+                continue;
+            if (!Kept.Empty())
+                Kept += ",";
+            Kept += AppNames_[i];
+        }
+        Shell.Set("Apps", Kept.CStr());
+        Shell.SetInt("AppsConfigured", 1);
+        /* The agreed starting desktop: Files, Terminal, Browser and Trash shortcuts. The bottom
+           taskbar always stays; the top dock is off until Settings turns it on. */
+        Shell.SetInt("ShortcutFiles", 1);
+        Shell.SetInt("ShortcutTerminal", 1);
+        Shell.SetInt("ShortcutBrowser", 1);
+        Shell.SetInt("ShortcutTrash", 1);
+        Shell.SetInt("SetupPage", 0); /* onboarding is finished; later boots must not resume it */
         bool Password = !Password_->Text().Empty();
         if (Password) {
             hz::String Salt = hz::crypto::NewSalt();
@@ -1195,8 +1928,8 @@ private:
             Shell.Set("PasswordHash", hz::crypto::HashPassword(Password_->Text(), Salt).CStr());
         }
         STATUS Status = Shell.Save(Path);
-        HzPrint("setup: first boot done: user '%s', wallpaper %u%s (settings saved: 0x%08X)", Name.CStr(), Wallpaper_,
-                Password ? ", password set" : "", (uint32_t)Status);
+        HzPrint("setup: first boot done: user '%s', wallpaper %u, %s mode%s (settings saved: 0x%08X)", Name.CStr(),
+                Wallpaper_, Light_ ? "light" : "dark", Password ? ", password set" : "", (uint32_t)Status);
         HWND ShellWindow = 0;
         if (HZ_SUCCESS(NtUserGetShellWindow(&ShellWindow)) && ShellWindow)
             NtUserPostMessage(ShellWindow, HZ_WM_SHELLREQUEST, HZ_SHELL_REQUEST_SETTINGS, 0);
@@ -1204,9 +1937,16 @@ private:
     }
 
     TextBox *Name_ = nullptr, *Password_ = nullptr, *Confirm_ = nullptr;
-    TextBlock *Hint_ = nullptr, *Summary_ = nullptr, *Mismatch_ = nullptr;
-    StackPanel *Cards_ = nullptr;
+    TextBlock *Hint_ = nullptr, *Summary_ = nullptr, *Mismatch_ = nullptr, *Review_ = nullptr;
+    StackPanel *Cards_ = nullptr, *Looks_ = nullptr;
+    /* The app-selection page: one check box per catalog entry, with the label kept alongside it so the
+       kept apps can be restored after a rebuild and saved by name in Finish(). */
+    hz::Vector<CheckBox *> AppBoxes_;
+    hz::Vector<hz::String> AppNames_;
     uint32_t Wallpaper_ = 0;
+    bool Light_ = false;       /* the colour scheme chosen on the "Choose a look" page */
+    bool DefaultsLoaded_ = false; /* the display and the saved scheme are read once */
+    uint64_t RebuildTimer_ = 0;   /* one-shot: rebuilds the pages after a scheme switch */
 };
 
 }  // namespace
@@ -1216,6 +1956,10 @@ extern "C" int main(int argc, char **argv)
     bool FirstBoot = argc > 1 && hz::fs::EqualNames(argv[1], "firstboot");
     Wizard *App = nullptr;
     if (FirstBoot) {
+        /* Start in the saved colour scheme, so Setup and the desktop that follows it agree. */
+        hz::fs::Settings Saved;
+        Saved.Load(hz::fs::SettingsPath("shell"));
+        Theme::ApplyScheme(Saved.GetInt("Theme", 0) != 0 ? Theme::Scheme::Light : Theme::Scheme::Dark);
         App = new FirstBootWizard();
         if (!App->Create("Set up Nexora OS")) {
             HzPrint("setup: cannot create the window");

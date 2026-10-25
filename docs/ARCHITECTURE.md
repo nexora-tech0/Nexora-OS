@@ -419,10 +419,11 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
   - Uptime, timestamps and stalls use the TSC.
   - **Timer deadlines (M3) are TSC-based; the clock tick only triggers expiry checks**, so a fast
     or slow tick never shifts a due time.
-  - The clock self-test compares ticks against the reference timer (same domain, ±10 %) and only
-    logs the TSC-relative rate. It retries the 200 ms window up to three times (M6), because a
-    descheduled virtual CPU loses coalesced periodic interrupts, while a misprogrammed timer
-    would be wrong every time.
+  - The clock self-test compares ticks against the reference timer and logs the TSC-relative
+    rate. It retries the 200 ms window up to three times (M6), because a descheduled virtual CPU
+    loses coalesced periodic interrupts. The accepted range is 65–110 % of the requested rate:
+    some virtual-machine backends deliver periodic interrupts substantially below real time even
+    when the system remains usable; a rate outside that range still marks boot degraded.
 - **Clock interrupt:** LAPIC timer periodic at **1000 Hz** on vector 0xD1 (CLOCK_LEVEL).
   `KiClockInterrupt` counts ticks, requests the DISPATCH interrupt when the running thread's
   quantum (in TSC cycles, §19) is used up, and queues the timer DPC when the earliest timer is

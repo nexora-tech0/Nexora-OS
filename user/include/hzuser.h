@@ -89,6 +89,14 @@ void HzBlendPixel(HZ_CANVAS *Canvas, int32_t X, int32_t Y, uint32_t Color, uint3
 HZ_FONT *HzLoadFont(const char *Path, int32_t PixelHeight);
 /* The standard fonts (loaded on first use; NULL if C:\Nexora\Fonts is missing). */
 HZ_FONT *HzGetFont(int Which);
+/* The icon font (Material Icons, third_party/icons/material, Apache-2.0) at a pixel size, loaded on
+   first use and cached per size; NULL if C:\Nexora\Fonts\MaterialIcons-Regular.ttf is missing, so
+   callers can fall back to the vector icons. */
+HZ_FONT *HzIconFont(int32_t PixelHeight);
+/* Draws one glyph (an icon code point) centred in a box by its ink, which is what makes an icon
+   look centred whatever its shape. Does nothing when Font is NULL or the code point is blank. */
+void HzDrawGlyphCentered(HZ_CANVAS *Canvas, HZ_FONT *Font, uint32_t CodePoint, int32_t CenterX, int32_t CenterY,
+                         uint32_t Color);
 int32_t HzFontAscent(const HZ_FONT *Font);
 int32_t HzFontLineHeight(const HZ_FONT *Font);
 int32_t HzMeasureText(HZ_FONT *Font, const char *Text);

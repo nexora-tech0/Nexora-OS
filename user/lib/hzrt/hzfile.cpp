@@ -626,6 +626,238 @@ bool IsValidUserName(const char *Name)
     return strcmp(Name, ".") != 0 && strcmp(Name, "..") != 0;
 }
 
+/* ---- Trash (recycle bin) ---------------------------------------------------------------------- */
+
+String TrashFolder()
+{
+    return String("C:\\Nexora\\Trash");
+}
+
+namespace {
+
+String TrashFolderPath(const String &Name)
+{
+    return Join(TrashFolder(), Name.CStr());
+}
+
+String TrashIndexPath()
+{
+    return Join(TrashFolder(), "index.ini");
+}
+
+void EnsureTrashFolder()
+{
+    bool Directory = false;
+    if (!Exists(TrashFolder(), &Directory))
+        CreateDirectory(TrashFolder());
+}
+
+/* The index is plain "Item<number>=<original path>|<deleted time>" lines; it is written whole
+   because items are added and removed. */
+bool LoadTrashIndex(Vector<TrashItem> &Out)
+{
+    Out.Clear();
+    String Text;
+    if (!HZ_SUCCESS(ReadAll(TrashIndexPath(), Text)))
+        return false;
+    Settings Index;
+    if (!Settings::Parse(Text.CStr(), Text.Length(), Index))
+        return false;
+    for (const Settings::Item &Line : Index.Items()) {
+        if (!Line.Key.StartsWith("Item"))
+            continue;
+        size_t Bar = Line.Value.Find("|");
+        if (Bar == NotFound)
+            continue;
+        TrashItem Item;
+        Item.Name = Line.Key.Substring(4);
+        Item.OriginalPath = Line.Value.Substring(0, Bar);
+        Item.OriginalName = FileName(Item.OriginalPath);
+        Item.DeletedAt = 0;
+        for (const char *P = Line.Value.CStr() + Bar + 1; *P >= '0' && *P <= '9'; P++)
+            Item.DeletedAt = Item.DeletedAt * 10 + (uint64_t)(*P - '0');
+        Out.Push(Move(Item));
+    }
+    return true;
+}
+
+STATUS SaveTrashIndex(const Vector<TrashItem> &Items)
+{
+    EnsureTrashFolder();
+    String Text("# Nexora OS trash index: one line per deleted item.\n");
+    for (const TrashItem &Item : Items)
+        Text.Append(String::Format("Item%s=%s|%llu\n", Item.Name.CStr(), Item.OriginalPath.CStr(),
+                                   (unsigned long long)Item.DeletedAt)
+                        .CStr());
+    return WriteAll(TrashIndexPath(), Text.CStr(), Text.Length());
+}
+
+/* A free name in Path's folder: "notes.txt" -> "notes (2).txt", "notes (3).txt", ... */
+String FreeName(const String &Path)
+{
+    bool Directory = false;
+    if (!Exists(Path, &Directory))
+        return Path;
+    String Name = FileName(Path);
+    size_t Dot = NotFound;
+    for (size_t i = 1; i < Name.Length(); i++)
+        if (Name.CStr()[i] == '.')
+            Dot = i;
+    String Stem = Dot == NotFound ? Name : Name.Substring(0, Dot);
+    String Suffix = Dot == NotFound ? String() : Name.Substring(Dot);
+    String Folder = Parent(Path);
+    for (unsigned i = 2; i < 1000; i++) {
+        String Candidate = Join(Folder, String::Format("%s (%u)%s", Stem.CStr(), i, Suffix.CStr()).CStr());
+        if (!Exists(Candidate, &Directory))
+            return Candidate;
+    }
+    return Path;
+}
+
+void SortByNewest(Vector<TrashItem> &Items)
+{
+    for (size_t i = 1; i < Items.Size(); i++) {
+        TrashItem Key = Items[i];
+        size_t j = i;
+        while (j > 0 && Items[j - 1].DeletedAt < Key.DeletedAt) {
+            Items[j] = Items[j - 1];
+            j--;
+        }
+        Items[j] = Key;
+    }
+}
+
+}  // namespace
+
+STATUS Trash(const String &Path)
+{
+    if (Path.Empty() || IsRoot(Path) || IsInside(Path, TrashFolder()) || EqualNames(Path.CStr(), TrashFolder().CStr()))
+        return STATUS_INVALID_PARAMETER;
+    EnsureTrashFolder();
+    Vector<TrashItem> Items;
+    LoadTrashIndex(Items);
+    int Highest = 0;
+    for (const TrashItem &Item : Items) {
+        int Number = 0;
+        for (const char *P = Item.Name.CStr(); *P >= '0' && *P <= '9'; P++)
+            Number = Number * 10 + (*P - '0');
+        if (Number > Highest)
+            Highest = Number;
+    }
+    String Name = String::Format("%d", Highest + 1);
+    STATUS Status = MoveTree(Path, TrashFolderPath(Name));
+    if (!HZ_SUCCESS(Status))
+        return Status;
+    TrashItem Item;
+    Item.Name = Name;
+    Item.OriginalPath = Path;
+    Item.OriginalName = FileName(Path);
+    NtQuerySystemTime(&Item.DeletedAt);
+    Items.Push(Move(Item));
+    return SaveTrashIndex(Items);
+}
+
+STATUS TrashList(Vector<TrashItem> &Out)
+{
+    Out.Clear();
+    Vector<Entry> Stored;
+    if (!HZ_SUCCESS(List(TrashFolder(), Stored)))
+        return STATUS_SUCCESS; /* no trash folder yet: nothing was ever deleted */
+    Vector<TrashItem> Items;
+    LoadTrashIndex(Items);
+    for (const Entry &Stored_ : Stored) {
+        if (!Stored_.Directory)
+            continue;
+        bool Found = false;
+        for (const TrashItem &Item : Items)
+            if (Item.Name == Stored_.Name) {
+                Out.Push(Item);
+                Found = true;
+                break;
+            }
+        if (!Found) { /* an item the index does not know: it can still be put back */
+            TrashItem Item;
+            Item.Name = Stored_.Name;
+            Item.OriginalName = Stored_.Name;
+            Item.DeletedAt = Stored_.Modified;
+            Out.Push(Move(Item));
+        }
+    }
+    SortByNewest(Out);
+    return STATUS_SUCCESS;
+}
+
+STATUS TrashRestore(const String &Name, String *RestoredPath)
+{
+    if (Name.Empty() || Name.Find("\\") != NotFound || Name.Find("/") != NotFound)
+        return STATUS_INVALID_PARAMETER;
+    Vector<TrashItem> Items;
+    LoadTrashIndex(Items);
+    String Target;
+    for (size_t i = 0; i < Items.Size(); i++)
+        if (Items[i].Name == Name) {
+            Target = Items[i].OriginalPath;
+            Items.Erase(i);
+            break;
+        }
+    if (Target.Empty()) /* not in the index: the documents folder is the best guess */
+        Target = Join(DocumentsFolder(), Name.CStr());
+    String Folder = Parent(Target);
+    bool Directory = false;
+    if (!Exists(Folder, &Directory))
+        Target = Join(DocumentsFolder(), FileName(Target).CStr());
+    Target = FreeName(Target);
+    STATUS Status = MoveTree(TrashFolderPath(Name), Target);
+    if (!HZ_SUCCESS(Status))
+        return Status;
+    if (RestoredPath)
+        *RestoredPath = Target;
+    return SaveTrashIndex(Items);
+}
+
+STATUS TrashDelete(const String &Name)
+{
+    if (Name.Empty() || Name.Find("\\") != NotFound || Name.Find("/") != NotFound)
+        return STATUS_INVALID_PARAMETER;
+    Vector<TrashItem> Items;
+    LoadTrashIndex(Items);
+    for (size_t i = 0; i < Items.Size(); i++)
+        if (Items[i].Name == Name) {
+            Items.Erase(i);
+            break;
+        }
+    STATUS Status = DeleteTree(TrashFolderPath(Name));
+    if (!HZ_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_NOT_FOUND)
+        return Status;
+    return SaveTrashIndex(Items);
+}
+
+STATUS TrashEmpty()
+{
+    Vector<Entry> Stored;
+    List(TrashFolder(), Stored);
+    for (const Entry &Entry_ : Stored) {
+        if (!Entry_.Directory)
+            continue;
+        STATUS Status = DeleteTree(TrashFolderPath(Entry_.Name));
+        if (!HZ_SUCCESS(Status))
+            return Status;
+    }
+    Delete(TrashIndexPath());
+    return STATUS_SUCCESS;
+}
+
+bool TrashHasItems()
+{
+    Vector<Entry> Stored;
+    if (!HZ_SUCCESS(List(TrashFolder(), Stored)))
+        return false;
+    for (const Entry &Entry_ : Stored)
+        if (Entry_.Directory)
+            return true;
+    return false;
+}
+
 /* ---- Local time (M11) --------------------------------------------------------------------------- */
 
 const char *const MonthNames[12] = {"January", "February", "March",     "April",   "May",      "June",
@@ -697,16 +929,15 @@ String FormatTime(uint64_t HzTime)
 {
     if (HzTime < HZ_TIME_UNIX_EPOCH)
         return String("");
-    int64_t Seconds = (int64_t)((HzTime - HZ_TIME_UNIX_EPOCH) / HZ_TIME_UNITS_PER_SECOND);
-    int64_t Days = Seconds / 86400, OfDay = Seconds % 86400;
-    int64_t Z = Days + 719468, Era = Z / 146097;
-    unsigned Doe = (unsigned)(Z - Era * 146097);
-    unsigned Yoe = (Doe - Doe / 1460 + Doe / 36524 - Doe / 146096) / 365;
-    unsigned Doy = Doe - (365 * Yoe + Yoe / 4 - Yoe / 100), Mp = (5 * Doy + 2) / 153;
-    unsigned Day = Doy - (153 * Mp + 2) / 5 + 1, Month = Mp < 10 ? Mp + 3 : Mp - 9;
-    long long Year = (long long)Yoe + Era * 400 + (Month <= 2);
-    return String::Format("%04lld-%02u-%02u %02lld:%02lld", Year, Month, Day, (long long)(OfDay / 3600),
-                          (long long)(OfDay / 60 % 60));
+    return FormatTime(HzTime, 0);
+}
+
+String FormatTime(uint64_t HzTime, int OffsetMinutes)
+{
+    if (HzTime < HZ_TIME_UNIX_EPOCH)
+        return String("");
+    CivilTime T = ToCivil(HzTime, OffsetMinutes);
+    return String::Format("%04lld-%02u-%02u %02u:%02u", T.Year, T.Month, T.Day, T.Hour, T.Minute);
 }
 
 const char *StatusText(STATUS Status)

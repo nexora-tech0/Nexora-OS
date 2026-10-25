@@ -35,6 +35,152 @@ Rect Rect::Deflate(const Thickness &T) const
     return Rect{X + T.Left, Y + T.Top, hz::Max(Width - T.Horizontal(), 0), hz::Max(Height - T.Vertical(), 0)};
 }
 
+/* ---- Theme --------------------------------------------------------------------------------------- */
+
+namespace Theme {
+
+namespace {
+
+struct Palette {
+    Color TextPrimary, TextSecondary, TextTertiary, TextDisabled;
+    Color TextOnAccent, Accent, AccentHover, AccentPressed, AccentDisabled, AccentSelection;
+    Color ControlFill, ControlFillHover, ControlFillPressed, ControlFillDisabled;
+    Color ControlStroke, ControlStrongStroke, ControlStrongStrokeDisabled;
+    Color SubtleFillHover, SubtleFillPressed, InputActive;
+    Color CardBackground, CardStroke, Divider, SolidBackground, PopupBackground;
+    Color FocusStroke, FocusStrokeInner, KnobFill;
+    Color Glass, FlyoutBackground, HoverRow, FooterBand;
+};
+
+/* The dark scheme: white ink on dark glass, the sun on the horizon as the accent. */
+constexpr Palette kDark = {
+    .TextPrimary = 0xFFFFFFFF,
+    .TextSecondary = 0xC8FFFFFF,
+    .TextTertiary = 0x8BFFFFFF,
+    .TextDisabled = 0x5DFFFFFF,
+    .TextOnAccent = 0xFF24150D,
+    .Accent = 0xFFFF9F5A,
+    .AccentHover = 0xFFFFB37C,
+    .AccentPressed = 0xFFE58A48,
+    .AccentDisabled = 0x28FFFFFF,
+    .AccentSelection = 0x99FF9F5A,
+    .ControlFill = 0x0FFFFFFF,
+    .ControlFillHover = 0x17FFFFFF,
+    .ControlFillPressed = 0x08FFFFFF,
+    .ControlFillDisabled = 0x0BFFFFFF,
+    .ControlStroke = 0x14FFFFFF,
+    .ControlStrongStroke = 0x8BFFFFFF,
+    .ControlStrongStrokeDisabled = 0x28FFFFFF,
+    .SubtleFillHover = 0x0FFFFFFF,
+    .SubtleFillPressed = 0x0AFFFFFF,
+    .InputActive = 0xC01C1C24,
+    .CardBackground = 0x0DFFFFFF,
+    .CardStroke = 0x12FFFFFF,
+    .Divider = 0x15FFFFFF,
+    .SolidBackground = 0xFF202020,
+    .PopupBackground = 0xFF2B2A30,
+    .FocusStroke = 0xFFFFFFFF,
+    .FocusStrokeInner = 0xB3000000,
+    .KnobFill = 0xFFFFFFFF,
+    .Glass = 0x523D424F,
+    .FlyoutBackground = 0xB02B2E37,
+    .HoverRow = 0x1CFFFFFF,
+    .FooterBand = 0x26000000,
+};
+
+/* The light scheme: near-black ink on paper. The glass surfaces become porcelain, and the fills that
+   were translucent white become translucent black so they stay visible on a light background. */
+constexpr Palette kLight = {
+    .TextPrimary = 0xFF1A1A1A,
+    .TextSecondary = 0xC81A1A1A,
+    .TextTertiary = 0x8B1A1A1A,
+    .TextDisabled = 0x5D1A1A1A,
+    .TextOnAccent = 0xFF2A1708,
+    .Accent = 0xFFF08840,
+    .AccentHover = 0xFFFF9A56,
+    .AccentPressed = 0xFFD9702C,
+    .AccentDisabled = 0x28000000,
+    .AccentSelection = 0x99F08840,
+    .ControlFill = 0x0F000000,
+    .ControlFillHover = 0x17000000,
+    .ControlFillPressed = 0x08000000,
+    .ControlFillDisabled = 0x0B000000,
+    .ControlStroke = 0x14000000,
+    .ControlStrongStroke = 0x8B000000,
+    .ControlStrongStrokeDisabled = 0x28000000,
+    .SubtleFillHover = 0x0F000000,
+    .SubtleFillPressed = 0x0A000000,
+    .InputActive = 0xF2FFFFFF,
+    .CardBackground = 0x0D000000,
+    .CardStroke = 0x12000000,
+    .Divider = 0x15000000,
+    .SolidBackground = 0xFFF3F3F3,
+    .PopupBackground = 0xFFF6F6F8,
+    .FocusStroke = 0xFF000000,
+    .FocusStrokeInner = 0xB3FFFFFF,
+    .KnobFill = 0xFFFFFFFF,
+    .Glass = 0xA6EFEFF4,
+    .FlyoutBackground = 0xF2FAFAFC,
+    .HoverRow = 0x14000000,
+    .FooterBand = 0x12000000,
+};
+
+Scheme g_Scheme = Scheme::Dark;
+
+void Apply(const Palette &P)
+{
+    TextPrimary = P.TextPrimary;
+    TextSecondary = P.TextSecondary;
+    TextTertiary = P.TextTertiary;
+    TextDisabled = P.TextDisabled;
+    TextOnAccent = P.TextOnAccent;
+    Accent = P.Accent;
+    AccentHover = P.AccentHover;
+    AccentPressed = P.AccentPressed;
+    AccentDisabled = P.AccentDisabled;
+    AccentSelection = P.AccentSelection;
+    ControlFill = P.ControlFill;
+    ControlFillHover = P.ControlFillHover;
+    ControlFillPressed = P.ControlFillPressed;
+    ControlFillDisabled = P.ControlFillDisabled;
+    ControlStroke = P.ControlStroke;
+    ControlStrongStroke = P.ControlStrongStroke;
+    ControlStrongStrokeDisabled = P.ControlStrongStrokeDisabled;
+    SubtleFillHover = P.SubtleFillHover;
+    SubtleFillPressed = P.SubtleFillPressed;
+    InputActive = P.InputActive;
+    CardBackground = P.CardBackground;
+    CardStroke = P.CardStroke;
+    Divider = P.Divider;
+    SolidBackground = P.SolidBackground;
+    PopupBackground = P.PopupBackground;
+    FocusStroke = P.FocusStroke;
+    FocusStrokeInner = P.FocusStrokeInner;
+    KnobFill = P.KnobFill;
+    Glass = P.Glass;
+    FlyoutBackground = P.FlyoutBackground;
+    HoverRow = P.HoverRow;
+    FooterBand = P.FooterBand;
+}
+
+}  // namespace
+
+void ApplyScheme(Scheme S)
+{
+    g_Scheme = S;
+    if (S == Scheme::Light)
+        Apply(kLight);
+    else
+        Apply(kDark);
+}
+
+Scheme Current()
+{
+    return g_Scheme;
+}
+
+}  // namespace Theme
+
 /* ---- Colours and fonts --------------------------------------------------------------------------- */
 
 Color WithAlpha(Color C, uint32_t Alpha)
@@ -315,8 +461,88 @@ void Painter::FocusRing(const Rect &R, float Radius)
     StrokeRoundRect(Inner, Radius + 1, 1, Theme::FocusStrokeInner);
 }
 
+namespace {
+
+/* The Material Icons code point for each hzui icon (third_party/icons/material). 0 means "no
+   glyph", and DrawIcon then draws the vector path below: Icon::Nexora is the product mark, which
+   Material Icons does not contain. */
+uint32_t IconCodePoint(Icon Kind)
+{
+    switch (Kind) {
+    case Icon::None: return 0;
+    case Icon::Check: return 0xE5CA;          /* check */
+    case Icon::ChevronDown: return 0xE5CF;    /* expand_more */
+    case Icon::ChevronUp: return 0xE5CE;      /* expand_less */
+    case Icon::ChevronLeft: return 0xE408;    /* navigate_before */
+    case Icon::ChevronRight: return 0xE409;   /* navigate_next */
+    case Icon::Close: return 0xE5CD;          /* close */
+    case Icon::Add: return 0xE145;            /* add */
+    case Icon::Remove: return 0xE15B;         /* remove */
+    case Icon::Search: return 0xE8B6;         /* search */
+    case Icon::More: return 0xE5D3;           /* more_horiz */
+    case Icon::Info: return 0xE88E;           /* info */
+    case Icon::Clock: return 0xE8B5;          /* schedule */
+    case Icon::Home: return 0xE88A;           /* home */
+    case Icon::Settings: return 0xE8B8;       /* settings */
+    case Icon::Star: return 0xE838;           /* star */
+    case Icon::Power: return 0xE8AC;          /* power_settings_new */
+    case Icon::Volume: return 0xE050;         /* volume_up */
+    case Icon::Sun: return 0xE518;            /* light_mode */
+    case Icon::Moon: return 0xE51C;           /* dark_mode */
+    case Icon::Leaf: return 0xEA35;           /* eco */
+    case Icon::Plane: return 0xE539;          /* flight */
+    case Icon::Folder: return 0xE2C7;         /* folder */
+    case Icon::Document: return 0xE873;       /* description */
+    case Icon::Calendar: return 0xE935;       /* calendar_today */
+    case Icon::Drive: return 0xE1DB;          /* storage */
+    case Icon::Prompt: return 0xEB8E;         /* terminal */
+    case Icon::Calculator: return 0xEA5F;     /* calculate */
+    case Icon::Chart: return 0xE26B;          /* bar_chart */
+    case Icon::ArrowUp: return 0xE5D8;        /* arrow_upward */
+    case Icon::Pencil: return 0xE3C9;         /* edit */
+    case Icon::Palette: return 0xE40A;        /* palette */
+    case Icon::Stopwatch: return 0xE425;      /* timer */
+    case Icon::Globe: return 0xE80B;          /* public */
+    case Icon::Trash: return 0xE872;          /* delete */
+    case Icon::Save: return 0xE161;           /* save */
+    case Icon::Open: return 0xE2C8;           /* folder_open */
+    case Icon::Refresh: return 0xE5D5;        /* refresh */
+    case Icon::Cut: return 0xE14E;            /* content_cut */
+    case Icon::Copy: return 0xE14D;           /* content_copy */
+    case Icon::Paste: return 0xE14F;          /* content_paste */
+    case Icon::Person: return 0xE7FD;         /* person */
+    case Icon::Cube: return 0xE9FE;           /* view_in_ar */
+    case Icon::Wifi: return 0xE63E;           /* wifi */
+    case Icon::Accessibility: return 0xE92C;  /* accessibility_new */
+    case Icon::AppWindow: return 0xE8D8;      /* tab */
+    case Icon::Nexora: return 0;              /* the product mark stays a vector path */
+    case Icon::Archive: return 0xEB2C;        /* folder_zip */
+    case Icon::Image: return 0xE3F4;          /* image */
+    case Icon::Play: return 0xE038;           /* play_circle_filled */
+    case Icon::Bluetooth: return 0xE1A7;      /* bluetooth */
+    }
+    return 0;
+}
+
+}  // namespace
+
+bool Painter::DrawIconGlyph(Icon Kind, const Rect &Box, Color C)
+{
+    uint32_t CodePoint = IconCodePoint(Kind);
+    if (!CodePoint || Box.Empty())
+        return false;
+    int32_t Side = Box.Width < Box.Height ? Box.Width : Box.Height;
+    HZ_FONT *Font = HzIconFont(Side);
+    if (!Font)
+        return false;
+    HzDrawGlyphCentered(&Canvas_, Font, CodePoint, Box.X + Box.Width / 2, Box.Y + Box.Height / 2, C);
+    return true;
+}
+
 void Painter::DrawIcon(Icon Kind, const Rect &Box, Color C, float Stroke)
 {
+    if (DrawIconGlyph(Kind, Box, C))
+        return;
     float S = Box.Width / 16.0f, Ox = (float)Box.X, Oy = (float)Box.Y + (Box.Height - Box.Width) / 2.0f;
     auto Poly = [&](auto... Coordinates) {
         float List[] = {(float)Coordinates...};

@@ -1,6 +1,6 @@
 /*
  * Nexora OS - init/inbv.c
- * Boot display: the black Nexora logo-and-spinner splash and the stop screen used by bug checks.
+ * Boot display: the black splash (mark plus spinner) and the stop screen used by bug checks.
  */
 #include "bootinfo.h"
 #include "bootvid.h"
@@ -9,6 +9,8 @@
 #include "rtl.h"
 
 #define SPLASH_BACKGROUND 0x000000
+#define SPLASH_MARK 0xC9DDF2    /* pale blue mark on black, as Windows 11 shows while starting */
+#define SPLASH_SPINNER 0xFFFFFF
 #define STOP_BG 0x2A0E17
 #define STOP_ACCENT 0xFF9E5E
 #define STOP_TEXT 0xFFFFFF
@@ -17,6 +19,7 @@
 static struct {
     bool Ready;
     uint32_t Frame;
+    uint32_t Phase; /* spinner position, in 1/256 of a revolution */
 } Inbv;
 
 /*
@@ -55,38 +58,99 @@ void InbvSetStatusText(const char *Text)
     (void)Text;
 }
 
+/*
+ * sin(2*pi*i/256) in Q15. The spinner places its dots from this table instead of on a coarse ring
+ * of fixed points, so a dot moves by a fraction of a pixel from frame to frame and the sweep looks
+ * continuous rather than stepped.
+ */
+static const int16_t SplashSin[256] = {
+    0,     804,   1608,  2410,  3212,  4011,  4808,  5602,  6393,  7179,  7962,  8739,  9512,
+    10278, 11039, 11793, 12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530, 18204, 18868,
+    19519, 20159, 20787, 21403, 22005, 22594, 23170, 23731, 24279, 24811, 25329, 25832, 26319,
+    26790, 27245, 27683, 28105, 28510, 28898, 29268, 29621, 29956, 30273, 30571, 30852, 31113,
+    31356, 31580, 31785, 31971, 32137, 32285, 32412, 32521, 32609, 32678, 32728, 32757, 32767,
+    32757, 32728, 32678, 32609, 32521, 32412, 32285, 32137, 31971, 31785, 31580, 31356, 31113,
+    30852, 30571, 30273, 29956, 29621, 29268, 28898, 28510, 28105, 27683, 27245, 26790, 26319,
+    25832, 25329, 24811, 24279, 23731, 23170, 22594, 22005, 21403, 20787, 20159, 19519, 18868,
+    18204, 17530, 16846, 16151, 15446, 14732, 14010, 13279, 12539, 11793, 11039, 10278, 9512,
+    8739,  7962,  7179,  6393,  5602,  4808,  4011,  3212,  2410,  1608,  804,   0,     -804,
+    -1608, -2410, -3212, -4011, -4808, -5602, -6393, -7179, -7962, -8739, -9512, -10278, -11039,
+    -11793, -12539, -13279, -14010, -14732, -15446, -16151, -16846, -17530, -18204, -18868,
+    -19519, -20159, -20787, -21403, -22005, -22594, -23170, -23731, -24279, -24811, -25329,
+    -25832, -26319, -26790, -27245, -27683, -28105, -28510, -28898, -29268, -29621, -29956,
+    -30273, -30571, -30852, -31113, -31356, -31580, -31785, -31971, -32137, -32285, -32412,
+    -32521, -32609, -32678, -32728, -32757, -32767, -32757, -32728, -32678, -32609, -32521,
+    -32412, -32285, -32137, -31971, -31785, -31580, -31356, -31113, -30852, -30571, -30273,
+    -29956, -29621, -29268, -28898, -28510, -28105, -27683, -27245, -26790, -26319, -25832,
+    -25329, -24811, -24279, -23731, -23170, -22594, -22005, -21403, -20787, -20159, -19519,
+    -18868, -18204, -17530, -16846, -16151, -15446, -14732, -14010, -13279, -12539, -11793,
+    -11039, -10278, -9512, -8739, -7962, -7179, -6393, -5602, -4808, -4011, -3212, -2410,
+    -1608, -804,
+};
+
+#define SPLASH_COS(Step) ((int32_t)SplashSin[(((Step) + 64) & 255)])
+#define SPLASH_SIN(Step) ((int32_t)SplashSin[(Step) & 255])
+
+#define SPLASH_FADE_FRAMES 14    /* the mark is opaque after ~230 ms at the 60 Hz cadence */
+#define SPLASH_SPINNER_START 8   /* the ring appears as the mark reaches full brightness */
+#define SPLASH_SPINNER_DOTS 8    /* classic Windows ring: eight dots, 45 degrees apart */
+#define SPLASH_SPINNER_STEP 32   /* circle steps between two dots (256 / 8) */
+#define SPLASH_SPINNER_SPEED 3   /* circle steps per frame: ~1.4 s per revolution */
+
+/* The Windows 11 boot mark: four panes in a 2x2 grid separated by a thin gap. */
+static void InbvDrawMark(int X, int Y, int Size, uint32_t Color)
+{
+    int Gap = HZ_MAX(2, Size / 12);
+    int Pane = (Size - Gap) / 2;
+    VidFillRect(X, Y, Pane, Pane, Color);
+    VidFillRect(X + Pane + Gap, Y, Pane, Pane, Color);
+    VidFillRect(X, Y + Pane + Gap, Pane, Pane, Color);
+    VidFillRect(X + Pane + Gap, Y + Pane + Gap, Pane, Pane, Color);
+}
+
+static void InbvDrawSpinner(int Width, int Height, int MarkSize, int MarkY)
+{
+    int Radius = HZ_MAX(10, HZ_MIN(MarkSize * 13 / 100, 26));
+    int DotRadius = HZ_MAX(2, Radius / 8);
+    int Reach = Radius + DotRadius + 2; /* the ring plus the antialiased edge of a dot */
+    int CenterX = Width / 2;
+    int CenterY = HZ_MIN(Height - Reach - 8, MarkY + MarkSize + Height * 9 / 100);
+
+    Inbv.Phase = (Inbv.Phase + SPLASH_SPINNER_SPEED) & 255;
+    /* Clear the whole ring in one write so no dot leaves a trail behind it. */
+    VidFillRect(CenterX - Reach, CenterY - Reach, Reach * 2, Reach * 2, SPLASH_BACKGROUND);
+    for (int I = 0; I < SPLASH_SPINNER_DOTS; I++) {
+        uint32_t Step = (Inbv.Phase + (uint32_t)I * SPLASH_SPINNER_STEP) & 255;
+        /* Head brightest, tail fading: the eight dots read as one travelling sweep. */
+        uint32_t Alpha = 255 - (uint32_t)I * 255 / SPLASH_SPINNER_DOTS;
+        int32_t DotX = ((int32_t)CenterX << 16) + ((int32_t)Radius * SPLASH_COS(Step)) * 2;
+        int32_t DotY = ((int32_t)CenterY << 16) + ((int32_t)Radius * SPLASH_SIN(Step)) * 2;
+        VidFillDiscAA(DotX, DotY, (int32_t)DotRadius << 16, VidBlend(SPLASH_BACKGROUND, SPLASH_SPINNER, Alpha),
+                      SPLASH_BACKGROUND);
+    }
+}
+
 void InbvAnimate(void)
 {
-    static const int8_t DotX[24] = {0, 4, 7, 10, 12, 13, 14, 13, 12, 10, 7, 4,
-                                    0, -4, -7, -10, -12, -13, -14, -13, -12, -10, -7, -4};
-    static const int8_t DotY[24] = {-14, -13, -12, -10, -7, -4, 0, 4, 7, 10, 12, 13,
-                                    14, 13, 12, 10, 7, 4, 0, -4, -7, -10, -12, -13};
-    static const uint8_t Brightness[12] = {48, 67, 86, 105, 124, 143, 162, 181, 200, 219, 238, 255};
     if (!Inbv.Ready)
         return;
     KIRQL OldIrql;
     KeAcquireSpinLockRaiseToLevel(&InbvLock, HIGH_LEVEL, &OldIrql);
     if (Inbv.Ready) {
         int W = VidWidth(), H = VidHeight();
-        int LogoSize = HZ_MAX(64, HZ_MIN(H / 6, 160));
-        int LogoY = H * 42 / 100 - LogoSize / 2;
+        int MarkSize = HZ_MAX(64, HZ_MIN(H / 6, 160));
+        int MarkY = H * 42 / 100 - MarkSize / 2;
         Inbv.Frame++;
-        uint32_t FadeFrame = HZ_MIN(Inbv.Frame, 12u);
-        uint32_t Fade = FadeFrame * FadeFrame * (36 - 2 * FadeFrame) * 255 / 1728;
-        if (FadeFrame < 12 || Inbv.Frame == 12)
-            VidDrawLogoTinted((W - LogoSize) / 2, LogoY, LogoSize, SPLASH_BACKGROUND,
-                              VidBlend(SPLASH_BACKGROUND, 0xC5CDD4, Fade));
-        if (Inbv.Frame >= 3) {
-            int CenterX = W / 2, CenterY = HZ_MIN(H - 24, LogoY + LogoSize + H * 9 / 100);
-            uint32_t Phase = (Inbv.Frame / 2) % 24;
-            VidFillRect(CenterX - 20, CenterY - 20, 40, 40, SPLASH_BACKGROUND);
-            for (int I = 0; I < 12; I++) {
-                uint32_t At = (Phase + (uint32_t)I * 2) % 24;
-                uint32_t Gray = Brightness[I];
-                uint32_t Color = (Gray << 16) | (Gray << 8) | Gray;
-                VidFillRect(CenterX + DotX[At] - 1, CenterY + DotY[At] - 1, 3, 3, Color);
-            }
+
+        /* The mark fades in once. Its antialiased fill is the most expensive drawing here, so it is
+           not redrawn after it has reached full opacity. */
+        if (Inbv.Frame <= SPLASH_FADE_FRAMES) {
+            uint32_t Remaining = SPLASH_FADE_FRAMES - Inbv.Frame;
+            uint32_t Fade = 255 - Remaining * Remaining * 255 / (SPLASH_FADE_FRAMES * SPLASH_FADE_FRAMES);
+            InbvDrawMark((W - MarkSize) / 2, MarkY, MarkSize, VidBlend(SPLASH_BACKGROUND, SPLASH_MARK, Fade));
         }
+        if (Inbv.Frame >= SPLASH_SPINNER_START)
+            InbvDrawSpinner(W, H, MarkSize, MarkY);
     }
     KeReleaseSpinLock(&InbvLock, OldIrql);
 }
@@ -98,6 +162,7 @@ bool InbvInitialize(void)
 
     KeInitializeSpinLock(&InbvLock);
     Inbv.Frame = 0;
+    Inbv.Phase = 0;
     VidFillRect(0, 0, VidWidth(), VidHeight(), SPLASH_BACKGROUND);
     Inbv.Ready = true;
     return true;
