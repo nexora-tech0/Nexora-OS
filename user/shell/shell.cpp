@@ -452,11 +452,8 @@ void Shell::OnShellRequest(uint64_t Request, uint64_t Detail)
             Desk->RefreshPrefs(); /* Settings may have changed the icon size or the sort order */
         if (Start)
             static_cast<Flyout *>(Start)->Dismiss();
-        if (WasFirstBoot && !FirstBoot) {
+        if (WasFirstBoot && !FirstBoot)
             HzPrint("shell: first-boot setup finished; hello, %s", DisplayName());
-            if (const hz::apps::App *Welcome = FindApp(hz::String("welcome")))
-                Launch(*Welcome);
-        }
     } else if (Request == HZ_SHELL_REQUEST_LOCK) {
         LockNow();
     } else if (Request == HZ_SHELL_REQUEST_SHUTDOWN) {
@@ -1065,8 +1062,6 @@ void Shell::Unlock()
         }
         HzPrint("shell: cannot start first-boot setup (0x%08X)", (uint32_t)Status);
     }
-    if (const hz::apps::App *Welcome = FindApp(hz::String("welcome")))
-        Launch(*Welcome);
 }
 
 /* ---- Shutdown (M11) ------------------------------------------------------------------------------- */

@@ -280,8 +280,6 @@ static void KiSessionThread(void *Context)
                                         0, &Shell);
         if (!HZ_SUCCESS(Status)) {
             DbgPrintEx(DPFLTR_WARNING_LEVEL, "Desktop: cannot start the shell (0x%08X)\n", (uint32_t)Status);
-            if (First && HZ_SUCCESS(PsCreateProcess("\\??\\C:\\Nexora\\System\\welcome.exe", "welcome.exe", 0, &Shell)))
-                ObDereferenceObject(Shell);
             return;
         }
         KeWaitForSingleObject(Shell, NULL);

@@ -24,8 +24,12 @@ before any `written` item can be called working.
 session" block is self-contained and was refreshed 2026-10-25 (late); below it, the "Written and
 unverified" table and "Next up" are the state.** The newest list is § "Requested next steps" items
 14–19 (the 2026-10-25 late batch: driver reuse, `.exe`/Linux binaries, the missing apps, Explorer
-additions, dock hover/motion, volume controls, cleanup). Item 7 is the earlier one and is largely
-written: a real File Explorer (archive
+additions, dock hover/motion, volume controls, cleanup). **Item 19 has now started, still
+unverified:** `Makefile` `USER_PROGRAMS` no longer lists the beta/test executables, the `blockyard`
+and `welcome` manifests are deleted, the retired `user/tests` trees plus `user/apps/blockyard/`
+are gone, `init/init.c` no longer falls back to `welcome.exe`, and `user/shell/shell.cpp` no longer
+auto-launches it; the remaining self-test callers, smoke expectations and browser placeholder
+cleanup are still in progress. Item 7 is the earlier one and is largely written: a real File Explorer (archive
 extract, create, rename), a bootable/real installer, Start/app-drawer re-polish, real icons from the
 internet, a working + polished Control Center, a clean Windows-like directory layout, Photo and Video
 Viewers, window snapping + multitasking with motion, removal of mock/beta apps, and Wi-Fi plus

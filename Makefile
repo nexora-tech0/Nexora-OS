@@ -140,7 +140,8 @@ HZUSER_LIB := $(BUILD)/user/hzuser.lib
 HZUI_OBJS := $(patsubst %,$(UOBJ)/user/lib/hzui/%.cpp.obj,painter element window controls textbox listview menu \
     editor dialogs wallpaper)
 HZUI_LIB := $(BUILD)/user/hzui.lib
-USER_PROGRAMS := hello usertest crash fstest wintest uitest welcome apptest
+# Item 19 cleanup: the beta/test programs are no longer shipped as user-facing executables.
+USER_PROGRAMS :=
 UI_FONTS := third_party/inter/Inter-Regular.ttf third_party/inter/Inter-SemiBold.ttf \
     third_party/inter/InterDisplay-SemiBold.ttf \
     third_party/jetbrains-mono/JetBrainsMono-Regular.ttf \

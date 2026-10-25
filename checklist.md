@@ -228,6 +228,7 @@ keep going through the queue. Never tick a box: only the owed build + VM pass ca
 | Wi-Fi — shared 802.11 layer contract (item 7.11, part 2) | `include/net80211.h` | written, unverified; **contract only** — `net/net80211.c` (the shared layer and its WPA2-PSK/WPA3 supplicant) and any card driver under `net/80211/` are **not written**, so no wireless driver exists. The header is deliberately shaped like Linux's `cfg80211`: `NET80211_DEVICE` carries the driver ops (`Start`, `Stop`, `SetChannel`, `Scan`, `Join`, `Leave`, `SendEapol`, `SendData`, `QueryLink`) plus an embedded **`NET_INTERFACE`**, so everything above (ARP/IPv4/DHCP) is unchanged whether the link is wired or wireless; `NET80211_BSS` / `NET80211_SECURITY` / `NET80211_STATE` and the shared entry points (`Net80211RegisterDevice`, `Scan`, `Connect`, `Disconnect`, `ReceiveEapol`, `Tick`) are declared. The file writes the ownership split down: the driver owns firmware/DMA/channel/raw frame TX-RX, the shared layer owns scanning, BSS bookkeeping, association and the supplicant (4-way handshake, PBKDF2, CCMP/AES) — "so the hard security code exists once". Supporting many cards then means adding a driver, not rewriting the wireless logic. **The pinned PCI ID is still unresolved**, so the first driver cannot be chosen. **No box ticked; nothing compiled.** |
 
 | Browsing — UDP (item 7.11, part 1b) | `net/udp.c` (new), `net/ipv4.c` (UDP dispatch), `net/netcore.c` (`NetInitializeStack` now resets UDP too) | written, unverified; implements the UDP contract `include/net.h` declares but nothing defined. A bounded table of `NET_UDP_MAX_BINDINGS` (8) port bindings, each with a `NET_UDP_QUEUE_DEPTH` (3) queue of `NET_UDP_MAX_DATAGRAM` (1472) byte datagrams behind one spin lock; port 0 picks an ephemeral port in 49152..65535 and a taken port returns `STATUS_OBJECT_NAME_COLLISION`. `NetUdpSend` builds the segment, computes the checksum through `NetUdpChecksum` (a computed zero is transmitted as 0xFFFF per RFC 768), substitutes the interface address when the source is `0.0.0.0` (DHCP's case) and sends via `NetIpResolveAndSend`. `NetUdpDeliver` is the enqueue path — **checksum verified first, so a corrupt datagram is not a datagram** — and drops (with a log line) on an unbound port or a full queue rather than overwriting a queued one; `net/ipv4.c`'s UDP case now parses and calls it. **The receive path is honest about its shape:** nothing else reads the ring for UDP because `NetReceiveWorker` is still not started (DHCP polls the same ring), so `NetUdpReceive` polls the ring itself while its queue is empty and the file states that this polling must be replaced by a pure event wait when the worker starts. A datagram larger than the caller's buffer returns `STATUS_BUFFER_TOO_SMALL` and is dropped, never truncated. **No box ticked; nothing compiled.** |
+| Cleanup — item 19 started | `Makefile` (`USER_PROGRAMS`), `user/apps/blockyard/` (deleted), `rootfs/Nexora/Apps/blockyard.app` (deleted), `rootfs/Nexora/Apps/welcome.app` (deleted), `user/tests/{hello,usertest,crash,fstest,wintest,uitest,apptest,welcome}/` (deleted), `init/init.c`, `user/shell/shell.cpp` | written, unverified; the shipped build/catalog list no longer advertises the beta/test executables, `blockyard` is removed from source plus manifests, the old `user/tests` programs are deleted from the tree, the kernel session thread no longer falls back to `welcome.exe`, and the shell no longer auto-launches `welcome` after first-boot completion or unlock. Self-test callers, smoke cases, and the placeholder browser page still need cleanup before item 19 is fully recorded. **No box ticked; nothing compiled.** |
 
 ### Verification still owed
 
@@ -240,7 +241,12 @@ A single build and test pass settles all of the above at once:
 ### Next up (checklist order)
 
 - **Newest user request (2026-10-25, evening) — a large batch, recorded as §7 items 14–19 plus a
-  consolidated "what a proper OS still needs" list.** Nothing in it is written yet. It asks for:
+  consolidated "what a proper OS still needs" list.** Item 19 has **started**: `Makefile`
+  `USER_PROGRAMS` no longer lists the beta/test executables, the `blockyard`/`welcome` manifests are
+  gone, the retired `user/tests` trees are deleted, `init/init.c` no longer falls back to
+  `welcome.exe`, and `user/shell/shell.cpp` no longer auto-launches it; self-test callers, smoke
+  cases, and the placeholder browser page are still in progress. The batch
+  asks for:
   third-party driver reuse (answered: porting yes, loading no, framework is the blocker), running
   `.exe` and Linux ELF binaries (recorded as three separate projects — no single step delivers it),
   the missing apps (App Store, Media Player, Disk Manager, Device Manager, Screenshot Tool, Archive
@@ -459,6 +465,15 @@ A single build and test pass settles all of the above at once:
   diagnostics call is a free syntax check but is **not** a build, the kernel `STATUS_*`/`Ke*`/`Ps*`/
   `rtl` helper lists, and why `NetReceiveWorker` must stay unstarted while DHCP and DNS read the ring.
   **Still no build, no ISO, no VM run, no box ticked.**
+- 2026-10-25 (late) — **item 19 cleanup started, still unverified.** `Makefile` `USER_PROGRAMS` is now
+  empty, so the shipped build/catalog list no longer advertises the beta/test executables
+  (`hello`, `usertest`, `crash`, `fstest`, `wintest`, `uitest`, `welcome`, `apptest`). Deleted
+  `user/apps/blockyard/`, `rootfs/Nexora/Apps/blockyard.app`, `rootfs/Nexora/Apps/welcome.app`, and
+  the retired `user/tests/{hello,usertest,crash,fstest,wintest,uitest,apptest,welcome}/` trees. The
+  kernel session thread in `init/init.c` no longer falls back to `welcome.exe`, and the shell in
+  `user/shell/shell.cpp` no longer auto-launches `welcome` after unlock or first-boot completion.
+  The rest of item 19 — self-test callers, smoke cases and the placeholder browser page — is still
+  in progress. **Still no build, no ISO, no VM run.**
 
 ## Requested next steps — added 2026-10-25 (user)
 
