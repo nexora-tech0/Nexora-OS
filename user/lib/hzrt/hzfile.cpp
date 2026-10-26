@@ -595,16 +595,53 @@ bool IsLiveSystem()
     return !HZ_SUCCESS(QueryVolume(String("C:\\"), V)) || V.ReadOnly;
 }
 
-String DocumentsFolder()
+const char *KnownFolderName(KnownFolder Folder)
+{
+    static const char *const Names[] = {"Desktop", "Documents", "Downloads", "Music",
+                                        "Pictures", "Videos", "Projects"};
+    size_t Index = (size_t)Folder;
+    return Index < (size_t)KnownFolder::Count ? Names[Index] : "";
+}
+
+const char *KnownFolderLabel(KnownFolder Folder)
+{
+    return KnownFolderName(Folder);
+}
+
+String UserProfilePath(const char *UserName)
+{
+    if (!IsValidUserName(UserName))
+        return String();
+    return String::Format("C:\\Users\\%s", UserName);
+}
+
+String KnownFolderPath(const char *UserName, KnownFolder Folder)
+{
+    String Home = UserProfilePath(UserName);
+    const char *Name = KnownFolderName(Folder);
+    return Home.Empty() || !*Name ? String() : Join(Home, Name);
+}
+
+String CurrentUserProfilePath()
 {
     Settings Shell;
-    if (HZ_SUCCESS(Shell.Load(SettingsPath("shell")))) {
-        String Name = Shell.Get("UserName");
-        bool Directory = false;
-        String Path = String::Format("C:\\Users\\%s\\Documents", Name.CStr());
-        if (!Name.Empty() && Exists(Path, &Directory) && Directory)
-            return Path;
-    }
+    if (!HZ_SUCCESS(Shell.Load(SettingsPath("shell"))))
+        return String();
+    return UserProfilePath(Shell.Get("UserName").CStr());
+}
+
+String CurrentKnownFolderPath(KnownFolder Folder)
+{
+    String Home = CurrentUserProfilePath();
+    return Home.Empty() ? String() : Join(Home, KnownFolderName(Folder));
+}
+
+String DocumentsFolder()
+{
+    String Path = CurrentKnownFolderPath(KnownFolder::Documents);
+    bool Directory = false;
+    if (!Path.Empty() && Exists(Path, &Directory) && Directory)
+        return Path;
     for (const Volume &V : Volumes())
         if (!V.ReadOnly)
             return V.Root;

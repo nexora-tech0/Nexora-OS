@@ -103,7 +103,7 @@ void Notepad::Build()
     Root->Rows.Push(GridLength::AutoSize()); /* status bar */
 
     MenuBar *Menu = Root->Add<MenuBar>();
-    Menu->Margin = Thickness(6, 0, 6, 2);
+    Menu->Margin = Thickness(10, 4, 10, 4);
     Menu->HorizontalAlignment = Align::Start;
     Menu->AddMenu("File", [this]() { return FileMenu(); });
     Menu->AddMenu("Edit", [this]() { return EditMenu(); });

@@ -153,7 +153,7 @@ public:
         Main_ = new Window("Calculator", 340, 540, Window::DefaultStyle & ~HZ_WS_MAXIMIZEBOX);
         Main_->SetMinimumSize(300, 460);
         Root_ = new CalcRoot();
-        Root_->Padding = Thickness(6, 4, 6, 6);
+        Root_->Padding = Thickness(10, 8, 10, 10);
         Root_->Rows.Push(GridLength::AutoSize());
         Root_->Rows.Push(GridLength::Stars(1));
         Display_ = Root_->Add<CalcDisplay>(&Engine_);

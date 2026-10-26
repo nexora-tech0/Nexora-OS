@@ -68,6 +68,7 @@ struct WINDOW {
     HZ_RECT PendingRect;
     uint32_t State;          /* HZ_WINDOW_STATE_MINIMIZED, HZ_WINDOW_STATE_MAXIMIZED */
     HZ_RECT RestoreRect;     /* the normal rectangle while maximized */
+    uint32_t SnapState;      /* WmSnap*; zero when neither snapped nor maximized */
     uint32_t Cursor;         /* HZ_CURSOR_* over the client area */
     int32_t MinWidth, MinHeight; /* interactive resizing lower bound (with HZ_MIN_WINDOW_*) */
 };
@@ -107,10 +108,20 @@ void WmDestroyWindow(WINDOW *Window);
 void WmShowWindow(WINDOW *Window, uint32_t Command);
 STATUS WmSetWindowPos(WINDOW *Window, int32_t X, int32_t Y, int32_t Width, int32_t Height, uint32_t Flags);
 void WmMoveWindow(WINDOW *Window, int32_t X, int32_t Y); /* no surface change */
-/* Window states. Maximize and restore are resize requests the owner applies (HZ_SWP_PENDING). */
+/* State changes are resize requests the owner applies (HZ_SWP_PENDING). */
 void WmMinimizeWindow(WINDOW *Window);
 void WmMaximizeWindow(WINDOW *Window);
 void WmRestoreWindow(WINDOW *Window);
+enum {
+    WmSnapNone,
+    WmSnapLeft,
+    WmSnapRight,
+    WmSnapTopLeft,
+    WmSnapTopRight,
+    WmSnapBottomLeft,
+    WmSnapBottomRight
+};
+bool WmSnapWindow(WINDOW *Window, uint32_t Snap);
 void WmRequestResize(WINDOW *Window, const HZ_RECT &Rect);
 uint32_t WmSizeType(const WINDOW *Window);                /* HZ_SIZE_* */
 HZ_RECT WmWorkArea();

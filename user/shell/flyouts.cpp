@@ -30,8 +30,8 @@ class AppTile final : public Element {
 public:
     explicit AppTile(const hz::apps::App &A) : Program_(A)
     {
-        Width = 96;
-        Height = 88;
+        Width = 100;
+        Height = 92;
         Focusable = true;
         ToolTip = A.Description;
     }
@@ -43,12 +43,12 @@ public:
     {
         const Rect &B = Bounds();
         if (IsPressed()) {
-            P.FillRoundRect(B, Theme::ControlRadius, Theme::SubtleFillPressed);
+            P.FillRoundRect(B, Theme::OverlayRadius, Theme::SubtleFillPressed);
         } else if (Hover_.Value() > 0) {
-            P.FillRoundRect(B, Theme::ControlRadius, ScaleAlpha(Theme::SubtleFillHover, Hover_.Value()));
+            P.FillRoundRect(B, Theme::OverlayRadius, ScaleAlpha(Theme::SubtleFillHover, Hover_.Value()));
         }
-        PaintAppIcon(P, Rect{B.X + (B.Width - 36) / 2, B.Y + 12, 36, 36}, &Program_, Program_.Name.CStr());
-        P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 4, B.Y + 56, B.Width - 8, 20}, Program_.Name.CStr(),
+        PaintAppIcon(P, Rect{B.X + (B.Width - 40) / 2, B.Y + 10, 40, 40}, &Program_, Program_.Name.CStr());
+        P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 4, B.Y + 58, B.Width - 8, 20}, Program_.Name.CStr(),
                    Theme::TextPrimary, Align::Center);
     }
 

@@ -512,7 +512,10 @@ bool Slider::Animate()
 
 void ProgressBar::SetValue(float Percent)
 {
-    Value_ = hz::Clamp(Percent, 0.0f, 100.0f);
+    float NewValue = hz::Clamp(Percent, 0.0f, 100.0f);
+    if (Value_ == NewValue)
+        return;
+    Value_ = NewValue;
     Invalidate();
 }
 

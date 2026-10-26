@@ -25,6 +25,14 @@ constexpr uint32_t kMsgFinished = HZ_WM_USER + 2; /* WParam = STATUS, LParam = h
 constexpr uint32_t kMaxDisks = 16;
 constexpr uint32_t kChunk = 64 * 1024;
 
+STATUS EnsureDirectory(const hz::String &Path)
+{
+    bool IsDirectory = false;
+    if (hz::fs::Exists(Path, &IsDirectory))
+        return IsDirectory ? STATUS_SUCCESS : STATUS_OBJECT_NAME_COLLISION;
+    return hz::fs::CreateDirectory(Path);
+}
+
 /*
  * Installation is reported as named stages, and each stage owns a band of the progress bar. The bar
  * moves inside a band as the work of that stage completes, so the label names the step that is
@@ -1876,16 +1884,35 @@ private:
     void Finish()
     {
         const hz::String &Name = Name_->Text();
-        hz::String Home = hz::String::Format("C:\\Users\\%s", Name.CStr());
-        hz::fs::CreateDirectory(hz::String("C:\\Users"));
-        hz::fs::CreateDirectory(Home);
-        hz::fs::CreateDirectory(hz::fs::Join(Home, "Documents"));
+        hz::String Users("C:\\Users");
+        hz::String Home = hz::fs::UserProfilePath(Name.CStr());
+        STATUS FolderStatus = EnsureDirectory(Users);
+        if (HZ_SUCCESS(FolderStatus))
+            FolderStatus = EnsureDirectory(Home);
+        for (uint8_t I = 0; HZ_SUCCESS(FolderStatus) && I < (uint8_t)hz::fs::KnownFolder::Count; I++) {
+            hz::fs::KnownFolder Folder = (hz::fs::KnownFolder)I;
+            FolderStatus = EnsureDirectory(hz::fs::KnownFolderPath(Name.CStr(), Folder));
+        }
+        if (!HZ_SUCCESS(FolderStatus)) {
+            HzPrint("setup: cannot create user profile folders for '%s' (0x%08X)", Name.CStr(),
+                    (uint32_t)FolderStatus);
+            MessageBox(Main_, "Set up Nexora OS",
+                       hz::String::Format("Could not create the user folders (0x%08X). Check that the system disk "
+                                          "is writable, then try again.",
+                                          (uint32_t)FolderStatus)
+                           .CStr(),
+                       nullptr, nullptr);
+            return;
+        }
         hz::String Welcome = hz::String::Format("Welcome to Nexora OS, %s.\n\nThis folder is yours: Notepad and Files "
                                                 "start here.\n",
                                                 Name.CStr());
         hz::String Readme = hz::fs::Join(hz::fs::Join(Home, "Documents"), "Welcome.txt");
-        if (!hz::fs::Exists(Readme))
-            hz::fs::WriteAll(Readme, Welcome.CStr(), Welcome.Length());
+        if (!hz::fs::Exists(Readme)) {
+            STATUS WelcomeStatus = hz::fs::WriteAll(Readme, Welcome.CStr(), Welcome.Length());
+            if (!HZ_SUCCESS(WelcomeStatus))
+                HzPrint("setup: cannot write Welcome.txt (0x%08X)", (uint32_t)WelcomeStatus);
+        }
         hz::fs::Settings Shell;
         hz::String Path = hz::fs::SettingsPath("shell");
         Shell.Load(Path);

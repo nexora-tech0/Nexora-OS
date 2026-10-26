@@ -120,6 +120,13 @@ STATUS TrashEmpty();
 bool TrashHasItems();
 /* True when C: is the read-only live image (nothing can be saved there). */
 bool IsLiveSystem();
+enum class KnownFolder : uint8_t { Desktop, Documents, Downloads, Music, Pictures, Videos, Projects, Count };
+const char *KnownFolderName(KnownFolder Folder);
+const char *KnownFolderLabel(KnownFolder Folder);
+String UserProfilePath(const char *UserName);
+String KnownFolderPath(const char *UserName, KnownFolder Folder);
+String CurrentUserProfilePath();
+String CurrentKnownFolderPath(KnownFolder Folder);
 /* The user's documents folder (C:\Users\<name>\Documents on an installed system after first-boot
    setup), else the first writable volume's root, else C:\. */
 String DocumentsFolder();

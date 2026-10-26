@@ -29,6 +29,27 @@ void PaintElement(Element *E, Painter &P)
     E->PaintOverlay(P);
 }
 
+int32_t MeasureHeadingWidth(FontRole Font, const hz::String &Text)
+{
+    HZ_FONT *F = GetFont(Font);
+    return F ? HzMeasureTextN(F, Text.CStr(), Text.Length()) : 0;
+}
+
+int32_t HeadingHeight(FontRole Font)
+{
+    HZ_FONT *F = GetFont(Font);
+    return F ? HzFontLineHeight(F) : 0;
+}
+
+size_t VisibleChildren(const Element &E)
+{
+    size_t Count = 0;
+    for (size_t i = 0; i < E.ChildCount(); i++)
+        if (E.ChildAt(i)->IsVisible())
+            Count++;
+    return Count;
+}
+
 }  // namespace
 
 /* ---- Tree ------------------------------------------------------------------------------------------ */
@@ -341,6 +362,136 @@ void StackPanel::ArrangeOverride(const Rect &Content)
             Position += Child->DesiredSize().Width + Spacing;
         }
     }
+}
+
+/* ---- Reusable surfaces --------------------------------------------------------------------------- */
+
+Card::Card(const char *Title, int32_t ItemSpacing) : StackPanel(Orientation::Vertical, ItemSpacing), Title_(Title)
+{
+    Padding = Thickness(16);
+}
+
+void Card::SetTitle(const char *Title)
+{
+    hz::String NewTitle(Title);
+    if (NewTitle == Title_)
+        return;
+    Title_ = hz::Move(NewTitle);
+    InvalidateLayout();
+    Invalidate();
+}
+
+Size Card::MeasureOverride(Size Available)
+{
+    Size Content = StackPanel::MeasureOverride(Available);
+    if (Title_.Empty())
+        return Content;
+    Content.Width = hz::Max(Content.Width, MeasureHeadingWidth(TitleFont, Title_));
+    Content.Height += HeadingHeight(TitleFont);
+    if (VisibleChildren(*this))
+        Content.Height += TitleSpacing;
+    return Content;
+}
+
+void Card::ArrangeOverride(const Rect &Content)
+{
+    if (Title_.Empty()) {
+        StackPanel::ArrangeOverride(Content);
+        return;
+    }
+    int32_t HeaderHeight = HeadingHeight(TitleFont);
+    int32_t Offset = HeaderHeight + (VisibleChildren(*this) ? TitleSpacing : 0);
+    StackPanel::ArrangeOverride(Rect{Content.X, Content.Y + Offset, Content.Width, hz::Max(Content.Height - Offset, 0)});
+}
+
+void Card::Paint(Painter &P)
+{
+    P.FillRoundRect(Bounds(), Theme::OverlayRadius, Theme::CardBackground);
+    P.StrokeRoundRect(Bounds(), Theme::OverlayRadius, 1, Theme::CardStroke);
+    if (!Title_.Empty())
+        P.TextLine(GetFont(TitleFont), Rect{ContentBounds().X, ContentBounds().Y, ContentBounds().Width,
+                                           HeadingHeight(TitleFont)},
+                   Title_.CStr(), TitleForeground ? TitleForeground : Theme::TextPrimary);
+}
+
+Toolbar::Toolbar(const char *Title, int32_t ItemSpacing)
+    : StackPanel(Orientation::Horizontal, ItemSpacing), Title_(Title)
+{
+    Padding = Thickness(8, 6);
+}
+
+void Toolbar::SetTitle(const char *Title)
+{
+    hz::String NewTitle(Title);
+    if (NewTitle == Title_)
+        return;
+    Title_ = hz::Move(NewTitle);
+    InvalidateLayout();
+    Invalidate();
+}
+
+Size Toolbar::MeasureOverride(Size Available)
+{
+    Size Items = StackPanel::MeasureOverride(Available);
+    if (Title_.Empty())
+        return Items;
+    Items.Width += MeasureHeadingWidth(TitleFont, Title_);
+    Items.Height = hz::Max(Items.Height, HeadingHeight(TitleFont));
+    if (VisibleChildren(*this))
+        Items.Width += TitleSpacing;
+    return Items;
+}
+
+void Toolbar::ArrangeOverride(const Rect &Content)
+{
+    int32_t Offset = Title_.Empty() ? 0 : hz::Min(MeasureHeadingWidth(TitleFont, Title_), Content.Width);
+    if (Offset && VisibleChildren(*this))
+        Offset += TitleSpacing;
+    StackPanel::ArrangeOverride(Rect{Content.X + Offset, Content.Y, hz::Max(Content.Width - Offset, 0), Content.Height});
+}
+
+void Toolbar::Paint(Painter &P)
+{
+    P.PushClip(Bounds());
+    if (ShowChrome) {
+        P.FillRoundRect(Bounds(), Theme::ControlRadius, Theme::ControlFill);
+        P.StrokeRoundRect(Bounds(), Theme::ControlRadius, 1, Theme::ControlStroke);
+    }
+
+    Rect Content = ContentBounds();
+    size_t FirstVisible = ChildCount();
+    for (size_t i = 0; i < ChildCount(); i++) {
+        if (ChildAt(i)->IsVisible()) {
+            FirstVisible = i;
+            break;
+        }
+    }
+    int32_t TitleWidth = Title_.Empty() ? 0 : hz::Min(MeasureHeadingWidth(TitleFont, Title_), Content.Width);
+    if (TitleWidth) {
+        P.TextLine(GetFont(TitleFont), Rect{Content.X, Content.Y, TitleWidth, Content.Height}, Title_.CStr(),
+                   TitleForeground ? TitleForeground : Theme::TextPrimary);
+        if (FirstVisible < ChildCount()) {
+            int32_t DividerX = Content.X + TitleWidth + TitleSpacing / 2;
+            P.FillRect(Rect{DividerX, Content.Y + 4, 1, hz::Max(Content.Height - 8, 0)}, Theme::Divider);
+        }
+    }
+
+    if (!ShowSeparators) {
+        P.PopClip();
+        return;
+    }
+    const Element *Previous = nullptr;
+    for (size_t i = 0; i < ChildCount(); i++) {
+        const Element *Child = ChildAt(i);
+        if (!Child->IsVisible())
+            continue;
+        if (Previous) {
+            int32_t DividerX = (Previous->Bounds().Right() + Child->Bounds().X) / 2;
+            P.FillRect(Rect{DividerX, Content.Y + 4, 1, hz::Max(Content.Height - 8, 0)}, Theme::Divider);
+        }
+        Previous = Child;
+    }
+    P.PopClip();
 }
 
 /* ---- Grid ------------------------------------------------------------------------------------------- */

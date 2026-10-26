@@ -154,7 +154,7 @@ public:
         Main_ = new Window("Paint", 760, 520);
         Main_->SetMinimumSize(480, 390);
         StackPanel *Root = new StackPanel(Orientation::Vertical, 8);
-        Root->Padding = Thickness(12, 8);
+        Root->Padding = Thickness(14, 10);
         StackPanel *Toolbar = Root->Add<StackPanel>(Orientation::Horizontal, 6);
         struct Palette {
             const char *Name;

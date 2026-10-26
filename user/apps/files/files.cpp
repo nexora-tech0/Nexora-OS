@@ -89,7 +89,11 @@ struct Place {
     hz::String Name;
     hz::String Detail;
     hz::String Path;
+    bool IsTrash = false;
+    bool IsHeader = false;
 };
+
+constexpr const char *kTrashLocation = "nexora://trash";
 
 const char *TypeName(const hz::fs::Entry &E)
 {
@@ -284,6 +288,67 @@ private:
     uint64_t LastTypeUs_ = 0;
 };
 
+class FilesCommandBar final : public StackPanel {
+public:
+    FilesCommandBar() : StackPanel(Orientation::Horizontal, 4) {}
+
+    void SetCommands(const hz::Vector<Button *> &Commands, Button *Overflow)
+    {
+        Commands_ = Commands;
+        Overflow_ = Overflow;
+        Widths_.Resize(Commands_.Size() + 1);
+    }
+
+    Size MeasureOverride(Size Available) override
+    {
+        Size Desired = StackPanel::MeasureOverride(Available);
+        for (size_t I = 0; I < Commands_.Size(); I++)
+            if (Commands_[I]->IsVisible())
+                Widths_[I] = Commands_[I]->DesiredSize().Width;
+        if (Overflow_ && Overflow_->IsVisible())
+            Widths_[Commands_.Size()] = Overflow_->DesiredSize().Width;
+        return Desired;
+    }
+
+    void ArrangeOverride(const Rect &Content) override
+    {
+        if (!Overflow_ || Commands_.Empty()) {
+            StackPanel::ArrangeOverride(Content);
+            return;
+        }
+
+        int32_t Width = 0;
+        for (size_t I = 0; I < Commands_.Size(); I++)
+            Width += Widths_[I];
+        Width += (int32_t)(Commands_.Size() - 1) * Spacing;
+
+        bool Hidden[8] = {};
+        size_t Count = Commands_.Size();
+        bool NeedsOverflow = Width > Content.Width;
+        if (NeedsOverflow) {
+            Width += Widths_[Commands_.Size()] + Spacing;
+            const size_t HideOrder[] = {4, 3, 2, 1, 5, 0, 6, 7};
+            for (size_t I = 0; I < sizeof(HideOrder) / sizeof(HideOrder[0]) && Width > Content.Width; I++) {
+                size_t Index = HideOrder[I];
+                if (Index >= Count || Hidden[Index])
+                    continue;
+                Hidden[Index] = true;
+                Width -= Widths_[Index] + Spacing;
+            }
+        }
+
+        for (size_t I = 0; I < Commands_.Size(); I++)
+            Commands_[I]->SetVisible(!Hidden[I]);
+        Overflow_->SetVisible(NeedsOverflow);
+        StackPanel::ArrangeOverride(Content);
+    }
+
+private:
+    hz::Vector<Button *> Commands_;
+    hz::Vector<int32_t> Widths_;
+    Button *Overflow_ = nullptr;
+};
+
 /* The Details column headers: clicking one sorts by it, and the current column shows the
    direction. Only the header area hit-tests, so the rows below are unaffected. */
 class ColumnBar final : public Element {
@@ -303,11 +368,12 @@ public:
         const Align As[4] = {Align::Start, Align::Start, Align::Start, Align::End};
         for (int i = 0; i < 4; i++) {
             Rect Box{Xs[i], R.Y, Ws[i], R.Height};
-            if (Hot_ == Keys[i] && Box.Width > 0) {
+            bool Hovered = Hot_ == Keys[i] && Box.Width > 0;
+            if (Hovered) {
                 P.FillRoundRect(Box, Theme::ControlRadius, Theme::SubtleFillHover);
                 Box = Box.Deflate(Thickness(6, 0));
             }
-            DrawLabel(P, F, Box, SortKeyName(Keys[i]), Keys[i], As[i]);
+            DrawLabel(P, F, Box, SortKeyName(Keys[i]), Keys[i], As[i], Hovered);
         }
         P.FillRect(Rect{R.X + 8, R.Bottom() - 1, R.Width - 16, 1}, Theme::Divider);
     }
@@ -368,17 +434,17 @@ private:
         return -1;
     }
 
-    void DrawLabel(Painter &P, HZ_FONT *F, const Rect &R, const char *Text, int Column, Align A)
+    void DrawLabel(Painter &P, HZ_FONT *F, const Rect &R, const char *Text, int Column, Align A, bool Hovered)
     {
-        Color Foreground = Column == Key ? Theme::TextSecondary : Theme::TextTertiary;
+        Color Foreground = Column == Key ? Theme::TextSecondary : Hovered ? Theme::TextPrimary : Theme::TextTertiary;
         P.TextLine(F, R, Text, Foreground, A);
-        if (Column != Key)
+        if (Column != Key && !Hovered)
             return;
         TextLayout Layout;
         Layout.Layout(F, Text, strlen(Text), 0);
         int32_t ArrowX = A == Align::End ? R.Right() - Layout.Width - 16 : R.X + Layout.Width + 6;
-        P.DrawIcon(Descending ? Icon::ChevronDown : Icon::ChevronUp, Rect{ArrowX, R.Y + R.Height / 2 - 7, 14, 14},
-                   Foreground, 1.1f);
+        Icon Arrow = Column == Key ? (Descending ? Icon::ChevronDown : Icon::ChevronUp) : Icon::ChevronDown;
+        P.DrawIcon(Arrow, Rect{ArrowX, R.Y + R.Height / 2 - 7, 14, 14}, Foreground, 1.1f);
     }
 
     int Hot_ = -1;
@@ -395,8 +461,11 @@ private:
     void LoadSettings();
     void SaveSettings() const;
     void Navigate(const hz::String &Path, bool Record = true, const hz::String &SelectName = hz::String());
+    void NavigateTrash(bool Record = true, const hz::String &SelectName = hz::String());
     void Relist();
     void ApplyView();
+    void SortTrashEntries();
+    hz::String DisplayName(const hz::fs::Entry &E) const;
     void Refresh();
     void UpdateCrumbs();
     void SetAddressEditing(bool Editing);
@@ -411,7 +480,9 @@ private:
     void NewFolder();
     void NewFile();
     void RenameSelected();
-    void DeleteSelected();
+    void DeleteSelected(bool Permanent = false);
+    void RestoreTrashItem(size_t Index);
+    void EmptyTrash();
     void ClipSelected(bool Cut);
     void Paste();
     void ExtractSelected();
@@ -419,6 +490,7 @@ private:
     void ShowItemContextMenu(size_t Index, Point Screen);
     void ShowBackgroundContextMenu(Point Screen);
     void ShowNewMenu();
+    void ShowOverflowMenu();
     void ShowSortMenu();
     void ShowViewMenu();
     void SetSort(int Key, bool Descending);
@@ -433,18 +505,20 @@ private:
     TextBox *Address_ = nullptr;
     TextBox *Search_ = nullptr;
     StackPanel *Crumbs_ = nullptr;
+    FilesCommandBar *CommandBar_ = nullptr;
     ListView *Places_ = nullptr;
     FileList *List_ = nullptr;
     ColumnBar *Columns_ = nullptr;
     TextBlock *Status_ = nullptr, *Free_ = nullptr;
     Button *BackButton_ = nullptr, *ForwardButton_ = nullptr, *UpButton_ = nullptr, *NewButton_ = nullptr,
            *RenameButton_ = nullptr, *DeleteButton_ = nullptr, *CutButton_ = nullptr, *CopyButton_ = nullptr,
-           *PasteButton_ = nullptr, *SortButton_ = nullptr, *ViewButton_ = nullptr;
+           *PasteButton_ = nullptr, *SortButton_ = nullptr, *ViewButton_ = nullptr, *OverflowButton_ = nullptr;
     hz::String ClipPath_; /* cut or copied; "" if none */
     bool ClipCut_ = false;
     hz::Vector<Place> PlaceItems_; /* the sidebar rows: Quick access, then the volumes */
     hz::Vector<hz::fs::Entry> All_;     /* the folder as listed, sorted */
     hz::Vector<hz::fs::Entry> Entries_; /* what the list shows (the filter applied to All_) */
+    hz::Vector<hz::fs::TrashItem> AllTrashItems_, VisibleTrashItems_;
     hz::Vector<hz::String> History_;
     size_t HistoryIndex_ = 0;
     hz::String Folder_;
@@ -454,6 +528,9 @@ private:
     bool SortDescending_ = false;
     FileView View_ = FileView::Details;
     bool AddressEditing_ = false;
+    bool TrashMode_ = false;
+    bool ShowHidden_ = false;
+    bool ShowExtensions_ = true;
 };
 
 /* ---- Window ---------------------------------------------------------------------------------- */
@@ -517,8 +594,8 @@ void FilesApp::Build()
 
     /* ---- Navigation bar: back / forward / up, breadcrumbs (or a typed path), search ---- */
     Grid *Nav = Root->Add<Grid>();
-    Nav->Padding = Thickness(10, 8, 10, 6);
-    Nav->ColumnSpacing = 4;
+    Nav->Padding = Thickness(12, 10, 12, 8);
+    Nav->ColumnSpacing = 6;
     for (int i = 0; i < 3; i++)
         Nav->Columns.Push(GridLength::AutoSize());
     Nav->Columns.Push(GridLength::Stars(1));
@@ -556,6 +633,13 @@ void FilesApp::Build()
     Address_->MaxLength = 250;
     Address_->SetVisible(false);
     Address_->OnSubmit = [this](const hz::String &Text) {
+        if (hz::fs::EqualNames(Text.CStr(), "Trash") ||
+            hz::fs::EqualNames(Text.CStr(), kTrashLocation)) {
+            SetAddressEditing(false);
+            NavigateTrash();
+            Main_->SetFocus(List_);
+            return;
+        }
         hz::String Path = hz::fs::Resolve(Folder_, Text.CStr());
         bool Directory = false;
         if (hz::fs::Exists(Path, &Directory) && !Directory) {
@@ -585,48 +669,53 @@ void FilesApp::Build()
     };
 
     /* ---- Command bar ---- */
-    Grid *Bar = Root->Add<Grid>();
+    CommandBar_ = Root->Add<FilesCommandBar>();
+    StackPanel *Bar = CommandBar_;
     Bar->GridRow = 1;
     Bar->Padding = Thickness(10, 0, 10, 8);
-    Bar->ColumnSpacing = 4;
-    Bar->Columns.Push(GridLength::AutoSize());
-    for (int i = 0; i < 5; i++)
-        Bar->Columns.Push(GridLength::AutoSize());
-    Bar->Columns.Push(GridLength::Stars(1));
-    for (int i = 0; i < 2; i++)
-        Bar->Columns.Push(GridLength::AutoSize());
 
-    auto Command = [Bar](uint8_t Column, Icon Glyph, const char *Text, const char *Tip) {
+    auto Command = [Bar](Icon Glyph, const char *Text, const char *Tip) {
         Button *B = Bar->Add<Button>(Text, ButtonStyle::Subtle);
-        B->GridColumn = Column;
         B->Glyph = Glyph;
         B->ToolTip = Tip;
         B->Focusable = false;
         return B;
     };
-    NewButton_ = Command(0, Icon::Add, "New", "New folder or file");
+    NewButton_ = Command(Icon::Add, "New", "New folder or file");
     NewButton_->OnClick = [this]() { ShowNewMenu(); };
-    CutButton_ = Command(1, Icon::Cut, "", "Cut (Ctrl+X)");
+    CutButton_ = Command(Icon::Cut, "", "Cut (Ctrl+X)");
     CutButton_->OnClick = [this]() { ClipSelected(true); };
-    CopyButton_ = Command(2, Icon::Copy, "", "Copy (Ctrl+C)");
+    CopyButton_ = Command(Icon::Copy, "", "Copy (Ctrl+C)");
     CopyButton_->OnClick = [this]() { ClipSelected(false); };
-    PasteButton_ = Command(3, Icon::Paste, "", "Paste (Ctrl+V)");
+    PasteButton_ = Command(Icon::Paste, "", "Paste (Ctrl+V)");
     PasteButton_->OnClick = [this]() { Paste(); };
-    RenameButton_ = Command(4, Icon::Pencil, "", "Rename (F2)");
+    RenameButton_ = Command(Icon::Pencil, "", "Rename (F2)");
     RenameButton_->OnClick = [this]() { RenameSelected(); };
-    DeleteButton_ = Command(5, Icon::Trash, "", "Delete (Del)");
+    DeleteButton_ = Command(Icon::Trash, "", "Move to Trash (Del); permanently delete (Shift+Del)");
     DeleteButton_->OnClick = [this]() { DeleteSelected(); };
-    SortButton_ = Command(7, Icon::Chart, "", "Sort");
+    SortButton_ = Command(Icon::Chart, "", "Sort");
     SortButton_->OnClick = [this]() { ShowSortMenu(); };
-    ViewButton_ = Command(8, Icon::AppWindow, "", "View");
+    ViewButton_ = Command(Icon::AppWindow, "", "View");
     ViewButton_->OnClick = [this]() { ShowViewMenu(); };
+    OverflowButton_ = Command(Icon::More, "", "More commands");
+    OverflowButton_->OnClick = [this]() { ShowOverflowMenu(); };
+    hz::Vector<Button *> Commands;
+    Commands.Push(NewButton_);
+    Commands.Push(CutButton_);
+    Commands.Push(CopyButton_);
+    Commands.Push(PasteButton_);
+    Commands.Push(RenameButton_);
+    Commands.Push(DeleteButton_);
+    Commands.Push(SortButton_);
+    Commands.Push(ViewButton_);
+    CommandBar_->SetCommands(Commands, OverflowButton_);
 
     /* ---- Volumes and the folder ---- */
     Grid *Middle = Root->Add<Grid>();
     Middle->GridRow = 2;
-    Middle->Padding = Thickness(10, 0, 10, 0);
-    Middle->ColumnSpacing = 10;
-    Middle->Columns.Push(GridLength::Pixels(210));
+    Middle->Padding = Thickness(12, 0, 12, 8);
+    Middle->ColumnSpacing = 12;
+    Middle->Columns.Push(GridLength::Pixels(228));
     Middle->Columns.Push(GridLength::Stars(1));
     Places_ = Middle->Add<ListView>();
     Places_->ItemHeight = 48;
@@ -636,6 +725,11 @@ void FilesApp::Build()
         if (I >= PlaceItems_.Size())
             return;
         const Place &Item = PlaceItems_[I];
+        if (Item.IsHeader) {
+            P.TextLine(GetFont(FontRole::Caption), Rect{R.X + 12, R.Y, R.Width - 24, R.Height}, Item.Name.CStr(),
+                       Theme::TextTertiary);
+            return;
+        }
         P.DrawIcon(Item.Kind, Rect{R.X + 2, R.Y + 8, 18, 18}, Theme::TextSecondary);
         P.TextLine(GetFont(FontRole::Body), Rect{R.X + 30, R.Y + 4, R.Width - 30, 22}, Item.Name.CStr(),
                    Theme::TextPrimary);
@@ -643,9 +737,12 @@ void FilesApp::Build()
                    Theme::TextTertiary);
     };
     Places_->OnSelectionChanged = [this](size_t I) {
-        if (I < PlaceItems_.Size() && !PlaceItems_[I].Path.Empty() &&
-            !hz::fs::EqualNames(Folder_.CStr(), PlaceItems_[I].Path.CStr()))
-            Navigate(PlaceItems_[I].Path);
+        if (I >= PlaceItems_.Size())
+            return;
+        if (PlaceItems_[I].IsHeader)
+            return;
+        if (!PlaceItems_[I].Path.Empty() && !hz::fs::EqualNames(Folder_.CStr(), PlaceItems_[I].Path.CStr()))
+            PlaceItems_[I].IsTrash ? NavigateTrash() : Navigate(PlaceItems_[I].Path);
     };
     RebuildPlaces();
 
@@ -669,7 +766,8 @@ void FilesApp::Build()
         HZ_FONT *F = GetFont(FontRole::Body);
         if (View_ == FileView::List) {
             P.DrawIcon(IconFor(E), Rect{R.X + 10, R.Y + (R.Height - 16) / 2, 16, 16}, IconColorFor(E));
-            P.TextLine(F, Rect{R.X + 32, R.Y, R.Width - 40, R.Height}, E.Name.CStr(), Theme::TextPrimary);
+            hz::String Name = DisplayName(E);
+            P.TextLine(F, Rect{R.X + 32, R.Y, R.Width - 40, R.Height}, Name.CStr(), Theme::TextPrimary);
             return;
         }
         if (View_ == FileView::Tiles) {
@@ -679,7 +777,8 @@ void FilesApp::Build()
             hz::String Detail(E.Directory ? "Folder" : TypeName(E));
             if (!E.Directory)
                 Detail = hz::String::Format("%s  -  %s", TypeName(E), hz::fs::FormatSize(E.Size).CStr());
-            P.TextLine(F, Rect{TextX, R.Y + 9, R.Width - TextX + R.X - 14, 22}, E.Name.CStr(), Theme::TextPrimary);
+            hz::String Name = DisplayName(E);
+            P.TextLine(F, Rect{TextX, R.Y + 9, R.Width - TextX + R.X - 14, 22}, Name.CStr(), Theme::TextPrimary);
             P.TextLine(GetFont(FontRole::Caption), Rect{TextX, R.Y + 31, R.Width - TextX + R.X - 14, 18}, Detail.CStr(),
                        Theme::TextTertiary);
             return;
@@ -687,7 +786,8 @@ void FilesApp::Build()
         Columns C = ColumnsOf(R, false);
         P.DrawIcon(IconFor(E), Rect{R.X + Col::IconX, R.Y + (R.Height - Col::IconSize) / 2, Col::IconSize, Col::IconSize},
                    IconColorFor(E));
-        P.TextLine(F, Rect{C.NameX, R.Y, C.NameW, R.Height}, E.Name.CStr(), Theme::TextPrimary);
+        hz::String Name = DisplayName(E);
+        P.TextLine(F, Rect{C.NameX, R.Y, C.NameW, R.Height}, Name.CStr(), Theme::TextPrimary);
         P.TextLine(F, Rect{C.DateX, R.Y, Col::DateWidth, R.Height}, hz::fs::FormatTime(E.Modified).CStr(),
                    Theme::TextSecondary);
         P.TextLine(F, Rect{C.TypeX, R.Y, Col::TypeWidth, R.Height}, TypeName(E), Theme::TextSecondary);
@@ -714,7 +814,7 @@ void FilesApp::Build()
     List_->OnKey = [this](KeyEvent &E) {
         if (E.Key == HZ_VK_DELETE) {
             E.Handled = true;
-            DeleteSelected();
+            DeleteSelected(E.Shift());
         } else if (E.Key == HZ_VK_F1 + 1) { /* F2 */
             E.Handled = true;
             RenameSelected();
@@ -758,8 +858,11 @@ void FilesApp::Build()
 void FilesApp::LoadSettings()
 {
     hz::fs::Settings Settings;
-    if (!HZ_SUCCESS(Settings.Load(hz::fs::SettingsPath("files"))))
+    STATUS Status = Settings.Load(hz::fs::SettingsPath("files"));
+    if (!HZ_SUCCESS(Status) && Status != STATUS_NOT_FOUND) {
+        HzPrint("files: cannot read preferences (0x%08X)", (uint32_t)Status);
         return;
+    }
     hz::String View = Settings.Get("View", "Details");
     if (View == "List")
         View_ = FileView::List;
@@ -769,6 +872,8 @@ void FilesApp::LoadSettings()
         View_ = FileView::Details;
     SortKey_ = hz::Clamp(Settings.GetInt("Sort", SortName), (int)SortName, (int)SortSize);
     SortDescending_ = Settings.GetInt("SortDescending", 0) != 0;
+    ShowHidden_ = Settings.GetInt("ShowHidden", 0) != 0;
+    ShowExtensions_ = Settings.GetInt("ShowExtensions", 1) != 0;
 }
 
 void FilesApp::SaveSettings() const
@@ -777,13 +882,21 @@ void FilesApp::SaveSettings() const
     Settings.Set("View", ViewName(View_));
     Settings.SetInt("Sort", SortKey_);
     Settings.SetInt("SortDescending", SortDescending_ ? 1 : 0);
-    Settings.Save(hz::fs::SettingsPath("files")); /* a read-only live medium just keeps the defaults */
+    Settings.SetInt("ShowHidden", ShowHidden_ ? 1 : 0);
+    Settings.SetInt("ShowExtensions", ShowExtensions_ ? 1 : 0);
+    STATUS Status = Settings.Save(hz::fs::SettingsPath("files"));
+    if (!HZ_SUCCESS(Status))
+        HzPrint("files: cannot save preferences (0x%08X)", (uint32_t)Status);
 }
 
 /* ---- Navigation ----------------------------------------------------------------------------------- */
 
 void FilesApp::Navigate(const hz::String &Path, bool Record, const hz::String &SelectName)
 {
+    if (hz::fs::EqualNames(Path.CStr(), kTrashLocation)) {
+        NavigateTrash(Record, SelectName);
+        return;
+    }
     hz::Vector<hz::fs::Entry> Entries;
     STATUS Status = hz::fs::List(Path, Entries);
     if (!HZ_SUCCESS(Status)) {
@@ -805,6 +918,9 @@ void FilesApp::Navigate(const hz::String &Path, bool Record, const hz::String &S
         HistoryIndex_ = History_.Size() - 1;
     }
     Folder_ = Path;
+    TrashMode_ = false;
+    AllTrashItems_.Clear();
+    VisibleTrashItems_.Clear();
     All_ = hz::Move(Entries);
     SortEntries(All_, SortKey_, SortDescending_);
     ApplyView();
@@ -841,21 +957,126 @@ void FilesApp::Navigate(const hz::String &Path, bool Record, const hz::String &S
     HzPrint("files: %s (%zu items)", Folder_.CStr(), Entries_.Size());
 }
 
+void FilesApp::NavigateTrash(bool Record, const hz::String &SelectName)
+{
+    hz::Vector<hz::fs::TrashItem> Items;
+    STATUS Status = hz::fs::TrashList(Items);
+    if (!HZ_SUCCESS(Status)) {
+        HzPrint("files: cannot list Trash (0x%08X)", (uint32_t)Status);
+        MessageBox(Main_, "Files", hz::String::Format("Trash cannot be opened: %s.", hz::fs::StatusText(Status)).CStr(),
+                   nullptr, nullptr);
+        return;
+    }
+    if (Record && !Folder_.Empty() && Folder_ != kTrashLocation) {
+        if (HistoryIndex_ + 1 < History_.Size())
+            History_.Resize(HistoryIndex_ + 1);
+        History_.Push(Folder_);
+        if (History_.Size() > 50)
+            History_.Erase(0);
+        HistoryIndex_ = History_.Size() - 1;
+    }
+    All_.Clear();
+    AllTrashItems_.Clear();
+    for (const hz::fs::TrashItem &Item : Items) {
+        hz::fs::Entry Entry;
+        Entry.Name = Item.OriginalName;
+        Entry.Modified = Item.DeletedAt;
+        hz::fs::Entry Stored;
+        hz::String StoredPath = hz::fs::Join(hz::fs::TrashFolder(), Item.Name.CStr());
+        STATUS StatStatus = hz::fs::Stat(StoredPath, Stored);
+        if (HZ_SUCCESS(StatStatus)) {
+            Entry.Directory = Stored.Directory;
+            Entry.Size = Stored.Size;
+            Entry.Attributes = Stored.Attributes;
+        } else {
+            HzPrint("files: cannot inspect Trash item %s (0x%08X)", Item.Name.CStr(), (uint32_t)StatStatus);
+        }
+        All_.Push(hz::Move(Entry));
+        AllTrashItems_.Push(Item);
+    }
+    Folder_ = kTrashLocation;
+    TrashMode_ = true;
+    SortTrashEntries();
+    ApplyView();
+    STATUS VolumeStatus = hz::fs::QueryVolume(hz::fs::TrashFolder(), Volume_);
+    if (!HZ_SUCCESS(VolumeStatus)) {
+        HzPrint("files: cannot query Trash volume (0x%08X)", (uint32_t)VolumeStatus);
+        Volume_ = hz::fs::Volume{};
+        Volume_.ReadOnly = true;
+    }
+    SetAddressEditing(false);
+    UpdateCrumbs();
+    List_->SetSelectedIndex(hz::NotFound, false);
+    List_->Invalidate();
+    size_t Place = hz::NotFound;
+    for (size_t I = 0; I < PlaceItems_.Size(); I++)
+        if (PlaceItems_[I].IsTrash) {
+            Place = I;
+            break;
+        }
+    Places_->SetSelectedIndex(Place, false);
+    Main_->SetTitle("Trash - Files");
+    if (!SelectName.Empty())
+        Select(SelectName);
+    UpdateCommands();
+    UpdateStatus();
+    HzPrint("files: Trash (%zu items)", Entries_.Size());
+}
+
 /* The filter turns the folder listing into what the list shows. */
 void FilesApp::ApplyView()
 {
     Entries_.Clear();
     Entries_.Reserve(All_.Size());
+    VisibleTrashItems_.Clear();
+    if (TrashMode_)
+        VisibleTrashItems_.Reserve(AllTrashItems_.Size());
     for (size_t i = 0; i < All_.Size(); i++) {
-        if (Filter_.Empty() || All_[i].Name.ContainsIgnoreCase(Filter_.CStr()))
+        if (!ShowHidden_ && (All_[i].Attributes & FILE_ATTRIBUTE_HIDDEN))
+            continue;
+        if (Filter_.Empty() || All_[i].Name.ContainsIgnoreCase(Filter_.CStr())) {
             Entries_.Push(All_[i]);
+            if (TrashMode_ && i < AllTrashItems_.Size())
+                VisibleTrashItems_.Push(AllTrashItems_[i]);
+        }
     }
     List_->SetItemCount(Entries_.Size());
     List_->Invalidate();
 }
 
+hz::String FilesApp::DisplayName(const hz::fs::Entry &E) const
+{
+    if (TrashMode_ || ShowExtensions_ || E.Directory)
+        return E.Name;
+    size_t Dot = hz::NotFound;
+    for (size_t I = 1; I < E.Name.Length(); I++)
+        if (E.Name[I] == '.')
+            Dot = I;
+    return Dot == hz::NotFound ? E.Name : E.Name.Substring(0, Dot);
+}
+
+void FilesApp::SortTrashEntries()
+{
+    for (size_t I = 1; I < All_.Size(); I++) {
+        hz::fs::Entry Entry = hz::Move(All_[I]);
+        hz::fs::TrashItem Item = hz::Move(AllTrashItems_[I]);
+        size_t J = I;
+        while (J > 0 && EntryLess(Entry, All_[J - 1], SortKey_, SortDescending_)) {
+            All_[J] = hz::Move(All_[J - 1]);
+            AllTrashItems_[J] = hz::Move(AllTrashItems_[J - 1]);
+            J--;
+        }
+        All_[J] = hz::Move(Entry);
+        AllTrashItems_[J] = hz::Move(Item);
+    }
+}
+
 void FilesApp::Relist()
 {
+    if (TrashMode_) {
+        NavigateTrash(false, Selected() ? Selected()->Name : hz::String());
+        return;
+    }
     hz::Vector<hz::fs::Entry> Entries;
     if (!HZ_SUCCESS(hz::fs::List(Folder_, Entries)))
         return;
@@ -871,27 +1092,29 @@ void FilesApp::RebuildPlaces()
 {
     hz::Vector<hz::fs::Volume> Volumes = hz::fs::Volumes();
     PlaceItems_.Clear();
-    hz::String Home;
-    hz::fs::Settings Shell;
-    if (HZ_SUCCESS(Shell.Load(hz::fs::SettingsPath("shell")))) {
-        hz::String Name = Shell.Get("UserName");
-        if (!Name.Empty()) {
-            Home = hz::String::Format("C:\\Users\\%s", Name.CStr());
-            bool Directory = false;
-            if (!(hz::fs::Exists(Home, &Directory) && Directory))
-                Home = hz::String();
-        }
-    }
+    hz::String Home = hz::fs::CurrentUserProfilePath();
+    bool Directory = false;
+    if (!Home.Empty() && !(hz::fs::Exists(Home, &Directory) && Directory))
+        Home = hz::String();
+    PlaceItems_.Push(Place{Icon::None, "Quick access", "", "", false, true});
     if (!Home.Empty()) {
         PlaceItems_.Push(Place{Icon::Home, "Home", "Your files", Home});
-        hz::String Desktop = hz::fs::Join(Home, "Desktop");
-        bool Directory = false;
-        if (hz::fs::Exists(Desktop, &Directory) && Directory)
-            PlaceItems_.Push(Place{Icon::Folder, "Desktop", "Your desktop", Desktop});
     }
-    hz::String Documents = hz::fs::DocumentsFolder();
-    if (!hz::fs::IsRoot(Documents))
-        PlaceItems_.Push(Place{Icon::Document, "Documents", "Your documents", Documents});
+    hz::String UserName = Home.Empty() ? hz::String() : hz::fs::FileName(Home);
+    for (uint8_t I = 0; I < (uint8_t)hz::fs::KnownFolder::Count; I++) {
+        hz::fs::KnownFolder Folder = (hz::fs::KnownFolder)I;
+        hz::String Path = hz::fs::KnownFolderPath(UserName.CStr(), Folder);
+        if (Path.Empty() || !hz::fs::Exists(Path, &Directory) || !Directory)
+            continue;
+        Icon Glyph = Folder == hz::fs::KnownFolder::Documents ? Icon::Document
+                     : Folder == hz::fs::KnownFolder::Pictures ? Icon::Image
+                     : Folder == hz::fs::KnownFolder::Videos ? Icon::Play
+                                                             : Icon::Folder;
+        PlaceItems_.Push(Place{Glyph, hz::fs::KnownFolderLabel(Folder),
+                               hz::String::Format("Your %s", hz::fs::KnownFolderLabel(Folder)), Path});
+    }
+    PlaceItems_.Push(Place{Icon::Trash, "Trash", "Deleted items", kTrashLocation, true});
+    PlaceItems_.Push(Place{Icon::None, "This PC", "", "", false, true});
     for (const hz::fs::Volume &V : Volumes) {
         hz::String Name = hz::String::Format("%s (%c:)", V.Label.Empty() ? "Local disk" : V.Label.CStr(), V.Root[0]);
         hz::String Detail = V.ReadOnly ? hz::String::Format("%s, read-only", V.FileSystem.CStr())
@@ -906,7 +1129,10 @@ void FilesApp::Refresh()
 {
     hz::String Keep = Selected() ? Selected()->Name : hz::String();
     RebuildPlaces();
-    Navigate(Folder_, false, Keep);
+    if (TrashMode_)
+        NavigateTrash(false, Keep);
+    else
+        Navigate(Folder_, false, Keep);
 }
 
 void FilesApp::Back()
@@ -927,7 +1153,7 @@ void FilesApp::Forward()
 
 void FilesApp::Up()
 {
-    if (hz::fs::IsRoot(Folder_))
+    if (TrashMode_ || hz::fs::IsRoot(Folder_))
         return;
     hz::String Child = hz::fs::FileName(Folder_);
     Navigate(hz::fs::Parent(Folder_), true, Child);
@@ -938,6 +1164,12 @@ void FilesApp::Up()
 void FilesApp::UpdateCrumbs()
 {
     Crumbs_->ClearChildren();
+    if (TrashMode_) {
+        TextBlock *Label = Crumbs_->Add<TextBlock>("Trash", FontRole::Body);
+        Label->VerticalAlignment = Align::Center;
+        Label->Foreground = Theme::TextPrimary;
+        return;
+    }
     hz::Vector<hz::String> Parts, Paths;
     hz::String Accumulated;
     size_t At = 0;
@@ -1001,7 +1233,7 @@ void FilesApp::SetAddressEditing(bool Editing)
     Address_->SetVisible(Editing);
     Crumbs_->SetVisible(!Editing);
     if (Editing) {
-        Address_->SetText(Folder_.CStr(), false);
+        Address_->SetText(TrashMode_ ? "Trash" : Folder_.CStr(), false);
         Main_->SetFocus(Address_, true);
         Address_->SelectAll();
     }
@@ -1043,13 +1275,15 @@ void FilesApp::UpdateCommands()
     bool HasSelection = Selected() != nullptr;
     BackButton_->SetEnabled(HistoryIndex_ > 0);
     ForwardButton_->SetEnabled(HistoryIndex_ + 1 < History_.Size());
-    UpButton_->SetEnabled(!hz::fs::IsRoot(Folder_));
-    NewButton_->SetEnabled(Writable());
-    RenameButton_->SetEnabled(Writable() && HasSelection);
+    UpButton_->SetEnabled(!TrashMode_ && !hz::fs::IsRoot(Folder_));
+    NewButton_->SetEnabled(!TrashMode_ && Writable());
+    RenameButton_->SetEnabled(!TrashMode_ && Writable() && HasSelection);
     DeleteButton_->SetEnabled(Writable() && HasSelection);
-    CutButton_->SetEnabled(Writable() && HasSelection);
-    CopyButton_->SetEnabled(HasSelection);
-    PasteButton_->SetEnabled(Writable() && !ClipPath_.Empty());
+    DeleteButton_->ToolTip = TrashMode_ ? "Permanently delete from Trash (Del)"
+                                        : "Move to Trash (Del); permanently delete (Shift+Del)";
+    CutButton_->SetEnabled(!TrashMode_ && Writable() && HasSelection);
+    CopyButton_->SetEnabled(!TrashMode_ && HasSelection);
+    PasteButton_->SetEnabled(!TrashMode_ && Writable() && !ClipPath_.Empty());
 }
 
 void FilesApp::UpdateViewControls()
@@ -1094,7 +1328,10 @@ void FilesApp::SetSort(int Key, bool Descending)
 {
     SortKey_ = hz::Clamp(Key, (int)SortName, (int)SortSize);
     SortDescending_ = Descending;
-    SortEntries(All_, SortKey_, SortDescending_);
+    if (TrashMode_)
+        SortTrashEntries();
+    else
+        SortEntries(All_, SortKey_, SortDescending_);
     ApplyView();
     UpdateViewControls();
     UpdateStatus();
@@ -1125,6 +1362,10 @@ void FilesApp::Open(size_t Index)
 {
     if (Index >= Entries_.Size())
         return;
+    if (TrashMode_) {
+        RestoreTrashItem(Index);
+        return;
+    }
     const hz::fs::Entry E = Entries_[Index];
     hz::String Path = hz::fs::Join(Folder_, E.Name.CStr());
     if (E.Directory) {
@@ -1150,7 +1391,7 @@ void FilesApp::Open(size_t Index)
 
 void FilesApp::NewFolder()
 {
-    if (!Writable())
+    if (!Writable() || TrashMode_)
         return;
     hz::String Name("New folder");
     for (int i = 2; hz::fs::Exists(hz::fs::Join(Folder_, Name.CStr())) && i < 100; i++)
@@ -1184,7 +1425,7 @@ void FilesApp::NewFolder()
 /* Create file: any extension, an empty file, no overwrite. */
 void FilesApp::NewFile()
 {
-    if (!Writable())
+    if (!Writable() || TrashMode_)
         return;
     hz::String Name("New file.txt");
     for (int i = 2; hz::fs::Exists(hz::fs::Join(Folder_, Name.CStr())) && i < 100; i++)
@@ -1218,7 +1459,7 @@ void FilesApp::NewFile()
 void FilesApp::RenameSelected()
 {
     const hz::fs::Entry *E = Selected();
-    if (!E || !Writable())
+    if (!E || !Writable() || TrashMode_)
         return;
     hz::String Old = E->Name;
     InputBox(Main_, "Rename", "New name", Old.CStr(), "Rename", [this, Old](const hz::String &Typed) {
@@ -1247,59 +1488,151 @@ void FilesApp::RenameSelected()
 }
 
 /* Counts the files and folders below Folder (for the delete confirmation). */
-void CountTree(const hz::String &Folder, size_t &Files, size_t &Folders)
+STATUS CountTree(const hz::String &Folder, size_t &Files, size_t &Folders)
 {
     hz::Vector<hz::fs::Entry> Children;
-    if (!HZ_SUCCESS(hz::fs::List(Folder, Children)))
-        return;
+    STATUS Status = hz::fs::List(Folder, Children);
+    if (!HZ_SUCCESS(Status))
+        return Status;
     for (const hz::fs::Entry &C : Children) {
         if (C.Directory) {
             Folders++;
-            CountTree(hz::fs::Join(Folder, C.Name.CStr()), Files, Folders);
+            Status = CountTree(hz::fs::Join(Folder, C.Name.CStr()), Files, Folders);
+            if (!HZ_SUCCESS(Status))
+                return Status;
         } else {
             Files++;
         }
     }
+    return STATUS_SUCCESS;
 }
 
-void FilesApp::DeleteSelected()
+void FilesApp::DeleteSelected(bool Permanent)
 {
     const hz::fs::Entry *E = Selected();
     if (!E || !Writable())
         return;
     hz::String Name = E->Name;
     bool Directory = E->Directory;
-    hz::String Question;
-    if (Directory) {
-        size_t Files = 0, Folders = 0;
-        CountTree(hz::fs::Join(Folder_, Name.CStr()), Files, Folders);
-        Question = Files + Folders == 0
-                       ? hz::String::Format("Delete the empty folder \"%s\"?", Name.CStr())
-                       : hz::String::Format("Delete the folder \"%s\" and everything in it (%zu file%s, %zu folder%s)? "
-                                            "This cannot be undone.",
-                                            Name.CStr(), Files, Files == 1 ? "" : "s", Folders, Folders == 1 ? "" : "s");
-    } else {
-        Question = hz::String::Format("Delete \"%s\"? This cannot be undone.", Name.CStr());
-    }
-    MessageBox(Main_, "Delete", Question.CStr(), "Delete|Cancel", [this, Name](int Choice) {
-        if (Choice != 0)
+    if (TrashMode_) {
+        size_t Index = List_->SelectedIndex();
+        if (Index >= VisibleTrashItems_.Size())
             return;
-        hz::String Path = hz::fs::Join(Folder_, Name.CStr());
-        STATUS Status = hz::fs::DeleteTree(Path);
-        if (hz::fs::EqualNames(ClipPath_.CStr(), Path.CStr()) || hz::fs::IsInside(ClipPath_, Path))
-            ClipPath_ = hz::String();
-        if (!HZ_SUCCESS(Status)) {
-            MessageBox(Main_, "Files", hz::String::Format("%s cannot be deleted: %s.", Name.CStr(), hz::fs::StatusText(Status)).CStr(),
+        hz::fs::TrashItem Item = VisibleTrashItems_[Index];
+        hz::String Question = Directory
+                                  ? hz::String::Format("Permanently delete \"%s\" and all its contents from Trash?",
+                                                       Name.CStr())
+                                  : hz::String::Format("Permanently delete \"%s\" from Trash?", Name.CStr());
+        MessageBox(Main_, "Delete permanently", Question.CStr(), "Delete permanently|Cancel",
+                   [this, Item](int Choice) {
+                       if (Choice != 0)
+                           return;
+                       STATUS Status = hz::fs::TrashDelete(Item.Name);
+                       if (!HZ_SUCCESS(Status)) {
+                           MessageBox(Main_, "Files",
+                                      hz::String::Format("\"%s\" cannot be permanently deleted: %s.",
+                                                         Item.OriginalName.CStr(), hz::fs::StatusText(Status))
+                                          .CStr(),
+                                      nullptr, nullptr);
+                           return;
+                       }
+                       HzPrint("files: permanently deleted Trash item %s", Item.OriginalName.CStr());
+                       Refresh();
+                   });
+        return;
+    }
+
+    hz::String Question;
+    if (!Permanent) {
+        Question = hz::String::Format("Move \"%s\" to Trash?", Name.CStr());
+    } else if (Directory) {
+        size_t Files = 0, Folders = 0;
+        STATUS CountStatus = CountTree(hz::fs::Join(Folder_, Name.CStr()), Files, Folders);
+        if (!HZ_SUCCESS(CountStatus)) {
+            MessageBox(Main_, "Files",
+                       hz::String::Format("Could not inspect \"%s\" before deletion: %s.", Name.CStr(),
+                                          hz::fs::StatusText(CountStatus))
+                           .CStr(),
                        nullptr, nullptr);
             return;
         }
-        HzPrint("files: deleted %s", Path.CStr());
+        Question = Files + Folders == 0
+                       ? hz::String::Format("Permanently delete the empty folder \"%s\"?", Name.CStr())
+                       : hz::String::Format("Permanently delete the folder \"%s\" and everything in it (%zu file%s, "
+                                            "%zu folder%s)? This cannot be undone.",
+                                            Name.CStr(), Files, Files == 1 ? "" : "s", Folders, Folders == 1 ? "" : "s");
+    } else {
+        Question = hz::String::Format("Permanently delete \"%s\"? This cannot be undone.", Name.CStr());
+    }
+    hz::String Path = hz::fs::Join(Folder_, Name.CStr());
+    auto Complete = [this, Name, Path](STATUS Status, bool WasPermanent) {
+        if (!HZ_SUCCESS(Status)) {
+            MessageBox(Main_, "Files",
+                       hz::String::Format("%s cannot be %s: %s.", Name.CStr(),
+                                          WasPermanent ? "permanently deleted" : "moved to Trash",
+                                          hz::fs::StatusText(Status))
+                           .CStr(),
+                       nullptr, nullptr);
+            return;
+        }
+        if (hz::fs::EqualNames(ClipPath_.CStr(), Path.CStr()) || hz::fs::IsInside(ClipPath_, Path))
+            ClipPath_ = hz::String();
+        HzPrint("files: %s %s", WasPermanent ? "permanently deleted" : "moved to Trash", Path.CStr());
         size_t Index = List_->SelectedIndex();
         Refresh();
         if (!Entries_.Empty())
             List_->SetSelectedIndex(hz::Min(Index, Entries_.Size() - 1));
         Main_->SetFocus(List_);
-    });
+    };
+    if (!Permanent) {
+        Complete(hz::fs::Trash(Path), false);
+        return;
+    }
+    MessageBox(Main_, "Delete permanently", Question.CStr(), "Delete permanently|Cancel",
+               [Path, Complete](int Choice) {
+                   if (Choice == 0)
+                       Complete(hz::fs::DeleteTree(Path), true);
+               });
+}
+
+void FilesApp::RestoreTrashItem(size_t Index)
+{
+    if (Index >= VisibleTrashItems_.Size())
+        return;
+    hz::fs::TrashItem Item = VisibleTrashItems_[Index];
+    hz::String Restored;
+    STATUS Status = hz::fs::TrashRestore(Item.Name, &Restored);
+    if (!HZ_SUCCESS(Status)) {
+        MessageBox(Main_, "Files",
+                   hz::String::Format("\"%s\" cannot be restored: %s.", Item.OriginalName.CStr(),
+                                      hz::fs::StatusText(Status))
+                       .CStr(),
+                   nullptr, nullptr);
+        return;
+    }
+    HzPrint("files: restored %s to %s", Item.OriginalName.CStr(), Restored.CStr());
+    Refresh();
+}
+
+void FilesApp::EmptyTrash()
+{
+    if (!TrashMode_ || !Writable() || Entries_.Empty())
+        return;
+    MessageBox(Main_, "Empty Trash", "Permanently delete every item in Trash? This cannot be undone.",
+               "Empty Trash|Cancel", [this](int Choice) {
+                   if (Choice != 0)
+                       return;
+                   STATUS Status = hz::fs::TrashEmpty();
+                   if (!HZ_SUCCESS(Status)) {
+                       MessageBox(Main_, "Files",
+                                  hz::String::Format("Trash cannot be emptied: %s.", hz::fs::StatusText(Status))
+                                      .CStr(),
+                                  nullptr, nullptr);
+                       return;
+                   }
+                   HzPrint("files: emptied Trash");
+                   Refresh();
+               });
 }
 
 void FilesApp::ShowProperties()
@@ -1307,11 +1640,32 @@ void FilesApp::ShowProperties()
     const hz::fs::Entry *E = Selected();
     if (!E)
         return;
+    if (TrashMode_) {
+        size_t Index = List_->SelectedIndex();
+        if (Index >= VisibleTrashItems_.Size())
+            return;
+        const hz::fs::TrashItem &Item = VisibleTrashItems_[Index];
+        hz::String StoredPath = hz::fs::Join(hz::fs::TrashFolder(), Item.Name.CStr());
+        MessageBox(Main_, "Properties",
+                   hz::String::Format("%s\n\nOriginal location: %s\nDeleted: %s\nStored item: %s",
+                                      Item.OriginalName.CStr(), Item.OriginalPath.Empty() ? "unknown" : Item.OriginalPath.CStr(),
+                                      hz::fs::FormatTime(Item.DeletedAt).CStr(), StoredPath.CStr())
+                       .CStr(),
+                   nullptr, nullptr);
+        return;
+    }
     hz::String Path = hz::fs::Join(Folder_, E->Name.CStr());
     hz::String Detail;
     if (E->Directory) {
         size_t Files = 0, Folders = 0;
-        CountTree(Path, Files, Folders);
+        STATUS Status = CountTree(Path, Files, Folders);
+        if (!HZ_SUCCESS(Status)) {
+            MessageBox(Main_, "Properties",
+                       hz::String::Format("Could not inspect \"%s\": %s.", E->Name.CStr(), hz::fs::StatusText(Status))
+                           .CStr(),
+                       nullptr, nullptr);
+            return;
+        }
         Detail = hz::String::Format("%zu file%s, %zu folder%s", Files, Files == 1 ? "" : "s", Folders,
                                     Folders == 1 ? "" : "s");
     } else {
@@ -1327,7 +1681,7 @@ void FilesApp::ShowProperties()
 void FilesApp::ClipSelected(bool Cut)
 {
     const hz::fs::Entry *E = Selected();
-    if (!E || (Cut && !Writable()))
+    if (!E || TrashMode_ || (Cut && !Writable()))
         return;
     ClipPath_ = hz::fs::Join(Folder_, E->Name.CStr());
     ClipCut_ = Cut;
@@ -1356,7 +1710,7 @@ hz::String FreeName(const hz::String &Folder, const hz::String &Name, bool Direc
 
 void FilesApp::Paste()
 {
-    if (ClipPath_.Empty() || !Writable())
+    if (ClipPath_.Empty() || !Writable() || TrashMode_)
         return;
     hz::String Source = ClipPath_;
     bool Directory = false;
@@ -1413,7 +1767,7 @@ void FilesApp::Paste()
 void FilesApp::ExtractSelected()
 {
     const hz::fs::Entry *E = Selected();
-    if (!E || E->Directory || !Writable())
+    if (!E || E->Directory || !Writable() || TrashMode_)
         return;
     hz::String Name = E->Name;
     hz::String Source = hz::fs::Join(Folder_, Name.CStr());
@@ -1466,6 +1820,17 @@ void FilesApp::ShowItemContextMenu(size_t Index, Point Screen)
     List_->SetSelectedIndex(Index);
     const hz::fs::Entry &E = Entries_[Index];
     hz::Vector<MenuItem> Items;
+    if (TrashMode_) {
+        Items.Push(MenuItem::Make("Restore", [this, Index]() { RestoreTrashItem(Index); }));
+        Items.Push(MenuItem::MakeSeparator());
+        MenuItem DeleteItem = MenuItem::Make("Delete permanently", [this]() { DeleteSelected(true); });
+        DeleteItem.Enabled = Writable();
+        Items.Push(hz::Move(DeleteItem));
+        Items.Push(MenuItem::MakeSeparator());
+        Items.Push(MenuItem::Make("Properties", [this]() { ShowProperties(); }));
+        ShowMenu(Main_, Screen, hz::Move(Items));
+        return;
+    }
     Items.Push(MenuItem::Make("Open", [this, Index]() { Open(Index); }));
     if (!E.Directory && hz::archive::IsArchive(E.Name)) {
         MenuItem ExtractItem = MenuItem::Make("Extract all...", [this]() { ExtractSelected(); });
@@ -1484,9 +1849,13 @@ void FilesApp::ShowItemContextMenu(size_t Index, Point Screen)
     MenuItem RenameItem = MenuItem::Make("Rename", [this]() { RenameSelected(); }, "F2");
     RenameItem.Enabled = Writable();
     Items.Push(hz::Move(RenameItem));
-    MenuItem DeleteItem = MenuItem::Make("Delete", [this]() { DeleteSelected(); }, "Del");
+    MenuItem DeleteItem = MenuItem::Make("Move to Trash", [this]() { DeleteSelected(); }, "Del");
     DeleteItem.Enabled = Writable();
     Items.Push(hz::Move(DeleteItem));
+    MenuItem PermanentDeleteItem =
+        MenuItem::Make("Delete permanently", [this]() { DeleteSelected(true); }, "Shift+Del");
+    PermanentDeleteItem.Enabled = Writable();
+    Items.Push(hz::Move(PermanentDeleteItem));
     Items.Push(MenuItem::MakeSeparator());
     Items.Push(MenuItem::Make("Properties", [this]() { ShowProperties(); }));
     if (!Writable())
@@ -1504,6 +1873,14 @@ void FilesApp::ShowBackgroundContextMenu(Point Screen)
 {
     List_->SetSelectedIndex(hz::NotFound);
     hz::Vector<MenuItem> Items;
+    if (TrashMode_) {
+        MenuItem Empty = MenuItem::Make("Empty Trash", [this]() { EmptyTrash(); });
+        Empty.Enabled = Writable() && !Entries_.Empty();
+        Items.Push(hz::Move(Empty));
+        Items.Push(MenuItem::Make("Refresh", [this]() { Refresh(); }, "F5"));
+        ShowMenu(Main_, Screen, hz::Move(Items));
+        return;
+    }
     MenuItem NewFolderItem = MenuItem::Make("New folder", [this]() { NewFolder(); }, "Ctrl+Shift+N");
     NewFolderItem.Enabled = Writable();
     Items.Push(hz::Move(NewFolderItem));
@@ -1518,11 +1895,6 @@ void FilesApp::ShowBackgroundContextMenu(Point Screen)
     Items.Push(MenuItem::Make("Sort by name", [this]() { SetSort(SortName, false); }));
     Items.Push(MenuItem::Make("Refresh", [this]() { Refresh(); }, "F5"));
     Items.Push(MenuItem::MakeSeparator());
-    Items.Push(MenuItem::Make("Open in Notepad", [this]() {
-        const hz::fs::Entry *E = Selected();
-        if (!E)
-            MessageBox(Main_, "Files", "Select an item first.", nullptr, nullptr);
-    }, ""));
     if (!Writable()) {
         Items.Push(MenuItem::MakeSeparator());
         MenuItem Note = MenuItem::Make("This volume is read-only", []() {});
@@ -1540,6 +1912,28 @@ void FilesApp::ShowNewMenu()
     Items.Push(MenuItem::Make("Text document", [this]() { NewFile(); }));
     Items.Push(MenuItem::Make("Empty file (any extension)", [this]() { NewFile(); }));
     ShowMenu(Main_, Below(NewButton_), hz::Move(Items), 220);
+}
+
+void FilesApp::ShowOverflowMenu()
+{
+    hz::Vector<MenuItem> Items;
+    auto AddCommand = [&Items](Button *Command, const char *Label, const char *Shortcut) {
+        if (Command->IsVisible())
+            return;
+        MenuItem Item = MenuItem::Make(Label, [Command]() { Command->Click(); }, Shortcut);
+        Item.Enabled = Command->IsEnabled();
+        Items.Push(hz::Move(Item));
+    };
+    AddCommand(NewButton_, "New", "");
+    AddCommand(CutButton_, "Cut", "Ctrl+X");
+    AddCommand(CopyButton_, "Copy", "Ctrl+C");
+    AddCommand(PasteButton_, "Paste", "Ctrl+V");
+    AddCommand(RenameButton_, "Rename", "F2");
+    AddCommand(DeleteButton_, "Move to Trash", "Del");
+    AddCommand(SortButton_, "Sort", "");
+    AddCommand(ViewButton_, "View", "");
+    if (!Items.Empty())
+        ShowMenu(Main_, Below(OverflowButton_), hz::Move(Items));
 }
 
 void FilesApp::ShowSortMenu()

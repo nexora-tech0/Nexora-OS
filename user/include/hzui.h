@@ -84,6 +84,7 @@ constexpr uint32_t ScrollMs = 180;
 constexpr uint32_t FocusExpandMs = 150;
 constexpr uint32_t FocusCollapseMs = 250;
 constexpr uint32_t LockScreenExitMs = 260;
+constexpr uint32_t SignInMs = 280;       /* lock surface → sign-in card */
 constexpr uint32_t FlyoutRevealMs = 220; /* a flyout sliding its content into place on open */
 }  // namespace Motion
 
@@ -135,8 +136,8 @@ inline Color Glass = 0x523D424F;
 inline Color FlyoutBackground = 0xB02B2E37;
 inline Color HoverRow = 0x1CFFFFFF;
 inline Color FooterBand = 0x26000000;
-constexpr float ControlRadius = 4.0f;
-constexpr float OverlayRadius = 8.0f;
+constexpr float ControlRadius = 6.0f;
+constexpr float OverlayRadius = 12.0f;
 constexpr int32_t ControlHeight = 32;
 }  // namespace Theme
 
@@ -378,6 +379,44 @@ public:
     int32_t Spacing;
     Size MeasureOverride(Size Available) override;
     void ArrangeOverride(const Rect &Content) override;
+};
+
+/* A themed surface with a heading and vertically stacked content. Padding and Spacing retain the
+   usual Element/StackPanel meaning; TitleSpacing controls the gap below the heading. */
+class Card : public StackPanel {
+public:
+    explicit Card(const char *Title = "", int32_t Spacing = 12);
+    void SetTitle(const char *Title);
+    const hz::String &Title() const { return Title_; }
+    FontRole TitleFont = FontRole::Subtitle;
+    Color TitleForeground = 0; /* zero uses Theme::TextPrimary */
+    int32_t TitleSpacing = 8;
+    Size MeasureOverride(Size Available) override;
+    void ArrangeOverride(const Rect &Content) override;
+    void Paint(Painter &P) override;
+
+private:
+    hz::String Title_;
+};
+
+/* A compact horizontal command surface with an optional leading title, token-based chrome, and
+   optional dividers between items. Padding and item Spacing are configurable as on StackPanel. */
+class Toolbar : public StackPanel {
+public:
+    explicit Toolbar(const char *Title = "", int32_t Spacing = 8);
+    void SetTitle(const char *Title);
+    const hz::String &Title() const { return Title_; }
+    FontRole TitleFont = FontRole::BodyStrong;
+    Color TitleForeground = 0; /* zero uses Theme::TextPrimary */
+    int32_t TitleSpacing = 12;
+    bool ShowChrome = true;
+    bool ShowSeparators = false;
+    Size MeasureOverride(Size Available) override;
+    void ArrangeOverride(const Rect &Content) override;
+    void Paint(Painter &P) override;
+
+private:
+    hz::String Title_;
 };
 
 struct GridLength {

@@ -20,9 +20,10 @@ wave of changes began. Every implementation recorded in the ledger exists on dis
 **unverified**; no checklist gate has been ticked. One build plus a QEMU/VirtualBox pass is owed
 before any `written` item can be called working.
 
-**Resume point: the top of `checklist.md` — its "Handoff prompt — paste this to start the next
-session" block is self-contained and was refreshed 2026-10-25 (late); below it, the "Written and
-unverified" table and "Next up" are the state.** The newest list is the **2026-10-26 afternoon batch** (widgets, window snapping, desktop icon fix, Nexora Store, icon background removal, physical PC installer, internet browsing). Item 7 is the earlier one and is largely
+**Resume point: the top of `checklist.md` — its "Written and unverified" table and "Next up" are
+the state.** The newest work is **2026-10-26 late afternoon**: Windows 11 two-surface lock/sign-in,
+macOS WidgetKit-sized widgets on desktop and lock, and a UI/layout polish pass (including Browser).
+Item 7 is largely
 written: a real File Explorer (archive
 extract, create, rename), a bootable/real installer, Start/app-drawer re-polish, real icons from the
 internet, a working + polished Control Center, a clean Windows-like directory layout, Photo and Video
@@ -55,9 +56,9 @@ viewer, `user/apps/photos/photos.cpp` + `rootfs/Nexora/Apps/photos.app` (`ImageS
 nine-button toolbar, folder stepping, honest per-format failure text). **Video remains unwritten and
 unclaimed**: no demuxer, no codec, no audio device. The rest of item 7 — 7.8–7.13 — is not written;
 the Wi-Fi and remote-browsing work has **started** (see the paragraph below) but is far from done, and
-neither toggle may ever be faked. **Next: the 2026-10-26 afternoon batch (desktop fix, widgets, snapping).**
+neither toggle may ever be faked. **Next: item 7.8 (window snapping), then Nexora Store (offline catalog only until packages exist).**
 
-**Most recent request (2026-10-26, afternoon) — Desktop fix, Widgets, Snapping, Store, Physical PC Installer. Code not yet written.** The user requested: (1) fix desktop icon double-click not opening apps; (2) Apple-style widgets (Battery, CPU, RAM, GPU, Calendar) for desktop and lock screen, configurable in settings; (3) window snapping; (4) Nexora Store app; (5) remove background from app icons; (6) ensure ISO works on physical PCs. **Next: fix desktop double-click.**
+**Most recent request (2026-10-26, late afternoon) — Windows 11 lock + macOS widgets + polish every UI. Written, unverified.** Lock surface (clock, date, widgets) then a separate sign-in surface; Escape returns to lock. Widgets are WidgetKit small/medium/large glass cards with a gallery; Settings toggles desktop and lock widgets separately; Battery and GPU stay labelled unavailable. App icons no longer sit on filled colour tiles. Browser/Files and several apps got spacing/radius polish. **Still no Store, no window snapping, no build.**
 - **A real 802.11 driver**, honestly scoped: there is no emulated 802.11 radio in QEMU/VirtualBox, the
   Delivery-stage 2 PCI/DMA driver framework is not built yet, a WPA2/WPA3 supplicant is its own work,
   and no-firmware ath9k-class cards are preferred to avoid a firmware blob and its licence.

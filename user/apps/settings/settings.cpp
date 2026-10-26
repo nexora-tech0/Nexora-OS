@@ -320,6 +320,7 @@ public:
 private:
     StackPanel *NewPage(const char *Title, const char *Subtitle);
     void AddPersonalization();
+    void AddFilesPreferences();
     void AddAccounts();
     void ApplyName();
     void ApplyPassword();
@@ -410,6 +411,13 @@ STATUS SaveDesktopSettings(const hz::fs::Settings &S, bool *ShellNotified = null
     return Status;
 }
 
+STATUS SaveFilesSettings(const hz::fs::Settings &S)
+{
+    if (hz::fs::IsLiveSystem())
+        return STATUS_MEDIA_WRITE_PROTECTED;
+    return S.Save(hz::fs::SettingsPath("files"));
+}
+
 STATUS LoadShellSettings(hz::fs::Settings &S)
 {
     return S.Load(hz::fs::SettingsPath("shell"));
@@ -464,6 +472,90 @@ void SettingsApp::AddPersonalization()
     });
     Appearance->Note("Light and dark. First-boot setup asks for this too, and the desktop, the taskbar and the "
                      "flyouts follow the choice. Programs opened before the switch keep the mode they started in.");
+    InfoCard *WidgetCard = P->Add<InfoCard>("Desktop widgets");
+    hz::fs::Settings DesktopSettings;
+    STATUS DesktopStatus = DesktopSettings.Load(hz::fs::SettingsPath("desktop"));
+    if (!HZ_SUCCESS(DesktopStatus) && DesktopStatus != STATUS_NOT_FOUND)
+        HzPrint("settings: cannot read widget preferences (0x%08X)", (uint32_t)DesktopStatus);
+    auto SetWidget = [Status](const char *Id, bool Enabled) {
+        hz::fs::Settings S;
+        STATUS LoadStatus = S.Load(hz::fs::SettingsPath("desktop"));
+        if (!HZ_SUCCESS(LoadStatus) && LoadStatus != STATUS_NOT_FOUND) {
+            Status->Foreground = Theme::Accent;
+            Status->SetText(hz::String::Format("Could not read widget settings (0x%08X).",
+                                                (uint32_t)LoadStatus).CStr());
+            HzPrint("settings: cannot load desktop widget settings (0x%08X)", (uint32_t)LoadStatus);
+            return;
+        }
+        hz::String Key = hz::String::Format("Widget%sEnabled", Id);
+        S.SetInt(Key.CStr(), Enabled ? 1 : 0);
+        bool Notified = false;
+        STATUS SaveStatus = SaveDesktopSettings(S, &Notified);
+        if (!HZ_SUCCESS(SaveStatus)) {
+            Status->Foreground = Theme::Accent;
+            Status->SetText(SaveStatus == STATUS_MEDIA_WRITE_PROTECTED
+                                ? "The live system is read-only. Install Nexora OS to keep this choice."
+                                : hz::String::Format("Could not save widget settings (0x%08X).",
+                                                     (uint32_t)SaveStatus).CStr());
+            return;
+        }
+        Status->Foreground = Notified ? Theme::TextSecondary : Theme::Accent;
+        Status->SetText(Notified ? "Widget settings saved." : "Saved, but the shell did not pick the change up.");
+    };
+    AddToggle(WidgetCard, "Clock", DesktopSettings.GetInt("WidgetClockEnabled", 1) != 0,
+              [SetWidget](bool On) { SetWidget("Clock", On); });
+    AddToggle(WidgetCard, "Calendar", DesktopSettings.GetInt("WidgetCalendarEnabled", 1) != 0,
+              [SetWidget](bool On) { SetWidget("Calendar", On); });
+    AddToggle(WidgetCard, "CPU usage", DesktopSettings.GetInt("WidgetCPUEnabled", 1) != 0,
+              [SetWidget](bool On) { SetWidget("CPU", On); });
+    AddToggle(WidgetCard, "Memory usage", DesktopSettings.GetInt("WidgetRAMEnabled", 1) != 0,
+              [SetWidget](bool On) { SetWidget("RAM", On); });
+    AddToggle(WidgetCard, "Battery", DesktopSettings.GetInt("WidgetBatteryEnabled", 0) != 0,
+              [SetWidget](bool On) { SetWidget("Battery", On); });
+    AddToggle(WidgetCard, "GPU", DesktopSettings.GetInt("WidgetGPUEnabled", 0) != 0,
+              [SetWidget](bool On) { SetWidget("GPU", On); });
+    WidgetCard->Note("Right-click a desktop widget for the gallery. Drag to move; the corner cycles small, medium "
+                     "and large. Battery and GPU stay labelled unavailable until those sensors exist.");
+    InfoCard *LockWidgetCard = P->Add<InfoCard>("Lock screen widgets");
+    auto SetLockWidget = [Status](const char *Id, bool Enabled) {
+        hz::fs::Settings S;
+        STATUS LoadStatus = S.Load(hz::fs::SettingsPath("desktop"));
+        if (!HZ_SUCCESS(LoadStatus) && LoadStatus != STATUS_NOT_FOUND) {
+            Status->Foreground = Theme::Accent;
+            Status->SetText(hz::String::Format("Could not read lock-screen widget settings (0x%08X).",
+                                                (uint32_t)LoadStatus).CStr());
+            return;
+        }
+        hz::String Key = hz::String::Format("LockWidget%sEnabled", Id);
+        S.SetInt(Key.CStr(), Enabled ? 1 : 0);
+        bool Notified = false;
+        STATUS SaveStatus = SaveDesktopSettings(S, &Notified);
+        if (!HZ_SUCCESS(SaveStatus)) {
+            Status->Foreground = Theme::Accent;
+            Status->SetText(SaveStatus == STATUS_MEDIA_WRITE_PROTECTED
+                                ? "The live system is read-only. Install Nexora OS to keep this choice."
+                                : hz::String::Format("Could not save lock-screen widgets (0x%08X).",
+                                                     (uint32_t)SaveStatus).CStr());
+            return;
+        }
+        Status->Foreground = Notified ? Theme::TextSecondary : Theme::Accent;
+        Status->SetText(Notified ? "Lock screen widgets saved." : "Saved, but the shell did not pick the change up.");
+    };
+    AddToggle(LockWidgetCard, "Clock", DesktopSettings.GetInt("LockWidgetClockEnabled", 1) != 0,
+              [SetLockWidget](bool On) { SetLockWidget("Clock", On); });
+    AddToggle(LockWidgetCard, "Calendar", DesktopSettings.GetInt("LockWidgetCalendarEnabled", 1) != 0,
+              [SetLockWidget](bool On) { SetLockWidget("Calendar", On); });
+    AddToggle(LockWidgetCard, "CPU usage", DesktopSettings.GetInt("LockWidgetCPUEnabled", 0) != 0,
+              [SetLockWidget](bool On) { SetLockWidget("CPU", On); });
+    AddToggle(LockWidgetCard, "Memory usage", DesktopSettings.GetInt("LockWidgetRAMEnabled", 0) != 0,
+              [SetLockWidget](bool On) { SetLockWidget("RAM", On); });
+    AddToggle(LockWidgetCard, "Battery", DesktopSettings.GetInt("LockWidgetBatteryEnabled", 0) != 0,
+              [SetLockWidget](bool On) { SetLockWidget("Battery", On); });
+    AddToggle(LockWidgetCard, "GPU", DesktopSettings.GetInt("LockWidgetGPUEnabled", 0) != 0,
+              [SetLockWidget](bool On) { SetLockWidget("GPU", On); });
+    LockWidgetCard->Note("These sit on the Windows 11-style lock surface (below the clock). Click the wallpaper or "
+                         "press a key to open sign-in; Escape returns to the lock surface. Right-click a lock widget "
+                         "to add or remove it.");
     StackPanel *Targets = P->Add<StackPanel>(Orientation::Horizontal, 8);
     Button *DesktopTarget = Targets->Add<Button>("Desktop", ButtonStyle::Accent);
     Button *LockTarget = Targets->Add<Button>("Lock screen", ButtonStyle::Standard);
@@ -497,7 +589,8 @@ void SettingsApp::AddPersonalization()
         Cards->Invalidate();
     };
     List_.Push(Page{"Personalization", Icon::Sun, P,
-                    "wallpaper desktop lock screen background appearance", [this, Cards, Status]() {
+                    "wallpaper desktop lock screen background appearance widgets clock calendar cpu memory battery gpu",
+                    [this, Cards, Status]() {
                         uint32_t Now = 0;
                         if (CurrentWallpaper(Now))
                             Wallpaper_ = Now;
@@ -511,6 +604,87 @@ void SettingsApp::AddPersonalization()
                         }
                         Cards->Invalidate();
                     }});
+}
+
+void SettingsApp::AddFilesPreferences()
+{
+    StackPanel *P = NewPage("Files",
+                            "Choose the default layout and what the Files app displays. Changes apply when Files is "
+                            "opened again.");
+    TextBlock *Status = P->Add<TextBlock>("", FontRole::Caption);
+    Status->Wrap = true;
+    hz::fs::Settings Files;
+    STATUS LoadStatus = Files.Load(hz::fs::SettingsPath("files"));
+    if (!HZ_SUCCESS(LoadStatus) && LoadStatus != STATUS_NOT_FOUND)
+        HzPrint("settings: cannot read Files preferences (0x%08X)", (uint32_t)LoadStatus);
+
+    auto Save = [Status](const char *Key, const char *Value) {
+        hz::fs::Settings S;
+        STATUS ReadStatus = S.Load(hz::fs::SettingsPath("files"));
+        if (!HZ_SUCCESS(ReadStatus) && ReadStatus != STATUS_NOT_FOUND) {
+            Status->Foreground = Theme::Accent;
+            Status->SetText(hz::String::Format("Could not read Files settings (0x%08X).",
+                                                (uint32_t)ReadStatus).CStr());
+            HzPrint("settings: cannot load Files preferences (0x%08X)", (uint32_t)ReadStatus);
+            return;
+        }
+        S.Set(Key, Value);
+        STATUS SaveStatus = SaveFilesSettings(S);
+        if (!HZ_SUCCESS(SaveStatus)) {
+            Status->Foreground = Theme::Accent;
+            Status->SetText(SaveStatus == STATUS_MEDIA_WRITE_PROTECTED
+                                ? "The live system is read-only. Install Nexora OS to keep this choice."
+                                : hz::String::Format("Could not save Files settings (0x%08X).",
+                                                     (uint32_t)SaveStatus).CStr());
+            return;
+        }
+        Status->Foreground = Theme::TextSecondary;
+        Status->SetText("Files settings saved. Close and reopen Files to apply them.");
+    };
+
+    InfoCard *Layout = P->Add<InfoCard>("Default layout");
+    hz::Vector<hz::String> Views;
+    Views.Push("Details");
+    Views.Push("List");
+    Views.Push("Tiles");
+    hz::String SavedView = Files.Get("View", "Details");
+    size_t SelectedView = SavedView == "List" ? 1 : SavedView == "Tiles" ? 2 : 0;
+    AddChoice(Layout, "View", Views, SelectedView, [Save](size_t Index) {
+        static const char *const Values[] = {"Details", "List", "Tiles"};
+        Save("View", Values[Index < 3 ? Index : 0]);
+    });
+
+    InfoCard *Sorting = P->Add<InfoCard>("Default sorting");
+    hz::Vector<hz::String> SortKeys;
+    SortKeys.Push("Name");
+    SortKeys.Push("Date modified");
+    SortKeys.Push("Type");
+    SortKeys.Push("Size");
+    int Sort = hz::Clamp(Files.GetInt("Sort", 0), 0, 3);
+    AddChoice(Sorting, "Sort by", SortKeys, (size_t)Sort, [Save](size_t Index) {
+        Save("Sort", hz::String::Format("%u", (unsigned)(Index < 4 ? Index : 0)).CStr());
+    });
+    AddToggle(Sorting, "Descending order", Files.GetInt("SortDescending", 0) != 0, [Save](bool On) {
+        Save("SortDescending", On ? "1" : "0");
+    });
+
+    InfoCard *Display = P->Add<InfoCard>("Display");
+    AddToggle(Display, "Show hidden files", Files.GetInt("ShowHidden", 0) != 0, [Save](bool On) {
+        Save("ShowHidden", On ? "1" : "0");
+    });
+    AddToggle(Display, "Show file extensions", Files.GetInt("ShowExtensions", 1) != 0, [Save](bool On) {
+        Save("ShowExtensions", On ? "1" : "0");
+    });
+    Display->Note("Hidden files are identified only by the filesystem hidden attribute. This setting changes "
+                  "visibility; it is not a permission or security boundary.");
+    InfoCard *Availability = P->Add<InfoCard>("Available features");
+    TextBlock *Limitations = Availability->Add<TextBlock>(
+        "Gallery thumbnails, multi-selection, network shares, and removable USB storage are not available in this "
+        "build. The sidebar shows only known folders that exist and volumes reported by the OS.",
+        FontRole::Body);
+    Limitations->Wrap = true;
+    List_.Push(Page{"Files", Icon::Folder, P,
+                    "file explorer files view sort hidden extensions thumbnails gallery sidebar", {}});
 }
 
 void SettingsApp::AddAccounts()
@@ -1561,6 +1735,7 @@ bool SettingsApp::Create(const char *Initial)
     AddHome();
     AddSystem();
     AddPersonalization();
+    AddFilesPreferences();
     AddDesktop();
     AddNetwork();
     AddDevices();

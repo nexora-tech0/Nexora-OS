@@ -10,7 +10,8 @@
  *     owner applies it (the owner reallocates its surface);
  *   - caption (HZ_WS_CAPTION, top HZ_CAPTION_HEIGHT rows): a move drag done here, WM_MOVE at the
  *     end; a double-click toggles maximize (HZ_WS_MAXIMIZEBOX); dragging a maximized window
- *     restores it under the cursor first;
+ *     restores it under the cursor first; releasing a move at a work-area edge snaps to halves,
+ *     corners or maximize at the top edge;
  *   - caption buttons (right to left: close, maximize, minimize): the action on release over the
  *     same button; the owner hears hover and press changes through HZ_WM_CAPTIONSTATE;
  *   - client area: button messages, with capture until the release and double-click detection.
@@ -22,8 +23,9 @@
  * centre: motion is posted as HZ_WM_MOUSEDELTA and buttons and the wheel go straight to that
  * window. Activation changes, hiding the window, the logo key and Alt+Tab end it
  * (HZ_WM_MOUSEUNLOCKED).
- * Keyboard: key and character messages go to the active window; Alt+F4 posts WM_CLOSE to it and
- * Alt+Tab activates the bottom-most window (cycling, minimized windows included). With a shell
+ * Keyboard: key and character messages go to the active window; Win+Left/Right snaps to a half,
+ * Win+Up/Down maximizes/restores or moves a snapped window between corners. Alt+F4 posts WM_CLOSE
+ * to the active window and Alt+Tab activates the bottom-most window (cycling, minimized windows included). With a shell
  * registered (M8), the logo key alone and Alt+Tab (until Alt is released) go to the shell as
  * HZ_WM_SHELLNOTIFY events instead.
  * With hz.input=echo the PS/2 devices are left to the driver's echo diagnostic.
@@ -33,6 +35,7 @@
 #define INP_DOUBLE_CLICK_US 500000
 #define INP_DOUBLE_CLICK_DISTANCE 4
 #define INP_DRAG_THRESHOLD 4
+#define INP_SNAP_EDGE 12
 
 #define INP_EDGE_LEFT 1u
 #define INP_EDGE_TOP 2u
@@ -192,7 +195,7 @@ void UpdateDrag()
     WINDOW *W = Inp.DragWindow;
     int32_t dx = Inp.X - Inp.DragStartX, dy = Inp.Y - Inp.DragStartY;
     if (Inp.Drag == DragMove) {
-        if (W->State & HZ_WINDOW_STATE_MAXIMIZED) {
+        if ((W->State & HZ_WINDOW_STATE_MAXIMIZED) || W->SnapState != WmSnapNone) {
             if (dx > -INP_DRAG_THRESHOLD && dx < INP_DRAG_THRESHOLD && dy > -INP_DRAG_THRESHOLD && dy < INP_DRAG_THRESHOLD)
                 return;
             /* Restore under the cursor, keeping its relative position along the caption. */
@@ -203,6 +206,7 @@ void UpdateDrag()
             int32_t OffsetY = HZ_MIN(Inp.DragStartY - W->Rect.Top, HZ_CAPTION_HEIGHT - 1);
             HZ_RECT R = {Inp.X - OffsetX, Inp.Y - OffsetY, Inp.X - OffsetX + RestoreWidth, Inp.Y - OffsetY + RestoreHeight};
             W->State &= ~HZ_WINDOW_STATE_MAXIMIZED;
+            W->SnapState = WmSnapNone;
             WmRequestResize(W, R);
             WmInvalidateWindowArea(W);
             Inp.DragStartRect = R;
@@ -235,6 +239,54 @@ void UpdateDrag()
     R.Right = HZ_MIN(R.Right, R.Left + HZ_MAX_WINDOW_SIZE);
     R.Bottom = HZ_MIN(R.Bottom, R.Top + HZ_MAX_WINDOW_SIZE);
     WmRequestResize(W, R);
+}
+
+void SnapAtPointer(WINDOW *W)
+{
+    HZ_RECT Area = WmWorkArea();
+    bool Left = Inp.X - Area.Left <= INP_SNAP_EDGE;
+    bool Right = Area.Right - 1 - Inp.X <= INP_SNAP_EDGE;
+    bool Top = Inp.Y - Area.Top <= INP_SNAP_EDGE;
+    bool Bottom = Area.Bottom - 1 - Inp.Y <= INP_SNAP_EDGE;
+    if (Left && Top)
+        WmSnapWindow(W, WmSnapTopLeft);
+    else if (Right && Top)
+        WmSnapWindow(W, WmSnapTopRight);
+    else if (Left && Bottom)
+        WmSnapWindow(W, WmSnapBottomLeft);
+    else if (Right && Bottom)
+        WmSnapWindow(W, WmSnapBottomRight);
+    else if (Left)
+        WmSnapWindow(W, WmSnapLeft);
+    else if (Right)
+        WmSnapWindow(W, WmSnapRight);
+    else if (Top && (W->Style & HZ_WS_MAXIMIZEBOX))
+        WmMaximizeWindow(W);
+}
+
+void HandleSnapKey(WINDOW *W, uint32_t Key)
+{
+    if (!W || (W->State & HZ_WINDOW_STATE_MINIMIZED))
+        return;
+    uint32_t Snap = W->SnapState;
+    if (Key == HZ_VK_LEFT || Key == HZ_VK_RIGHT) {
+        WmSnapWindow(W, Key == HZ_VK_LEFT ? WmSnapLeft : WmSnapRight);
+    } else if (Key == HZ_VK_UP) {
+        if (Snap == WmSnapLeft || Snap == WmSnapTopLeft || Snap == WmSnapBottomLeft)
+            WmSnapWindow(W, WmSnapTopLeft);
+        else if (Snap == WmSnapRight || Snap == WmSnapTopRight || Snap == WmSnapBottomRight)
+            WmSnapWindow(W, WmSnapTopRight);
+        else if (!(W->State & HZ_WINDOW_STATE_MAXIMIZED) && (W->Style & HZ_WS_MAXIMIZEBOX))
+            WmMaximizeWindow(W);
+    } else if (Key == HZ_VK_DOWN) {
+        if (W->State & HZ_WINDOW_STATE_MAXIMIZED) {
+            WmRestoreWindow(W);
+        } else if (Snap == WmSnapLeft || Snap == WmSnapTopLeft || Snap == WmSnapBottomLeft) {
+            WmSnapWindow(W, WmSnapBottomLeft);
+        } else if (Snap == WmSnapRight || Snap == WmSnapTopRight || Snap == WmSnapBottomRight) {
+            WmSnapWindow(W, WmSnapBottomRight);
+        }
+    }
 }
 
 void StartDrag(INP_DRAG Kind, WINDOW *W, uint32_t Edges, uint32_t Button)
@@ -331,6 +383,7 @@ void LeftReleased()
         Inp.Drag = DragNone;
         Inp.DragWindow = nullptr;
         if (Drag == DragMove) {
+            SnapAtPointer(W);
             HZ_RECT R = W->ResizePending ? W->PendingRect : W->Rect;
             if (R.Left != Inp.DragOrigin.X || R.Top != Inp.DragOrigin.Y)
                 WmPostMessage(W, HZ_WM_MOVE, 0, HZ_MAKE_POINT(R.Left, R.Top));
@@ -636,19 +689,26 @@ void InpProcessKey(const HZ_KEY_EVENT *E)
         return;
     }
     /* The logo key alone (pressed and released with nothing in between) opens Start. */
-    if (E->VirtualKey == HZ_VK_LWIN && Shell) {
+    if (E->VirtualKey == HZ_VK_LWIN) {
         if (Down && !Inp.LogoDown) {
             Inp.LogoDown = true;
             Inp.LogoUsed = false;
         } else if (!Down) {
-            if (Inp.LogoDown && !Inp.LogoUsed)
+            if (Shell && Inp.LogoDown && !Inp.LogoUsed)
                 WmShellEvent(HZ_SHELL_START_KEY, 0);
             Inp.LogoDown = false;
         }
-        return;
+        if (Shell)
+            return;
     }
     if (Down && Inp.LogoDown)
         Inp.LogoUsed = true;
+    if (Inp.LogoDown && (E->VirtualKey == HZ_VK_LEFT || E->VirtualKey == HZ_VK_RIGHT ||
+                         E->VirtualKey == HZ_VK_UP || E->VirtualKey == HZ_VK_DOWN)) {
+        if (Down)
+            HandleSnapKey(WmActive, E->VirtualKey);
+        return;
+    }
     if (Down && Alt && E->VirtualKey == HZ_VK_TAB && Shell) {
         Inp.Switching = true;
         WmShellEvent(HZ_SHELL_SWITCH_NEXT, Shift ? 1 : 0);

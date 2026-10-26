@@ -112,18 +112,14 @@ Color TileForEntry(const hz::fs::Entry &E)
    else the first writable volume, so the desktop always has somewhere to put its icons. */
 hz::String DesktopFolderPath()
 {
-    hz::fs::Settings Shell;
-    if (HZ_SUCCESS(Shell.Load(hz::fs::SettingsPath("shell")))) {
-        hz::String Name = Shell.Get("UserName");
-        if (!Name.Empty() && hz::fs::IsValidUserName(Name.CStr())) {
-            hz::String Path = hz::String::Format("C:\\Users\\%s\\Desktop", Name.CStr());
-            bool Directory = false;
-            if (hz::fs::Exists(Path, &Directory) && Directory)
-                return Path;
-            if (hz::fs::Exists(hz::String::Format("C:\\Users\\%s", Name.CStr()), &Directory) && Directory &&
-                HZ_SUCCESS(hz::fs::CreateDirectory(Path)))
-                return Path;
-        }
+    hz::String Path = hz::fs::CurrentKnownFolderPath(hz::fs::KnownFolder::Desktop);
+    bool Directory = false;
+    if (!Path.Empty() && hz::fs::Exists(Path, &Directory) && Directory)
+        return Path;
+    hz::String Home = hz::fs::CurrentUserProfilePath();
+    if (!Path.Empty() && !Home.Empty() && hz::fs::Exists(Home, &Directory) && Directory &&
+        HZ_SUCCESS(hz::fs::CreateDirectory(Path))) {
+        return Path;
     }
     for (const hz::fs::Volume &V : hz::fs::Volumes())
         if (!V.ReadOnly && !V.Root.Empty())
@@ -165,17 +161,15 @@ int CompareEntries(const hz::fs::Entry &A, const hz::fs::Entry &B, int Key)
     return Result;
 }
 
-/* The manifest glyph on its coloured tile, faded by Alpha; a letter when the glyph is unknown. */
+/* The manifest glyph without a filled tile, faded by Alpha; a letter when the glyph is unknown. */
 void PaintTile(Painter &P, const Rect &Box, Color Tile, Icon Glyph, const char *Title, uint32_t Alpha)
 {
     float Fade = (float)Alpha / 255.0f;
     if (Fade <= 0)
         return;
-    float Radius = Box.Width / 4.0f;
-    P.FillVerticalGradient(Box, Radius, ScaleAlpha(MixColors(Tile, 0xFFFFFFFF, 0.14f), Fade), ScaleAlpha(Tile, Fade));
-    Color Ink = ScaleAlpha(0xFFFFFFFF, Fade);
+    Color Ink = ScaleAlpha(MixColors(Tile, Theme::TextPrimary, 0.25f), Fade);
     if (Glyph != Icon::None) {
-        P.DrawIcon(Glyph, Box.Deflate(Thickness(Box.Width / 5)), Ink, 1.5f);
+        P.DrawIcon(Glyph, Box.Deflate(Thickness(hz::Max(Box.Width / 10, 1))), Ink, 1.55f);
         return;
     }
     char Letter[2] = {Title[0] ? Title[0] : '?', 0};
@@ -210,7 +204,7 @@ public:
 
     DesktopView()
     {
-        Widgets = new WidgetHost();
+        Widgets = new WidgetHost(WidgetSurface::Desktop);
         AddChild(Widgets);
     }
     hz::Vector<DesktopItem> Shortcuts; /* the fixed icons, in order, before the folder's items */
@@ -304,12 +298,13 @@ public:
             W->InvalidateRect(GridBounds());
     }
 
-    void ArrangeOverride(Size S) override
+    void ArrangeOverride(const Rect &Content) override
     {
-        /* Icons grid stays on the left, widgets on the right */
-        int32_t WidgetWidth = 340;
-        Widgets->SetFrame(Rect{S.Width - WidgetWidth - 32, kWorkAreaTop + 32, WidgetWidth, S.Height - kWorkAreaTop - kTaskbarHeight - 64});
-        Widgets->LayoutWidgets();
+        /* Icons stay on the left; WidgetKit-sized widgets stack on the right. */
+        int32_t WidgetWidth = hz::Min(360, hz::Max(Content.Width - 96, 0));
+        Widgets->Width = WidgetWidth;
+        Widgets->Height = hz::Max(Content.Height - kWorkAreaTop - kTaskbarHeight - 48, 0);
+        Widgets->Arrange(Rect{Content.Right() - WidgetWidth - 24, kWorkAreaTop + 24, WidgetWidth, Widgets->Height});
     }
 
     void Paint(Painter &P) override
@@ -491,6 +486,7 @@ void Desktop::SavePrefs() const
 void Desktop::RefreshPrefs()
 {
     LoadPrefs();
+    View_->Widgets->RefreshPrefs();
     RebuildView();
 }
 

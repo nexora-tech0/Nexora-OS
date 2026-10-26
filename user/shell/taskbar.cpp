@@ -10,6 +10,14 @@ namespace {
 
 enum class TaskKind : uint8_t { Start, App, PinnedApp, Quick };
 
+uint64_t ClockMinuteKey()
+{
+    uint64_t Now = 0;
+    NtQuerySystemTime(&Now);
+    hz::fs::CivilTime T = hz::fs::ToCivil(Now, g_Shell.UtcOffset);
+    return (((((uint64_t)T.Year * 13 + T.Month) * 32 + T.Day) * 24 + T.Hour) * 60 + T.Minute);
+}
+
 class TaskButton final : public Element {
 public:
     TaskButton(TaskKind Kind, HWND Window, const char *Title, const char *AppId = "", bool Compact = false)
@@ -208,8 +216,7 @@ public:
         Width = 84;
         Height = 28;
         VerticalAlignment = Align::Center;
-        Background = Theme::Glass;
-        BorderColor = Theme::CardStroke;
+        Background = Theme::ControlFill;
         CornerRadius = 14;
         HitTestVisible = false;
         ToolTip = "Network and volume indicators";
@@ -218,8 +225,7 @@ public:
     /* Called when the shell switches colour scheme: the fill was captured at construction. */
     void ApplyTheme()
     {
-        Background = Theme::Glass;
-        BorderColor = Theme::CardStroke;
+        Background = Theme::ControlFill;
         Invalidate();
     }
 
@@ -316,11 +322,13 @@ void Taskbar::ApplyTheme()
 }
 
 TopDock::TopDock(int32_t ScreenWidth)
-    : Window("Nexora Dock", ScreenWidth, kTopDockHeight,
-             HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_MICA | HZ_WS_NOFRAME)
+    : Window("Nexora Dock", hz::Min(ScreenWidth > 32 ? ScreenWidth - 32 : ScreenWidth, 760), kTopDockHeight,
+             HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_TRANSPARENT | HZ_WS_NOFRAME)
 {
-    Background = 0xA0080808; /* dark glassy background */
+    Background = 0;
     Grid *Root = new Grid();
+    Root->Background = Theme::Glass;
+    Root->CornerRadius = 22;
     Root->Columns.Push(GridLength::Stars(1));
     Root->Columns.Push(GridLength::AutoSize());
     Root->Columns.Push(GridLength::Stars(1));
@@ -334,7 +342,7 @@ TopDock::TopDock(int32_t ScreenWidth)
     Brand->GridColumn = 1;
     Brand->VerticalAlignment = Align::Center;
     Brand->Padding = Thickness(16, 0);
-    Brand->Background = 0x1AFFFFFF; /* glassy pill overlay */
+    Brand->Background = Theme::ControlFill;
     Brand->CornerRadius = 14;
     Brand->Add<DockPages>();
     TextBlock *Name = Brand->Add<TextBlock>("Nexora OS", FontRole::BodyStrong);
@@ -347,10 +355,12 @@ TopDock::TopDock(int32_t ScreenWidth)
     Tray->HorizontalAlignment = Align::End;
     Tray->VerticalAlignment = Align::Center;
     Tray->Padding = Thickness(10, 0);
-    Tray->Background = 0x1AFFFFFF; /* glassy pill overlay */
+    Tray->Background = Theme::ControlFill;
     Tray->CornerRadius = 14;
     Clock_ = Tray->Add<DockClock>();
     Tray->Add<TaskButton>(TaskKind::Quick, (HWND)0, "", "", true);
+    Surface_ = Root;
+    Brand_ = Brand;
     Tray_ = Tray;
     SetContent(Root);
 }
@@ -360,7 +370,8 @@ void Taskbar::OnPaint(Painter &P)
     float T = Reveal_.Value();
     if (T < 1.0f) {
         int32_t Offset = (int32_t)((1.0f - T) * kTaskbarHeight);
-        P.PushClip(Rect{0, Offset, Width(), Height() - Offset});
+        Size S = WindowSize();
+        P.PushClip(Rect{0, Offset, S.Width, S.Height - Offset});
     }
     Window::OnPaint(P);
     if (T < 1.0f)
@@ -371,22 +382,48 @@ void Taskbar::Reveal()
 {
     Reveal_.Jump(0);
     Reveal_.To(1, Motion::FlyoutRevealMs);
-    StartAnimation();
+    if (RevealTimer_)
+        KillTimer(RevealTimer_);
+    RevealTimer_ = SetTimer(16, [this]() {
+        InvalidateRect(ClientRect());
+        if (Reveal_.Value() >= 1.0f) {
+            KillTimer(RevealTimer_);
+            RevealTimer_ = 0;
+        }
+    });
+    if (!RevealTimer_)
+        HzPrint("shell: could not start taskbar reveal animation");
 }
 
 void TopDock::Reveal()
 {
     Reveal_.Jump(0);
     Reveal_.To(1, Motion::FlyoutRevealMs);
-    StartAnimation();
+    if (RevealTimer_)
+        KillTimer(RevealTimer_);
+    RevealTimer_ = SetTimer(16, [this]() {
+        InvalidateRect(ClientRect());
+        if (Reveal_.Value() >= 1.0f) {
+            KillTimer(RevealTimer_);
+            RevealTimer_ = 0;
+        }
+    });
+    if (!RevealTimer_)
+        HzPrint("shell: could not start top-dock reveal animation");
 }
 
 void TopDock::ApplyTheme()
 {
+    if (Surface_)
+        Surface_->Background = Theme::Glass;
     if (Status_)
         static_cast<DockStatus *>(Status_)->ApplyTheme();
+    if (Brand_) {
+        Brand_->Background = Theme::ControlFill;
+        Brand_->Invalidate();
+    }
     if (Tray_) {
-        Tray_->Background = 0x1AFFFFFF;
+        Tray_->Background = Theme::ControlFill;
         Tray_->Invalidate();
     }
     if (Name_) {
@@ -401,13 +438,20 @@ void TopDock::OnPaint(Painter &P)
     float T = Reveal_.Value();
     if (T < 1.0f) {
         int32_t Offset = (int32_t)((1.0f - T) * -kTopDockHeight);
-        P.PushClip(Rect{0, 0, Width(), Height() + Offset});
+        Size S = WindowSize();
+        P.PushClip(Rect{0, 0, S.Width, S.Height + Offset});
     }
     Window::OnPaint(P);
     if (T < 1.0f)
         P.PopClip();
     if (!ClockTimer_ && IsOpen())
-        ClockTimer_ = SetTimer(1000, [this]() { Clock_->Invalidate(); });
+        ClockTimer_ = SetTimer(1000, [this, LastMinute = ClockMinuteKey()]() mutable {
+            uint64_t Minute = ClockMinuteKey();
+            if (Minute != LastMinute) {
+                LastMinute = Minute;
+                Clock_->Invalidate();
+            }
+        });
 }
 
 int64_t Taskbar::HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam)
@@ -450,7 +494,13 @@ void Taskbar::Rebuild()
         if (!g_Shell.AppForWindow(W.Handle) || !g_Shell.IsTaskbarPinned(W.AppId))
             Apps_->Add<TaskButton>(TaskKind::App, W.Handle, W.Title.CStr());
     if (!ClockTimer_ && IsOpen()) /* once the window exists */
-        ClockTimer_ = SetTimer(1000, [this]() { Clock_->Invalidate(); });
+        ClockTimer_ = SetTimer(1000, [this, LastMinute = ClockMinuteKey()]() mutable {
+            uint64_t Minute = ClockMinuteKey();
+            if (Minute != LastMinute) {
+                LastMinute = Minute;
+                Clock_->Invalidate();
+            }
+        });
     Refresh();
 }
 

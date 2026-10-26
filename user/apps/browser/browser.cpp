@@ -23,9 +23,9 @@ const char *HistoryFile = "C:\\Nexora\\Profiles\\Default\\Browser\\history.txt";
 const char *BookmarksFile = "C:\\Nexora\\Profiles\\Default\\Browser\\bookmarks.txt";
 const char HomePage[] =
     "<!doctype html><html><head><title>Nexora Browser</title></head><body>"
-    "<h1>Start page</h1>"
-    "<p>Enter an absolute local path or a file:/// URL. Remote pages are not available yet; the OS "
-    "still needs DNS transport, TCP, HTTP and verified HTTPS.</p>"
+    "<h1>Nexora Browser</h1>"
+    "<p>Open a local file with an absolute path or a file:/// URL. Remote pages stay unavailable "
+    "until TCP, HTTP and verified HTTPS exist. DNS lookup already reports whether a host resolves.</p>"
     "</body></html>";
 
 bool HasLineBreak(const char *s)
@@ -222,12 +222,14 @@ private:
     void Bookmark();
     void Refresh();
     void UpdateButtons();
+    void SetTabTitle(const char *Title);
     void Status(const char *Text);
     void ShowLocalFile(const hz::String &Address);
     void SetLinks(const BrowserUrl::HtmlDocument &Document);
     void OpenLink(size_t Index);
 
     Window *window_ = nullptr;
+    Button *tab_ = nullptr;
     TextBox *address_ = nullptr;
     Button *back_ = nullptr, *forward_ = nullptr, *reload_ = nullptr, *bookmark_ = nullptr;
     TextBlock *status_ = nullptr;
@@ -306,74 +308,121 @@ void Browser::Build()
     root->Rows.Push(GridLength::AutoSize());
 
     Grid *tabs = root->Add<Grid>();
-    tabs->Padding = Thickness(14, 8, 14, 2);
-    tabs->Columns.Push(GridLength::Pixels(220));
+    tabs->Padding = Thickness(20, 10, 20, 4);
+    tabs->ColumnSpacing = 8;
+    tabs->Columns.Push(GridLength::AutoSize());
     tabs->Columns.Push(GridLength::Stars(1));
     tabs->Columns.Push(GridLength::AutoSize());
-    Button *tab = tabs->Add<Button>("Nexora Start", ButtonStyle::Subtle);
-    tab->Glyph = Icon::Nexora;
-    tab->SetEnabled(false);
-    Button *newTab = tabs->Add<Button>("New tab", ButtonStyle::Subtle);
-    newTab->GridColumn = 2;
-    newTab->Glyph = Icon::Add;
-    newTab->OnClick = [this]() { StartPage(); };
+    tab_ = tabs->Add<Button>("Start page", ButtonStyle::Subtle);
+    tab_->Glyph = Icon::Nexora;
+    tab_->SetEnabled(false);
+    tab_->MaxWidth = 240;
+    Button *startPage = tabs->Add<Button>("Start page", ButtonStyle::Subtle);
+    startPage->GridColumn = 2;
+    startPage->Glyph = Icon::Home;
+    startPage->ToolTip = "Return to the start page in the current tab; multiple tabs are not supported";
+    startPage->OnClick = [this]() { StartPage(); };
 
     Grid *bar = root->Add<Grid>();
     bar->GridRow = 1;
-    bar->Padding = Thickness(12, 4, 12, 10);
-    bar->ColumnSpacing = 4;
-    for (int i = 0; i < 7; ++i)
-        bar->Columns.Push(GridLength::AutoSize());
-    bar->Columns.Push(GridLength::Stars(1));
+    bar->Padding = Thickness(20, 6, 20, 12);
+    bar->ColumnSpacing = 8;
     bar->Columns.Push(GridLength::AutoSize());
+    bar->Columns.Push(GridLength::AutoSize());
+    bar->Columns.Push(GridLength::Stars(1));
 
-    back_ = bar->Add<Button>("", ButtonStyle::Subtle);
+    Grid *navigation = bar->Add<Grid>();
+    navigation->Background = Theme::CardBackground;
+    navigation->BorderColor = Theme::CardStroke;
+    navigation->CornerRadius = Theme::OverlayRadius;
+    navigation->Padding = Thickness(4, 0, 4, 0);
+    navigation->ColumnSpacing = 2;
+    navigation->Columns.Push(GridLength::AutoSize());
+    navigation->Columns.Push(GridLength::AutoSize());
+    navigation->Columns.Push(GridLength::AutoSize());
+    navigation->Columns.Push(GridLength::AutoSize());
+    back_ = navigation->Add<Button>("", ButtonStyle::Subtle);
     back_->Glyph = Icon::ChevronLeft;
     back_->ToolTip = "Back · Alt+Left";
     back_->OnClick = [this]() { Back(); };
-    forward_ = bar->Add<Button>("", ButtonStyle::Subtle);
+    forward_ = navigation->Add<Button>("", ButtonStyle::Subtle);
     forward_->GridColumn = 1;
     forward_->Glyph = Icon::ChevronRight;
     forward_->ToolTip = "Forward · Alt+Right";
     forward_->OnClick = [this]() { Forward(); };
-    reload_ = bar->Add<Button>("", ButtonStyle::Subtle);
+    reload_ = navigation->Add<Button>("", ButtonStyle::Subtle);
     reload_->GridColumn = 2;
     reload_->Glyph = Icon::Refresh;
     reload_->ToolTip = "Reload · F5";
     reload_->OnClick = [this]() { Refresh(); };
-    Button *home = bar->Add<Button>("", ButtonStyle::Subtle);
+    Button *home = navigation->Add<Button>("", ButtonStyle::Subtle);
     home->GridColumn = 3;
     home->Glyph = Icon::Home;
     home->ToolTip = "Home · Ctrl+1";
     home->OnClick = [this]() { StartPage(); };
-    Button *hist = bar->Add<Button>("", ButtonStyle::Subtle);
-    hist->GridColumn = 4;
+
+    Grid *library = bar->Add<Grid>();
+    library->GridColumn = 1;
+    library->Background = Theme::CardBackground;
+    library->BorderColor = Theme::CardStroke;
+    library->CornerRadius = Theme::OverlayRadius;
+    library->Padding = Thickness(4, 0, 4, 0);
+    library->ColumnSpacing = 2;
+    library->Columns.Push(GridLength::AutoSize());
+    library->Columns.Push(GridLength::AutoSize());
+    library->Columns.Push(GridLength::AutoSize());
+    Button *hist = library->Add<Button>("", ButtonStyle::Subtle);
     hist->Glyph = Icon::Clock;
     hist->ToolTip = "History · Ctrl+H";
     hist->OnClick = [this]() { ShowList(Page::History); };
-    Button *downloads = bar->Add<Button>("", ButtonStyle::Subtle);
-    downloads->GridColumn = 5;
+    Button *downloads = library->Add<Button>("", ButtonStyle::Subtle);
+    downloads->GridColumn = 1;
     downloads->Glyph = Icon::Folder;
     downloads->ToolTip = "Downloads · Ctrl+J";
     downloads->OnClick = [this]() { ShowList(Page::Downloads); };
-    Button *bookmarks = bar->Add<Button>("", ButtonStyle::Subtle);
-    bookmarks->GridColumn = 6;
+    Button *bookmarks = library->Add<Button>("", ButtonStyle::Subtle);
+    bookmarks->GridColumn = 2;
     bookmarks->Glyph = Icon::Star;
     bookmarks->ToolTip = "Bookmarks · Ctrl+B";
     bookmarks->OnClick = [this]() { ShowList(Page::Bookmarks); };
-    address_ = bar->Add<TextBox>("Search or enter address");
-    address_->GridColumn = 7;
+
+    Grid *addressPill = bar->Add<Grid>();
+    addressPill->GridColumn = 2;
+    addressPill->Background = Theme::CardBackground;
+    addressPill->BorderColor = Theme::CardStroke;
+    addressPill->CornerRadius = Theme::OverlayRadius;
+    addressPill->Padding = Thickness(5, 4, 5, 4);
+    addressPill->ColumnSpacing = 6;
+    addressPill->Columns.Push(GridLength::AutoSize());
+    addressPill->Columns.Push(GridLength::Stars(1));
+    addressPill->Columns.Push(GridLength::AutoSize());
+    Button *addressAction = addressPill->Add<Button>("", ButtonStyle::Subtle);
+    addressAction->Glyph = Icon::Globe;
+    addressAction->ToolTip = "Focus address · Ctrl+L";
+    addressAction->OnClick = [this]() {
+        window_->SetFocus(address_, true);
+        address_->SelectAll();
+    };
+    address_ = addressPill->Add<TextBox>("Search or enter address");
+    address_->GridColumn = 1;
     address_->MaxLength = 2048;
+    address_->MinWidth = 120;
     address_->OnSubmit = [this](const hz::String &Text) { Go(Text); };
-    bookmark_ = bar->Add<Button>("", ButtonStyle::Subtle);
-    bookmark_->GridColumn = 8;
+    bookmark_ = addressPill->Add<Button>("", ButtonStyle::Subtle);
+    bookmark_->GridColumn = 2;
     bookmark_->Glyph = Icon::Star;
     bookmark_->ToolTip = "Bookmark · Ctrl+D";
     bookmark_->OnClick = [this]() { Bookmark(); };
 
     Grid *body = root->Add<Grid>();
     body->GridRow = 2;
-    body->Padding = Thickness(32, 26, 32, 24);
+    body->MaxWidth = 1040;
+    body->HorizontalAlignment = Align::Center;
+    body->Padding = Thickness(40, 32, 40, 28);
+    body->Background = Theme::CardBackground;
+    body->BorderColor = Theme::CardStroke;
+    body->CornerRadius = Theme::OverlayRadius;
+    body->Margin = Thickness(16, 0, 16, 8);
     body->Rows.Push(GridLength::AutoSize());
     body->Rows.Push(GridLength::AutoSize());
     body->Rows.Push(GridLength::Stars(1));
@@ -391,7 +440,7 @@ void Browser::Build()
     items_ = new AnimatedPageText(FontRole::BodyLarge);
     items_->Wrap = true;
     items_->Ellipsis = false;
-    items_->Padding = Thickness(20);
+    items_->Padding = Thickness(24);
     items_->Background = Theme::CardBackground;
     items_->BorderColor = Theme::CardStroke;
     items_->CornerRadius = Theme::OverlayRadius;
@@ -413,7 +462,7 @@ void Browser::Build()
 
     Grid *footer = root->Add<Grid>();
     footer->GridRow = 3;
-    footer->Padding = Thickness(16, 5, 16, 7);
+    footer->Padding = Thickness(20, 8, 20, 10);
     footer->Columns.Push(GridLength::Stars(1));
     status_ = footer->Add<TextBlock>("Ready", FontRole::Caption);
     window_->SetContent(root);
@@ -422,6 +471,12 @@ void Browser::Build()
 void Browser::Status(const char *Text)
 {
     status_->SetText(Text);
+}
+
+void Browser::SetTabTitle(const char *Title)
+{
+    if (tab_)
+        tab_->SetText(Title);
 }
 
 void Browser::Go(const hz::String &Raw, bool Record)
@@ -454,12 +509,11 @@ void Browser::Go(const hz::String &Raw, bool Record)
         return;
     }
     page_ = Page::Start;
-    linkTargets_.Clear();
-    linkLabels_.Clear();
-    links_->SetItemCount(0);
+    SetLinks(BrowserUrl::HtmlDocument{});
     uint8_t AddressBytes[4] = {0};
     STATUS ResolveStatus = HzResolveHostA(Parsed.host, AddressBytes);
     heading_->SetText("Internet page loading unavailable");
+    SetTabTitle("Remote page");
     if (HZ_SUCCESS(ResolveStatus)) {
         detail_->SetText(hz::String::Format("DNS resolved %s to %u.%u.%u.%u.",
                                              Parsed.host, AddressBytes[0], AddressBytes[1], AddressBytes[2],
@@ -498,6 +552,8 @@ void Browser::SetLinks(const BrowserUrl::HtmlDocument &Document)
 
 void Browser::ShowLocalFile(const hz::String &Address)
 {
+    page_ = Page::Start;
+    SetTabTitle("Local file");
     BrowserUrl::Url Parsed;
     hz::String Path, Source;
     if (BrowserUrl::ParseUrl(Address.CStr(), &Parsed) != BrowserUrl::UrlError::None ||
@@ -520,7 +576,6 @@ void Browser::ShowLocalFile(const hz::String &Address)
         HzPrint("browser: local read failed for %s (0x%08X)", Path.CStr(), (uint32_t)ReadStatus);
         return;
     }
-    page_ = Page::Start;
     currentAddress_ = Address;
     address_->SetText(Address.CStr(), false);
     bool Html = hz::fs::Extension(Path) == "html" || hz::fs::Extension(Path) == "htm";
@@ -545,6 +600,7 @@ void Browser::ShowLocalFile(const hz::String &Address)
         items_->SetText(document_.Text);
         SetLinks(document_);
     }
+    SetTabTitle(heading_->Text().CStr());
     items_->Foreground = Theme::TextPrimary;
     items_->Reveal();
     window_->SetTitle(hz::String::Format("%s - Nexora Browser", heading_->Text().CStr()).CStr());
@@ -585,6 +641,8 @@ void Browser::OpenLink(size_t Index)
 void Browser::StartPage()
 {
     page_ = Page::Start;
+    currentAddress_.Clear();
+    SetTabTitle("Start page");
     address_->SetText("", false);
     nexora::browser::HtmlDocument Document;
     if (!nexora::browser::ParseHtml(HomePage, sizeof(HomePage) - 1, &Document)) {
@@ -595,7 +653,7 @@ void Browser::StartPage()
         return;
     }
     heading_->SetText(Document.Title);
-    detail_->SetText("A minimal native browser shell. Enter an address to check its format.");
+    detail_->SetText("Local files and DNS lookup work. Web page loading does not: there is no TCP, HTTP or TLS yet.");
     items_->SetText(Document.Text);
     items_->Foreground = Theme::TextPrimary;
     SetLinks(Document);
@@ -608,10 +666,12 @@ void Browser::StartPage()
 void Browser::ShowList(Page View)
 {
     page_ = View;
+    SetLinks(BrowserUrl::HtmlDocument{});
     hz::String Lines;
     if (View == Page::History) {
         LoadLines(HistoryFile, history_, MaxHistory);
         heading_->SetText("History");
+        SetTabTitle("History");
         detail_->SetText("Recent addresses in this local profile.");
         for (const auto &Item : history_) {
             Lines.Append(Item);
@@ -621,6 +681,7 @@ void Browser::ShowList(Page View)
     } else if (View == Page::Bookmarks) {
         LoadLines(BookmarksFile, bookmarks_, MaxBookmarks);
         heading_->SetText("Bookmarks");
+        SetTabTitle("Bookmarks");
         detail_->SetText("Saved locally in the default profile. Use Ctrl+D to add or remove the current address.");
         for (const auto &Item : bookmarks_) {
             Lines.Append(Item);
@@ -629,6 +690,7 @@ void Browser::ShowList(Page View)
         Status("Bookmarks · Ctrl+B");
     } else {
         heading_->SetText("Downloads");
+        SetTabTitle("Downloads");
         detail_->SetText("Files in the profile Downloads folder. Internet downloads are unavailable until the network and engine layers exist.");
         hz::Vector<hz::fs::Entry> Files;
         if (HZ_SUCCESS(hz::fs::List(hz::String(Downloads), Files)))
@@ -664,7 +726,7 @@ void Browser::Forward()
 
 void Browser::Bookmark()
 {
-    if (!hasHistory_ || history_.Empty()) {
+    if (page_ != Page::Start || currentAddress_.Empty() || !hasHistory_ || history_.Empty()) {
         Status("Open an address before bookmarking it");
         return;
     }
@@ -693,8 +755,8 @@ void Browser::Bookmark()
 void Browser::Refresh()
 {
     if (page_ == Page::Start) {
-        if (hasHistory_ && !history_.Empty())
-            Go(history_[index_], false);
+        if (!currentAddress_.Empty())
+            Go(currentAddress_, false);
         else
             StartPage();
     } else {
@@ -706,8 +768,8 @@ void Browser::UpdateButtons()
 {
     back_->SetEnabled(hasHistory_ && index_ > 0);
     forward_->SetEnabled(hasHistory_ && index_ + 1 < history_.Size());
-    reload_->SetEnabled(hasHistory_ && !history_.Empty());
-    bookmark_->SetEnabled(hasHistory_ && !history_.Empty());
+    reload_->SetEnabled(page_ != Page::Start || !currentAddress_.Empty());
+    bookmark_->SetEnabled(page_ == Page::Start && !currentAddress_.Empty());
 }
 } // namespace
 

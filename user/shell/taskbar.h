@@ -1,7 +1,7 @@
 /*
  * Nexora OS - user/shell/taskbar.h
- * The top dock and bottom taskbar are frameless, topmost, never-activated Mica surfaces. The
- * taskbar is the window win32k sends shell notifications to.
+ * The top dock and bottom taskbar are topmost, never-activated shell surfaces. The dock floats
+ * inside the screen edges; the taskbar is the window win32k sends shell notifications to.
  */
 #ifndef SHELL_TASKBAR_H
 #define SHELL_TASKBAR_H
@@ -28,6 +28,7 @@ private:
     StackPanel *Tray_ = nullptr;
     Element *Clock_;
     uint64_t ClockTimer_ = 0;
+    uint64_t RevealTimer_ = 0;
     Transition Reveal_;
 };
 
@@ -41,11 +42,14 @@ protected:
     void OnPaint(Painter &P) override;
 
 private:
+    Grid *Surface_ = nullptr;
     Element *Status_ = nullptr;
+    StackPanel *Brand_ = nullptr;
     StackPanel *Tray_ = nullptr;
     TextBlock *Name_ = nullptr;
     Element *Clock_;
     uint64_t ClockTimer_ = 0;
+    uint64_t RevealTimer_ = 0;
     Transition Reveal_;
 };
 

@@ -752,7 +752,7 @@ void TaskManager::EndSelected()
 Element *TaskManager::BuildProcesses()
 {
     Grid *Page = new Grid();
-    Page->Padding = Thickness(12, 8, 12, 12);
+    Page->Padding = Thickness(14, 10, 14, 14);
     Page->RowSpacing = 6;
     Page->Rows.Push(GridLength::AutoSize());
     Page->Rows.Push(GridLength::AutoSize());

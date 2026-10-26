@@ -267,7 +267,7 @@ public:
         Main_ = new Window("Calendar", 520, 420);
         Main_->SetMinimumSize(380, 360);
         StackPanel *Root = new StackPanel(Orientation::Vertical, 4);
-        Root->Padding = Thickness(18, 12);
+        Root->Padding = Thickness(20, 16);
         Grid *Header = Root->Add<Grid>();
         Header->Columns.Push(GridLength::AutoSize());
         Header->Columns.Push(GridLength::Stars(1));

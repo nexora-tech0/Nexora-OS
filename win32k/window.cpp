@@ -456,7 +456,9 @@ void WmMaximizeWindow(WINDOW *W)
 {
     W->State &= ~HZ_WINDOW_STATE_MINIMIZED;
     if (!(W->State & HZ_WINDOW_STATE_MAXIMIZED)) {
-        W->RestoreRect = W->ResizePending ? W->PendingRect : W->Rect;
+        if (W->SnapState == WmSnapNone)
+            W->RestoreRect = W->ResizePending ? W->PendingRect : W->Rect;
+        W->SnapState = WmSnapNone;
         W->State |= HZ_WINDOW_STATE_MAXIMIZED;
         WmRequestResize(W, WmWorkArea());
         if (W->Visible)
@@ -465,6 +467,62 @@ void WmMaximizeWindow(WINDOW *W)
     }
     WmReveal(W);
     WmActivate(W);
+}
+
+bool WmSnapWindow(WINDOW *W, uint32_t Snap)
+{
+    if (!W || Snap < WmSnapLeft || Snap > WmSnapBottomRight ||
+        (W->State & HZ_WINDOW_STATE_MINIMIZED) || !(W->Style & HZ_WS_RESIZABLE) ||
+        !(W->Style & HZ_WS_CAPTION) || (W->Style & (HZ_WS_POPUP | HZ_WS_OWNED)))
+        return false;
+
+    HZ_RECT Area = WmWorkArea();
+    int32_t Width = Area.Right - Area.Left, Height = Area.Bottom - Area.Top;
+    int32_t LeftWidth = Width / 2, TopHeight = Height / 2;
+    int32_t MinWidth = HZ_MAX(HZ_MIN_WINDOW_WIDTH, W->MinWidth);
+    int32_t MinHeight = HZ_MAX(HZ_MIN_WINDOW_HEIGHT, W->MinHeight);
+    HZ_RECT R = Area;
+    switch (Snap) {
+    case WmSnapLeft:
+        R.Right = Area.Left + LeftWidth;
+        break;
+    case WmSnapRight:
+        R.Left = Area.Left + LeftWidth;
+        break;
+    case WmSnapTopLeft:
+        R.Right = Area.Left + LeftWidth;
+        R.Bottom = Area.Top + TopHeight;
+        break;
+    case WmSnapTopRight:
+        R.Left = Area.Left + LeftWidth;
+        R.Bottom = Area.Top + TopHeight;
+        break;
+    case WmSnapBottomLeft:
+        R.Right = Area.Left + LeftWidth;
+        R.Top = Area.Top + TopHeight;
+        break;
+    case WmSnapBottomRight:
+        R.Left = Area.Left + LeftWidth;
+        R.Top = Area.Top + TopHeight;
+        break;
+    default:
+        return false;
+    }
+    if (R.Right - R.Left < MinWidth || R.Bottom - R.Top < MinHeight ||
+        !WmValidSize(R.Right - R.Left, R.Bottom - R.Top))
+        return false;
+
+    if (W->SnapState == WmSnapNone && !(W->State & HZ_WINDOW_STATE_MAXIMIZED))
+        W->RestoreRect = W->ResizePending ? W->PendingRect : W->Rect;
+    W->State &= ~HZ_WINDOW_STATE_MAXIMIZED;
+    W->SnapState = Snap;
+    WmRequestResize(W, R);
+    if (W->Visible)
+        WmInvalidateWindowArea(W);
+    WmShellNotify(HZ_SHELL_WINDOW_CHANGED, W);
+    WmReveal(W);
+    WmActivate(W);
+    return true;
 }
 
 void WmRestoreWindow(WINDOW *W)
@@ -479,6 +537,12 @@ void WmRestoreWindow(WINDOW *W)
     }
     if (W->State & HZ_WINDOW_STATE_MAXIMIZED) {
         W->State &= ~HZ_WINDOW_STATE_MAXIMIZED;
+        WmRequestResize(W, W->RestoreRect);
+        if (W->Visible)
+            WmInvalidateWindowArea(W);
+        WmShellNotify(HZ_SHELL_WINDOW_CHANGED, W);
+    } else if (W->SnapState != WmSnapNone) {
+        W->SnapState = WmSnapNone;
         WmRequestResize(W, W->RestoreRect);
         if (W->Visible)
             WmInvalidateWindowArea(W);
@@ -549,6 +613,12 @@ STATUS WmSetWindowPos(WINDOW *W, int32_t X, int32_t Y, int32_t Width, int32_t He
     }
     if (!WmValidSize(Width, Height))
         return STATUS_INVALID_PARAMETER;
+    bool PositionChange = X != W->Rect.Left || Y != W->Rect.Top ||
+                          Width != W->Rect.Right - W->Rect.Left || Height != W->Rect.Bottom - W->Rect.Top;
+    if (!Requested && PositionChange && W->SnapState != WmSnapNone) {
+        W->SnapState = WmSnapNone;
+        WmShellNotify(HZ_SHELL_WINDOW_CHANGED, W);
+    }
     bool Resize = (uint32_t)Width != W->SurfaceWidth || (uint32_t)Height != W->SurfaceHeight;
     if (!Resize) {
         WmMoveWindow(W, X, Y);

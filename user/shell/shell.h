@@ -20,7 +20,7 @@ using namespace hzui;
 
 constexpr int32_t kTaskbarHeight = 48;
 constexpr int32_t kTopDockHeight = 48;
-constexpr int32_t kTopDockTop = 0;
+constexpr int32_t kTopDockTop = 8;
 constexpr int32_t kWorkAreaTop = kTopDockHeight;
 constexpr size_t kMaxRecent = 4;
 
@@ -35,6 +35,7 @@ struct AppWindow {
 class Taskbar;
 class TopDock;
 class Desktop;
+class WidgetHost;
 
 struct Shell {
     Rect Screen, Work;
@@ -42,6 +43,7 @@ struct Shell {
     TopDock *Dock = nullptr;
     Desktop *Desk = nullptr; /* the icon layer under every window */
     Window *Lock = nullptr;
+    WidgetHost *LockWidgets = nullptr; /* lock-screen widgets; owned by Lock */
     Window *Start = nullptr;
     Window *Quick = nullptr;
     Window *Switcher = nullptr;

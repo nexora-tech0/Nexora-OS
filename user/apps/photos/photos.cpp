@@ -299,7 +299,7 @@ void Photos::Build()
     Root->Rows.Push(GridLength::AutoSize()); /* status bar */
 
     Grid *Toolbar = Root->Add<Grid>();
-    Toolbar->Padding = Thickness(10, 8);
+    Toolbar->Padding = Thickness(12, 10);
     Toolbar->ColumnSpacing = 12;
     Toolbar->Columns.Push(GridLength::AutoSize());
     Toolbar->Columns.Push(GridLength::Stars(1));
