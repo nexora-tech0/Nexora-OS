@@ -8,8 +8,8 @@ Windows 11. It is written in C, C++, Rust and assembly, and it boots in VirtualB
 contains no Microsoft code or assets: the name, logo, icons and wallpapers are its own, and the
 interface font is Inter (SIL Open Font License).
 
-**Status: version 1.1.0.** The roadmap ended with 1.0.0 (M11); 1.1.0 (M12) added Blockyard, a
-block-building game.
+**Status: version 1.1.0.** The roadmap ended with 1.0.0 (M11); 1.1.0 (M12) added the window
+manager's mouse lock.
 
 ![The Nexora OS desktop with Notepad, Files and the Terminal](docs/images/desktop.png)
 
@@ -52,13 +52,9 @@ block-building game.
   category navigation, five shared wallpaper choices, account credentials, display/storage/network
   status, time zone and live system information; sound, USB/Bluetooth and advanced management
   features are clearly marked unavailable when their system APIs are not implemented), Task Manager (processes,
-  per-processor load), Setup, which installs Nexora OS on a disk, and Blockyard. New native app
+  per-processor load) and Setup, which installs Nexora OS on a disk. New native app
   source directories are discovered by the build automatically and checked against their manifests.
   The shell loads the app catalog from `C:\Nexora\Apps`.
-- **Blockyard:** an original 3D block-building game. The world is generated and saved to your
-  documents. You can walk, swim and fly, and break and place nine kinds of blocks. It is drawn by
-  a software raycaster on every processor, with ambient occlusion, water, glass, clouds, and
-  textures generated in code. The window manager's new mouse lock gives it mouse-look.
 - **Robustness:** a crashing program ends alone and the shell says which one; if the shell
   itself dies, the session starts it again; at shutdown programs are asked to close (Notepad
   asks about unsaved work) before the volumes are flushed.

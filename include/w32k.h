@@ -19,7 +19,7 @@ const char *W32kDescribeCppRuntime(void);
 void W32kInitialize(void);
 /* Hands the screen from the boot display to the compositor. */
 void W32kShowDesktop(void);
-/* Runs wintest.exe and checks for leftovers (win32k/w32test.cpp). */
+/* Checks the window manager starts with no windows or surface sections (win32k/w32test.cpp). */
 bool W32kRunSelfTests(void);
 uint32_t W32kQueryWindowCount(void);
 /* Tells the shell (if one is registered) that a process was ended by an exception (M11). */

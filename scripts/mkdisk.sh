@@ -3,7 +3,7 @@
 #
 #   64 MiB raw image, GPT:
 #     partition 1: 48 MiB basic data, FAT32 labeled HZTEST (512-byte clusters, so files and
-#                  directories span many clusters), with known files the kernel and fstest.exe check
+#                  directories span many clusters), with known files the kernel self-test checks
 #     partition 2: 4 MiB "Nexora OS test scratch" (GPT type 7A1F5C3E-2B4D-4E8A-9F60-485A54455354),
 #                  the only place the raw disk self-test writes to
 #

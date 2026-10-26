@@ -22,9 +22,7 @@ before any `written` item can be called working.
 
 **Resume point: the top of `checklist.md` — its "Handoff prompt — paste this to start the next
 session" block is self-contained and was refreshed 2026-10-25 (late); below it, the "Written and
-unverified" table and "Next up" are the state.** The newest list is § "Requested next steps" items
-14–19 (the 2026-10-25 late batch: driver reuse, `.exe`/Linux binaries, the missing apps, Explorer
-additions, dock hover/motion, volume controls, cleanup). Item 7 is the earlier one and is largely
+unverified" table and "Next up" are the state.** The newest list is the **2026-10-26 afternoon batch** (widgets, window snapping, desktop icon fix, Nexora Store, icon background removal, physical PC installer, internet browsing). Item 7 is the earlier one and is largely
 written: a real File Explorer (archive
 extract, create, rename), a bootable/real installer, Start/app-drawer re-polish, real icons from the
 internet, a working + polished Control Center, a clean Windows-like directory layout, Photo and Video
@@ -57,28 +55,9 @@ viewer, `user/apps/photos/photos.cpp` + `rootfs/Nexora/Apps/photos.app` (`ImageS
 nine-button toolbar, folder stepping, honest per-format failure text). **Video remains unwritten and
 unclaimed**: no demuxer, no codec, no audio device. The rest of item 7 — 7.8–7.13 — is not written;
 the Wi-Fi and remote-browsing work has **started** (see the paragraph below) but is far from done, and
-neither toggle may ever be faked. **Next: item 7.8 (window snapping + multitasking), or the next
-browsing step (`net/dns.c` onto `net/udp.c`) — see the Wi-Fi/browsing paragraph below.**
+neither toggle may ever be faked. **Next: the 2026-10-26 afternoon batch (desktop fix, widgets, snapping).**
 
-**Most recent request (2026-10-25, evening): add Wi-Fi and internet browsing.** The user asked how to
-add both and chose to **build both** — a real 802.11 driver *and* the browsing stack — so the plan is
-written into `checklist.md` §7 item 11 (with item 2 pointing at it), and **both tracks have now been
-started (written, unverified)**. Two parts, deliberately separated:
-- **Browsing** (delivers "internet browsing"; runs over the existing wired e1000, so no hardware
-  dependency) in the roadmap's Delivery-stage 3 order: `net/ipv4.c` → `net/udp.c` (and move DNS off
-  its hand-rolled frames) → `net/tcp.c` → `net/socket.c` + a bounded user API → a bounded HTTP client
-  → TLS (a maintained port, BearSSL or mbedTLS, with a trust store and hostname validation) → the
-  HTML/CSS renderer. Local-file browsing is preserved throughout and plaintext HTTP stays refused.
-  **Written so far: `net/netcore.c`** — the `NetTransmitFrame` that `net/arp.c` already called and
-  nothing defined (so the kernel net layer could not have linked without it), plus `NetProcessFrame`,
-  `NetReceiveWorker` (not started yet: DHCP polls the same ring) and `NetInitializeStack` — **
-  `net/ipv4.c`** (subnet/routing helpers, `NetIpSend` with DF and no fragmentation,
-  `NetIpResolveAndSend` over ARP, and a real ICMP echo reply so the machine is pingable) — **and
-  `net/udp.c`** (bounded port bindings each with a small receive queue, ephemeral ports, a real
-  checksum on send, and checksum-verified `NetUdpDeliver` as the enqueue path, now reached from
-  `NetIpReceive`'s UDP case; its receive polls the ring while the worker stays unstarted, and says
-  so). **Next browsing step: move `net/dns.c` onto `net/udp.c` (it still hand-rolls ARP/IPv4/UDP
-  frames and polls the ring), then write `net/tcp.c`.**
+**Most recent request (2026-10-26, afternoon) — Desktop fix, Widgets, Snapping, Store, Physical PC Installer. Code not yet written.** The user requested: (1) fix desktop icon double-click not opening apps; (2) Apple-style widgets (Battery, CPU, RAM, GPU, Calendar) for desktop and lock screen, configurable in settings; (3) window snapping; (4) Nexora Store app; (5) remove background from app icons; (6) ensure ISO works on physical PCs. **Next: fix desktop double-click.**
 - **A real 802.11 driver**, honestly scoped: there is no emulated 802.11 radio in QEMU/VirtualBox, the
   Delivery-stage 2 PCI/DMA driver framework is not built yet, a WPA2/WPA3 supplicant is its own work,
   and no-firmware ath9k-class cards are preferred to avoid a firmware blob and its licence.
@@ -87,6 +66,8 @@ started (written, unverified)**. Two parts, deliberately separated:
   adding a driver rather than rewriting the wireless logic. `net/net80211.c`, its supplicant and every
   card driver under `net/80211/` are **not written**.
 **Blocking decision: the exact PCI ID of the 802.11 card to pin.**
+
+**Newest request (2026-10-26, morning) — Nava-style UI modernization. Code written, unverified.** The user asked for a top dock redesign (dark glassy, pill overlays, status/tray groups), a Windows 11 26H2 style "chasing dots" boot spinner, and installer cleanup. **Written so far**: redesigned `TopDock` in `taskbar.cpp`, updated `InbvDrawSpinner` in `inbv.c` with sine-mapped acceleration, and cleaned up `setup.cpp`. Branding was reverted to "Nexora OS". Implemented a full lock-screen-to-sign-in flow with animated transitions and reveal effects for the taskbar/dock. **Next: sync roadmap and leftover tasks to `PROGRESS.md`.**
 
 **Newest request (2026-10-25, evening) — a large batch, recorded as `checklist.md` §7 items 14–19
 plus a consolidated "what a proper OS still needs" list. No code written for it yet.** It asks for

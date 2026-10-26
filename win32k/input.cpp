@@ -217,6 +217,7 @@ void UpdateDrag()
         } else {
             WmMoveWindow(W, Left, Top);
         }
+        WmShellNotify(HZ_SHELL_WINDOW_MOVING, W);
         return;
     }
     if (Inp.Drag != DragResize)
@@ -333,6 +334,7 @@ void LeftReleased()
             HZ_RECT R = W->ResizePending ? W->PendingRect : W->Rect;
             if (R.Left != Inp.DragOrigin.X || R.Top != Inp.DragOrigin.Y)
                 WmPostMessage(W, HZ_WM_MOVE, 0, HZ_MAKE_POINT(R.Left, R.Top));
+            WmShellNotify(HZ_SHELL_WINDOW_MOVE_END, W);
         } else if (Drag == DragButton) {
             uint32_t Edges, Under;
             if (WmWindowFromPoint(Inp.X, Inp.Y) == W &&

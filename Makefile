@@ -140,15 +140,16 @@ HZUSER_LIB := $(BUILD)/user/hzuser.lib
 HZUI_OBJS := $(patsubst %,$(UOBJ)/user/lib/hzui/%.cpp.obj,painter element window controls textbox listview menu \
     editor dialogs wallpaper)
 HZUI_LIB := $(BUILD)/user/hzui.lib
-USER_PROGRAMS := hello usertest crash fstest wintest uitest welcome apptest
 UI_FONTS := third_party/inter/Inter-Regular.ttf third_party/inter/Inter-SemiBold.ttf \
     third_party/inter/InterDisplay-SemiBold.ttf \
     third_party/jetbrains-mono/JetBrainsMono-Regular.ttf \
     third_party/icons/material/MaterialIcons-Regular.ttf
-# Programs built from every .cpp in a directory (name:directory).
+# Programs built from every .cpp in a directory (name:directory). The old user/tests programs
+# (hello, usertest, crash, fstest, wintest, uitest, welcome, apptest) were removed with item 19, so
+# the build has no separate standalone-program list any more: every executable is an app directory.
 USER_APP_DIRS := user/shell $(patsubst %/,%,$(sort $(dir $(wildcard user/apps/*/*.cpp))))
 USER_APP_NAMES := $(notdir $(USER_APP_DIRS))
-USER_EXES := $(USER_PROGRAMS:%=$(BUILD)/user/%.exe) $(USER_APP_NAMES:%=$(BUILD)/user/%.exe)
+USER_EXES := $(USER_APP_NAMES:%=$(BUILD)/user/%.exe)
 
 # ---- Images ---------------------------------------------------------------------------------
 
@@ -183,7 +184,7 @@ check-tools:
 	fi
 
 check-apps:
-	$(PYTHON) scripts/validate-app-catalog.py --binary $(USER_APP_NAMES) $(USER_PROGRAMS)
+	$(PYTHON) scripts/validate-app-catalog.py --binary $(USER_APP_NAMES)
 
 $(BUILD)/gen/hzbuildid.h: FORCE
 	@mkdir -p $(@D)
@@ -256,14 +257,6 @@ $(HZUI_LIB): $(HZUI_OBJS)
 	@echo "  LIB     $@"
 	$(Q)rm -f $@
 	$(Q)$(LLVM_BIN)llvm-ar rcs --format=coff $@ $^
-
-define USER_PROGRAM_RULE
-$(BUILD)/user/$(1).exe: $(UOBJ)/user/tests/$(1)/$(1).cpp.obj $(USER_RUNTIME_OBJS) $(HZUI_LIB) $(HZUSER_LIB)
-	@mkdir -p $$(@D)
-	@echo "  LINK    $$@"
-	$(Q)$(LLD_LINK) $(USER_LDFLAGS) /out:$$@ $$^
-endef
-$(foreach p,$(USER_PROGRAMS),$(eval $(call USER_PROGRAM_RULE,$(p))))
 
 define USER_APP_RULE
 $(BUILD)/user/$(1).exe: $(patsubst %,$(UOBJ)/%.obj,$(wildcard $(2)/*.cpp)) $(USER_RUNTIME_OBJS) $(HZUI_LIB) $(HZUSER_LIB)

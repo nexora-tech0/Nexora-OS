@@ -23,11 +23,9 @@ const char *HistoryFile = "C:\\Nexora\\Profiles\\Default\\Browser\\history.txt";
 const char *BookmarksFile = "C:\\Nexora\\Profiles\\Default\\Browser\\bookmarks.txt";
 const char HomePage[] =
     "<!doctype html><html><head><title>Nexora Browser</title></head><body>"
-    "<h1>Welcome</h1>"
-    "<p>A native browser shell for Nexora OS.</p>"
-    "<p>The current page pipeline extracts headings, paragraphs, links and basic text entities.</p>"
-    "<p>Open local text and HTML files with an absolute path or a file:/// URL. Remote pages are not available yet; "
-    "the OS still needs DNS transport, TCP, HTTP, and HTTPS support.</p>"
+    "<h1>Start page</h1>"
+    "<p>Enter an absolute local path or a file:/// URL. Remote pages are not available yet; the OS "
+    "still needs DNS transport, TCP, HTTP and verified HTTPS.</p>"
     "</body></html>";
 
 bool HasLineBreak(const char *s)

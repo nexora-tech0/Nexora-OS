@@ -59,11 +59,9 @@ CASES = {
                    "Clock: system time ", "PCI: ", "AHCI: ", "Disk: Harddisk0 is 'QEMU HARDDISK', 64.0 MiB",
                    "PS/2: keyboard ready", "Volume: C: is \\Device\\Ramdisk0, UstarFs",
                    "Volume: D: is \\Device\\Harddisk0\\Partition1, FAT32 'HZTEST'",
-                   "Hello from Nexora OS user mode! hello.exe", "usertest: ", " checks, 0 failed",
-                   "Process self-tests: 12/12 passed", "fstest: ", "File system self-tests: 16/16 passed",
-                   "wintest: display ", "Window manager self-tests: wintest.exe exit 0x00000000", "uitest.exe exit 0x00000000",
-                   "apptest: ", "apptest.exe exit 0x00000000",
-                   "surfaces left: OK", "[HZ] BOOT OK", "Installer: Setup launched automatically", "setup: started",
+                   "Process self-tests: 1/1 passed", "File system self-tests: 16/16 passed",
+                   "Window manager: 0 windows and 0 surface sections before the desktop: OK",
+                   "[HZ] BOOT OK", "Installer: Setup launched automatically", "setup: started",
                    "[HZ] HEARTBEAT"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:"],
         "check_disk": True,
@@ -71,32 +69,28 @@ CASES = {
     "desktop": {
         "entry": None,
         "disk": False,
-        # A key unlocks; the shell starts the welcome program, whose window (760x520) is centred
-        # in the work area above the 48 px taskbar with its text box focused. Typing goes there;
-        # Tab reaches the Clear button and Space presses it; Shift+Tab comes back. The cursor
-        # starts at the screen centre: up 268 is the caption, and dragging down 100 moves it.
+        # Unlock (any key) and let the desktop settle. No demo program is started any more (the
+        # welcome app went with the beta apps), so this case proves the shell reaches a usable
+        # desktop: it locks, unlocks, shows the desktop, opens Start and closes it again.
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created",
-                     ["sendkey h", "sendkey i", "sendkey ret", "sendkey tab", "sendkey spc", "sendkey shift-tab",
-                      "sendkey o", "sendkey k", "sendkey ret", "mouse_move 0 -268", "mouse_button 1",
-                      "mouse_move 0 50", "mouse_move 0 50", "mouse_button 0"])],
-        "expect": ["Desktop: compositor at ", "Window manager self-tests: ", "[HZ] BOOT OK",
-                   "shell: unlocked", "welcome: you typed \"hi\"", "welcome: cleared", "welcome: you typed \"ok\"",
-                   "welcome: moved to ("],
+                    ("shell: ready", ["sendkey meta_l"]),
+                    ("shell: start opened", ["sendkey esc"])],
+        "expect": ["Desktop: compositor at ", "Window manager: ", "[HZ] BOOT OK",
+                   "shell: unlocked", "shell: ready", "shell: start opened", "shell: start closed"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:"],
     },
     "control-center-reference": {
         "entry": None,
         "disk": False,
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created",
+                    ("shell: ready",
                      ["sleep 2", "screenshot:top-dock-dark.png", "sendkey meta_l"]),
                     ("shell: start opened",
                      ["sleep 2", "screenshot:taskbar-dock-dark.png", "sendkey esc", "sleep 1",
                       "mouse_move 587 -376", "mouse_button 1", "mouse_button 0"]),
                     ("shell: quick settings opened",
                      ["sleep 2", "screenshot:control-center-dark.png"])],
-        "expect": ["shell: unlocked", "shell: ready", "welcome: desktop windows created", "shell: start opened",
+        "expect": ["shell: unlocked", "shell: ready", "shell: start opened",
                    "shell: quick settings opened"],
         "fail": ["*** STOP", "ERROR:"],
         "timeout": 150.0,
@@ -104,23 +98,21 @@ CASES = {
     "shell": {
         "entry": None,
         "disk": False,
-        # Unlock, open Start with the logo key, search "clo" and press Enter (Clock starts), Alt+Tab
-        # back to Welcome. At 1280x800, the taskbar's middle group is Start, Welcome, Clock; then
-        # activate, minimize and restore Clock. Open Control Center from the top dock and select
-        # its second wallpaper preview.
+        # Unlock, open Start with the logo key, search "clo" and press Enter (Clock starts). Then
+        # activate, minimize and restore Clock from its taskbar button. Open Control Center from
+        # the top dock and select its second wallpaper preview.
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l"]),
+                    ("shell: ready", ["sendkey meta_l"]),
                     ("shell: start opened", ["sendkey c", "sendkey l", "sendkey o", "sendkey ret"]),
-                    ("clock: started", ["sendkey alt-tab"]),
-                    ("shell: switched to Welcome", ["mouse_move 48 360", "mouse_button 1", "mouse_button 0"]),
+                    ("clock: started", ["mouse_move 48 360", "mouse_button 1", "mouse_button 0"]),
                     ("shell: activated Clock", ["mouse_button 1", "mouse_button 0"]),
                     ("shell: minimized Clock", ["mouse_button 1", "mouse_button 0"]),
                     ("shell: restored Clock", ["mouse_move 328 0", "mouse_button 1", "mouse_button 0",
                                                "mouse_move 128 16", "mouse_button 1", "mouse_button 0"]),
                     ("shell: quick settings opened", ["mouse_move -8 -746", "mouse_button 1", "mouse_button 0",
                                                        "mouse_move -146 120", "mouse_button 1", "mouse_button 0"])],
-        "expect": ["shell: unlocked", "shell: launched welcome.exe", "shell: start opened", "shell: launched clock.exe",
-                   "clock: started", "shell: switched to Welcome", "shell: activated Clock", "shell: minimized Clock",
+        "expect": ["shell: unlocked", "shell: ready", "shell: start opened", "shell: launched clock.exe",
+                   "clock: started", "shell: activated Clock", "shell: minimized Clock",
                    "shell: restored Clock", "shell: quick settings opened", "shell: wallpaper 1"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:"],
     },
@@ -128,10 +120,10 @@ CASES = {
         "entry": None,
         "disk": False,
         # Search for Clock, open its themed context menu, pin it, then launch it from the taskbar.
-        # At 1024x768 the first result is near (300, 250); after pinning, Clock is the third
-        # centered taskbar button at (560, 744), alongside Start and Welcome.
+        # At 1024x768 the first result is near (300, 250); after pinning, Clock is a centered
+        # taskbar button.
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l"]),
+                    ("shell: ready", ["sendkey meta_l"]),
                     ("shell: start opened",
                      ["type:clock", "sleep 1", "mouse_move -212 -134", "mouse_button 2", "mouse_button 0",
                       "sendkey down", "sendkey down", "sendkey ret", "sendkey esc"]),
@@ -143,20 +135,19 @@ CASES = {
     "apps": {
         "entry": None,
         # The M9 programs end to end, by keyboard. Notepad writes D:\smoke.txt through the save
-        # dialog; the terminal (it starts on D:) types it, lists D:, writes a file with '>', runs
-        # hello.exe through a pipe and starts Clock and Calculator; the calculator computes
+        # dialog; the terminal (it starts on D:) types it, lists D:, writes a file with '>',
+        # and starts Clock and Calculator; the calculator computes
         # 12 x 3; Task Manager filters "clock", selects it with Enter and ends it with Delete and
         # Enter; Files opens smoke.txt by type-ahead (in Notepad); Settings searches for
         # Personalization and picks the second wallpaper with the keyboard.
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l"]),
+                    ("shell: ready", ["sendkey meta_l"]),
                     ("shell: start opened", ["type:note", "sendkey ret"]),
                     ("notepad: started", ["type:Hello from the smoke test", "sendkey ctrl-s"]),
                     ('hzui: dialog "Save as" opened', ["sendkey ctrl-a", "type:smoke.txt", "sendkey ret"]),
                     ("notepad: saved D:\\smoke.txt", ["sendkey meta_l", "sleep 1", "type:term", "sendkey ret"]),
                     ("terminal: started", ["type:type smoke.txt\n", "type:dir\n", "type:echo piped > out.txt\n",
-                                           "type:type out.txt\n", "type:hello\n"]),
-                    ("[exit code 42]", ["type:start clock\n"]),
+                                           "type:type out.txt\n", "type:start clock\n"]),
                     ("clock: started", ["sleep 1", "sendkey alt-tab", "sleep 1", "type:start calc\n"]),
                     ("calc: started", ["type:12*3="]),
                     ("calc: 12 x 3 = 36", ["sendkey meta_l", "sleep 1", "type:task", "sendkey ret"]),
@@ -173,11 +164,10 @@ CASES = {
                     ("calendar: started", ["sendkey meta_l", "sleep 1", "type:stopwatch", "sendkey ret"]),
                     ("stopwatch: started", ["sendkey meta_l", "sleep 1", "type:paint", "sendkey ret"]),
                     ("paint: started", [])],
-        "expect": ["apptest.exe exit 0x00000000", "[HZ] BOOT OK", "shell: 15 programs installed",
+        "expect": ["[HZ] BOOT OK", "shell: 14 programs installed",
                    "shell: launched notepad.exe", "notepad: saved D:\\smoke.txt (25 bytes)",
                    "terminal| Hello from the smoke test", "terminal|  Directory of D:\\",
                    "terminal: wrote 6 bytes to D:\\out.txt", "terminal| piped",
-                   "terminal| Hello from Nexora OS user mode! hello.exe", "terminal| [exit code 42]",
                    "terminal| Started clock.exe (process", "terminal| Started calc.exe (process", "calc: 12 x 3 = 36",
                    "taskmgr: ended clock.exe", "files: D:\\ (", "files: opened D:\\smoke.txt with Notepad",
                    "notepad: opened D:\\smoke.txt (25 bytes, 1 lines)", "settings: Personalization",
@@ -191,7 +181,7 @@ CASES = {
     "terminal-linux": {
         "entry": None,
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l"]),
+                    ("shell: ready", ["sendkey meta_l"]),
                     ("shell: start opened", ["type:terminal", "sendkey ret"]),
                     ("terminal: started", ["type:touch linux-test.txt\n",
                                            "type:echo hello linux > linux-test.txt\n"]),
@@ -220,7 +210,7 @@ CASES = {
         "disk": False,
         "qemu_args": ["-netdev", "user,id=net0", "-device", "e1000,netdev=net0"],
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l"]),
+                    ("shell: ready", ["sendkey meta_l"]),
                     ("shell: start opened", ["type:settings", "sendkey ret"]),
                     ("settings: Home", ["type:network", "sendkey tab", "sendkey down", "sendkey ret"]),
                     ("settings: Network & Internet", ["sendkey shift-tab", "sendkey ctrl-a", "type:storage",
@@ -230,8 +220,8 @@ CASES = {
                     ("settings: Apps", ["sendkey shift-tab", "sendkey ctrl-a", "type:home",
                                            "sendkey tab", "sendkey down", "sendkey ret"])],
         "expect": ["Network: interface eth0 registered", "E1000: ", "up link", "Network protocol self-tests: ",
-                   "passed", "DHCP self-tests: 6/6 passed", "DHCP: eth0 configured", "usertest: ",
-                   "checks, 0 failed", "shell: ready", "settings: Home", "settings: Network & Internet",
+                   "passed", "DHCP self-tests: 6/6 passed", "DHCP: eth0 configured",
+                   "shell: ready", "settings: Home", "settings: Network & Internet",
                    "settings: System", "settings: Apps"],
         "fail": ["*** STOP", "ERROR:"],
         "timeout": 120.0,
@@ -240,7 +230,7 @@ CASES = {
         "entry": None,
         "disk": False,
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created",
+                    ("shell: ready",
                      ["screenshot:desktop-dock.png", "mouse_move 508 -370", "mouse_button 1", "mouse_button 0"]),
                     ("shell: quick settings opened",
                      ["sleep 1", "screenshot:control-center.png", "mouse_move -158 160",
@@ -306,13 +296,13 @@ CASES = {
     "catalog-apps": {
         "entry": None,
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l"]),
+                    ("shell: ready", ["sendkey meta_l"]),
                     ("shell: start opened", ["type:system information", "sendkey ret"]),
                     ("sysinfo: started", ["sendkey meta_l", "sleep 1", "type:calendar", "sendkey ret"]),
                     ("calendar: started", ["sendkey meta_l", "sleep 1", "type:stopwatch", "sendkey ret"]),
                     ("stopwatch: started", ["sendkey meta_l", "sleep 1", "type:paint", "sendkey ret"]),
                     ("paint: started", ["sendkey meta_l", "sleep 1", "type:browser", "sendkey ret"])],
-        "expect": ["shell: 15 programs installed", "shell: ready", "sysinfo: started", "calendar: started",
+        "expect": ["shell: 14 programs installed", "shell: ready", "sysinfo: started", "calendar: started",
                    "stopwatch: started", "paint: started",
                    "browser: started; local renderer and DNS lookup ready; page networking unavailable"],
         # The current partition-table self-test failure is tracked separately; this case focuses
@@ -325,12 +315,12 @@ CASES = {
         "entry": None,
         "disk": False,
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l", "type:browser", "sendkey ret"]),
+                    ("shell: ready", ["sendkey meta_l", "type:browser", "sendkey ret"]),
                     ("browser: started; local renderer and DNS lookup ready; page networking unavailable",
                      ["type:https://example.com", "sendkey ret"]),
                     ("browser: DNS lookup failed for example.com",
                      ["sendkey ctrl-l", "type:https://example.com:99999999999999999999", "sendkey ret"])],
-        "expect": ["shell: 15 programs installed",
+        "expect": ["shell: 14 programs installed",
                    "DNS self-tests: 8/8 passed",
                    "browser: started; local renderer and DNS lookup ready; page networking unavailable",
                    "browser: DNS lookup failed for example.com",
@@ -342,12 +332,12 @@ CASES = {
         "entry": None,
         "disk": False,
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l", "type:browser", "sendkey ret"]),
+                    ("shell: ready", ["sendkey meta_l", "type:browser", "sendkey ret"]),
                     ("browser: started; local renderer and DNS lookup ready; page networking unavailable",
                      ["type:C:\\Nexora\\Licenses\\ThirdPartyNotices.md", "sendkey ret"]),
                     ("browser: local file loaded C:\\Nexora\\Licenses\\ThirdPartyNotices.md (",
                      ["sendkey ctrl-l", "type:C:\\Nexora\\missing.html", "sendkey ret"])],
-        "expect": ["shell: 15 programs installed",
+        "expect": ["shell: 14 programs installed",
                    "browser: local file loaded C:\\Nexora\\Licenses\\ThirdPartyNotices.md (",
                    "browser: local read failed for C:\\Nexora\\missing.html"],
         "fail": ["*** STOP", "ERROR:", "crashed"],
@@ -358,7 +348,7 @@ CASES = {
         "disk": False,
         "qemu_args": ["-netdev", "user,id=net0", "-device", "e1000,netdev=net0"],
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l", "type:browser", "sendkey ret"]),
+                    ("shell: ready", ["sendkey meta_l", "type:browser", "sendkey ret"]),
                     ("browser: started; local renderer and DNS lookup ready; page networking unavailable",
                      ["type:https://example.com", "sendkey ret"])],
         "expect": ["Network: interface eth0 registered", "DHCP: eth0 configured",
@@ -419,12 +409,12 @@ CASES = {
                      ["sleep 1", "sendkey ret", "sleep 1", "type:Ada", "sendkey ret", "sleep 1", "sendkey tab",
                       "sendkey spc", "sleep 1", "sendkey ret", "sleep 1", "sendkey ret"])],
         "expect": ["Disk: \\Device\\Harddisk0\\Partition2 is the system partition (hz.system)",
-                   "Volume: C: is \\Device\\Harddisk0\\Partition2, FAT32 'NEXORAOS'", "Process self-tests: 12/12 passed",
-                   "File system self-tests: ", "apptest.exe exit 0x00000000", "surfaces left: OK", "[HZ] BOOT OK",
-                   "shell: 15 programs installed", "shell: settings loaded: user 'Guest', wallpaper 0, first boot",
+                   "Volume: C: is \\Device\\Harddisk0\\Partition2, FAT32 'NEXORAOS'",
+                   "File system self-tests: ", "[HZ] BOOT OK",
+                   "shell: 14 programs installed", "shell: settings loaded: user 'Guest', wallpaper 0, first boot",
                    "shell: first boot: started first-boot setup", "shell: wallpaper 1 (requested)",
                    "setup: first boot done: user 'Ada', wallpaper 1 (settings saved: 0x00000000)",
-                   "shell: first-boot setup finished; hello, Ada", "shell: launched welcome.exe"],
+                   "shell: first-boot setup finished; hello, Ada", "shell: ready"],
         "defer_fail": ["BOOT DEGRADED"],
         "defer_expect": ["[HZ] BOOT OK"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "FAIL", "shell: lock screen shown"],
@@ -444,7 +434,7 @@ CASES = {
         # (M11) Settings > Accounts sets the password "sun", the terminal's "lock" locks the
         # session, a wrong password is refused and the right one unlocks.
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l", "sleep 1", "type:settings", "sendkey ret"]),
+                    ("shell: ready", ["sendkey meta_l", "sleep 1", "type:settings", "sendkey ret"]),
                     ("settings: Home", ["sleep 1", "type:accounts", "sendkey tab", "sendkey down", "sendkey ret"]),
                     ("settings: Accounts", ["sleep 1", "sendkey tab", "sendkey tab", "sendkey tab", "type:sun\n",
                                             "type:sun\n"]),
@@ -455,7 +445,7 @@ CASES = {
                     ("shell: wrong password (1)", ["sleep 1", "type:sun\n"])],
         "expect": ["Volume: C: is \\Device\\Harddisk0\\Partition2, FAT32 'NEXORAOS'", "[HZ] BOOT OK",
                    "shell: settings loaded: user 'Ada', wallpaper 1", "shell: lock screen shown", "shell: unlocked",
-                   "shell: launched welcome.exe", "settings: password set (0x00000000)",
+                   "shell: ready", "settings: password set (0x00000000)",
                    "shell: settings loaded: user 'Ada', wallpaper 1, password", "shell: locked",
                    "shell: wrong password (1)", "shell: password accepted"],
         "defer_fail": ["BOOT DEGRADED"],
@@ -475,7 +465,7 @@ CASES = {
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
                     ("shell: password prompt", ["sleep 1", "type:sun\n"])],
         "expect": ["[HZ] BOOT OK", "shell: settings loaded: user 'Ada', wallpaper 1, password", "shell: password prompt",
-                   "shell: password accepted", "shell: unlocked", "shell: launched welcome.exe"],
+                   "shell: password accepted", "shell: unlocked", "shell: ready"],
         "defer_fail": ["BOOT DEGRADED"],
         "defer_expect": ["[HZ] BOOT OK"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "FAIL", "shell: wrong password", "first-boot setup"],
@@ -487,14 +477,14 @@ CASES = {
         # Four processors (M11): every one online, the multiprocessor scheduler tests, all
         # self-tests, then a terminal running programs and Task Manager's performance page.
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l", "sleep 1", "type:term", "sendkey ret"]),
-                    ("terminal: started", ["type:hello\n", "type:ps\n", "type:mem\n"]),
-                    ("terminal| [exit code 42]", ["sendkey meta_l", "sleep 1", "type:task", "sendkey ret"]),
+                    ("shell: ready", ["sendkey meta_l", "sleep 1", "type:term", "sendkey ret"]),
+                    ("terminal: started", ["type:ps\n", "type:mem\n"]),
+                    ("terminal| Page size 4096 bytes;", ["sendkey meta_l", "sleep 1", "type:task", "sendkey ret"]),
                     ("taskmgr: started", ["sleep 1", "sendkey ctrl-tab", "sleep 3"])],
         "expect": ["MP: 4 processors reported; 3 application processor(s) parked", "MP: 4 processors online",
-                   "Scheduler self-tests: 14/14 passed", "Process self-tests: 12/12 passed",
-                   "File system self-tests: 16/16 passed", "apptest.exe exit 0x00000000", "surfaces left: OK",
-                   "[HZ] BOOT OK", "[HZ] HEARTBEAT: 4 processors", "shell: unlocked", "terminal| [exit code 42]",
+                   "Scheduler self-tests: 14/14 passed", "Process self-tests: 1/1 passed",
+                   "File system self-tests: 16/16 passed",
+                   "[HZ] BOOT OK", "[HZ] HEARTBEAT: 4 processors", "shell: unlocked",
                    "terminal| Page size 4096 bytes;", "4 processor(s)", "taskmgr: started"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "FAIL"],
         "timeout": 200.0,
@@ -505,38 +495,12 @@ CASES = {
         # killing the shell from the terminal makes the session start it again (no lock screen),
         # and the new shell works (Start launches Calculator).
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l", "sleep 1", "type:term", "sendkey ret"]),
-                    ("terminal: started", ["sleep 1", "type:crash null\n"]),
-                    ('hzui: dialog "Program error" opened', ["sleep 1", "sendkey ret", "sleep 1", "type:kill shell\n"]),
+                    ("shell: ready", ["sendkey meta_l", "sleep 1", "type:term", "sendkey ret"]),
+                    ("terminal: started", ["sleep 1", "type:calc\n", "sleep 1", "type:kill shell\n"]),
                     ("shell: restarted", ["sleep 2", "sendkey meta_l", "sleep 1", "type:calc", "sendkey ret"])],
-        "expect": ["[HZ] BOOT OK", "shell: unlocked", "terminal: running crash.exe null",
-                   "crashed (0xC0000005)", "terminal| [ended by an error: 0xC0000005]",
+        "expect": ["[HZ] BOOT OK", "shell: unlocked",
                    "Session: shell.exe exited (0x00000001); restarting it", "shell: restarted", "calc: started"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "FAIL"],
-        "timeout": 200.0,
-    },
-    "blockyard": {
-        "entry": None,
-        "processors": 2,
-        # The block game: started from Start, the click captures the mouse (window manager mouse
-        # lock), a look down, a block broken and a brick placed in its place, flying, Esc releases
-        # the mouse; Alt+F4 saves the world to D:, and starting it again loads that world. It looks
-        # about 49 degrees down so the ground is in reach whatever the (time-seeded) terrain.
-        "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l", "sleep 1", "type:block", "sendkey ret"]),
-                    ("blockyard: started", ["sleep 3", "mouse_button 1", "mouse_button 0"]),
-                    ("blockyard: mouse captured", ["sleep 2", "mouse_move 0 200", "sleep 1", "mouse_button 1",
-                                                   "mouse_button 0", "sleep 1", "sendkey 9", "mouse_button 2",
-                                                   "mouse_button 0", "sleep 1", "sendkey f", "sendkey w 600", "sleep 1",
-                                                   "sendkey esc"]),
-                    ("blockyard: mouse released", ["sleep 1", "sendkey alt-f4"]),
-                    ("blockyard: saved the world", ["sleep 2", "sendkey meta_l", "sleep 1", "type:block", "sendkey ret"]),
-                    ("blockyard: world loaded", ["sleep 4"])],
-        "expect": ["[HZ] BOOT OK", "shell: 15 programs installed", "blockyard: world generated",
-                   "blockyard: started (2 render threads, saves to D:\\Blockyard.world)", "blockyard: mouse captured",
-                   "blockyard: broke ", "blockyard: placed Brick at", "blockyard: flying", "blockyard: mouse released",
-                   "blockyard: saved the world to D:\\Blockyard.world", "blockyard: world loaded", " fps at "],
-        "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "FAIL", "crashed"],
         "timeout": 200.0,
     },
     "poweroff": {
@@ -546,7 +510,7 @@ CASES = {
         # unsaved text, so it asks about it and stays open; after 15 s the shell names it and
         # offers "Shut down anyway" (Enter), then the volumes are flushed and ACPI powers off.
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
-                    ("welcome: desktop windows created", ["sendkey meta_l", "sleep 1", "type:notepad", "sendkey ret"]),
+                    ("shell: ready", ["sendkey meta_l", "sleep 1", "type:notepad", "sendkey ret"]),
                     ("notepad: started", ["sleep 1", "type:unsaved draft", "sleep 1", "sendkey meta_l", "sleep 1",
                                           "type:term", "sendkey ret"]),
                     ("terminal: started", ["sleep 1", "type:shutdown\n"]),
@@ -592,7 +556,7 @@ CASES = {
                    "PCI: 00:1f.2 8086:2922 class 01.06.01 SATA controller MSI", "UstarFs: mounted",
                    "Disk: \\Device\\Harddisk0\\Partition2: 4.0 MiB at LBA 100352, Nexora OS test scratch",
                    "IoTest: raw sector round trip on the scratch partition (300 sectors): OK",
-                   "relocations applied", "Process: usertest.exe (PID 16) deleted",
+                   "relocations applied",
                    "PsTest: objects left: 0 processes, 0 threads, 0 events, 0 files; pool +0 bytes: OK",
                    "[HZ] BOOT OK"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:"],
@@ -721,6 +685,8 @@ def build_iso(case):
                 continue
             if line.startswith("timeout:"):
                 line = "timeout: 0"
+            elif line == "cmdline: hz.installer=1":
+                line = "cmdline: hz.desktop=1"
             out.append(line)
         out.extend([
             "",
@@ -966,13 +932,6 @@ def run_case(case, timeout):
             except OSError as e:
                 if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, getattr(errno, "ENODATA", -1)):
                     raise
-            if case == "desktop" and "welcome: moved to (" in expected[-1]:
-                resolution = re.search(r"Desktop: compositor at (\d+)x(\d+)", text)
-                if resolution:
-                    width, height = map(int, resolution.groups())
-                    x = (width - 760) // 2
-                    y = (height - 48 - 520) // 2 + 100
-                    expected[-1] = f"welcome: moved to ({x}, {y})"
             if exited:
                 if spec.get("exit_ok") and qemu.returncode == 0 and all(m in text for m in expected):
                     ok = True

@@ -160,6 +160,8 @@ typedef struct _HZ_MSG {
 #define HZ_SHELL_SWITCH_NEXT 6u      /* Alt+Tab (LParam = 1 with Shift) while Alt is held */
 #define HZ_SHELL_SWITCH_END 7u       /* LParam = 1: Alt released (switch), 0: Escape (cancel) */
 #define HZ_SHELL_PROCESS_CRASHED 8u  /* M11: a process ended by an exception; LParam = PID << 32 | status */
+#define HZ_SHELL_WINDOW_MOVING 9u    /* LParam = HWND: window is being dragged */
+#define HZ_SHELL_WINDOW_MOVE_END 10u /* LParam = HWND: window drag finished */
 
 /* HZ_WM_SHELLREQUEST (M9): WParam = request, LParam = argument. The shell decides. */
 #define HZ_SHELL_REQUEST_WALLPAPER 1u /* LParam = wallpaper index */

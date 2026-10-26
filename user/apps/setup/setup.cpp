@@ -1601,9 +1601,9 @@ protected:
                          "network. Nothing here needs the internet.",
                   Theme::TextPrimary);
         Paragraph(Hello, "Everything can be changed later in Settings. Use Next to continue.");
-        Paragraph(Hello, "About Nexora OS: an independent 64-bit desktop system with a hybrid Windows 11 "
-                         "and macOS look. It is local-first: no account is required and nothing is sent "
-                         "anywhere.", Theme::TextSecondary);
+        Paragraph(Hello, "About Nexora OS: an independent 64-bit desktop system with its own visual identity. "
+                         "It is local-first: no account is required and nothing is sent anywhere.",
+                  Theme::TextSecondary);
         Paragraph(Hello, "Accessibility: the whole wizard is keyboard-operable, Tab moves between controls "
                          "and Enter confirms. Reduced motion and contrast options live in Settings.",
                   Theme::TextSecondary);
@@ -1640,12 +1640,6 @@ protected:
         Dark->OnChoose = [this](bool NowLight) { ChooseLook(NowLight); };
         LookChoice *Light = Looks_->Add<LookChoice>(true, &Light_);
         Light->OnChoose = [this](bool NowLight) { ChooseLook(NowLight); };
-
-        StackPanel *Backdrop = AddPage();
-        Paragraph(Backdrop, "Pick the desktop you like. It changes right away.");
-        Cards_ = Backdrop->Add<StackPanel>(Orientation::Horizontal, 16);
-        for (uint32_t i = 0; i <= HZ_MAX_WALLPAPER; i++)
-            Cards_->Add<WallpaperChoice>(i, &Wallpaper_);
 
         StackPanel *Region = AddPage();
         Paragraph(Region, "Nexora OS keeps the time and date the computer's firmware reports. This build "
@@ -1727,21 +1721,19 @@ protected:
     void PageShown(size_t Index) override
     {
         Back_->SetVisible(Index > 0);
-        Primary_->SetText(Index == 8 ? "Finish" : "Next");
+        Primary_->SetText(Index == 7 ? "Finish" : "Next");
         /* The connect page is the one page whose second action is a real escape hatch, not a retry. */
-        Secondary_->SetVisible(Index == 6);
+        Secondary_->SetVisible(Index == 5);
         Secondary_->SetText("Skip");
         if (Index == 1)
             Main_->SetFocus(Name_);
         else if (Index == 2)
             Main_->SetFocus(Looks_->ChildAt(Light_ ? 1 : 0));
-        else if (Index == 3)
-            Main_->SetFocus(Cards_->ChildAt(Wallpaper_ <= HZ_MAX_WALLPAPER ? Wallpaper_ : 0));
         else
             Main_->SetFocus(Primary_);
-        if (Index == 7)
+        if (Index == 6)
             UpdateReview();
-        if (Index == 8)
+        if (Index == 7)
             UpdateSummary();
         UpdateButtons();
     }
@@ -1749,7 +1741,7 @@ protected:
     /* Skipping the connect page has the same effect as Next: the page has no state to keep. */
     void SecondaryAction() override
     {
-        if (Page_ == 6)
+        if (Page_ == 5)
             Next();
     }
 
@@ -1759,7 +1751,7 @@ protected:
     {
         if (Page_ == 1 && (!setup::IsValidUserName(Name_->Text().CStr()) || !PasswordsMatch()))
             return;
-        if (Page_ < 8) {
+        if (Page_ < 7) {
             SaveProgress(Page_ + 1);
             ShowPage(Page_ + 1);
             return;
@@ -1799,11 +1791,11 @@ private:
                 Count++;
         }
         Review_->SetText(hz::String::Format(
-                             "Account: %s%s. Appearance: %s, wallpaper %u of %u. Language: English "
+                             "Account: %s%s. Appearance: %s. Language: English "
                              "(United States). Apps kept: %u of %u. Network: not configured here; wired "
                              "Ethernet is set up automatically once the desktop starts.",
                              Name, Password_->Text().Empty() ? ", no password" : ", password at sign-in",
-                             Light_ ? "light" : "dark", Wallpaper_, (uint32_t)HZ_MAX_WALLPAPER + 1, Count,
+                             Light_ ? "light" : "dark", Count,
                              (uint32_t)AppBoxes_.Size())
                              .CStr());
     }
@@ -1818,7 +1810,6 @@ private:
         Shell.SetInt("SetupPage", (int32_t)Index);
         Shell.Set("UserName", Name_->Text().CStr());
         Shell.SetInt("Theme", Light_ ? 1 : 0);
-        Shell.SetInt("Wallpaper", (int32_t)Wallpaper_);
         Shell.Save(Path);
     }
 

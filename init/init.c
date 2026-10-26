@@ -279,9 +279,9 @@ static void KiSessionThread(void *Context)
         STATUS Status = PsCreateProcess("\\??\\C:\\Nexora\\System\\shell.exe", First ? "shell.exe" : "shell.exe restart",
                                         0, &Shell);
         if (!HZ_SUCCESS(Status)) {
+            /* The old fallback (starting welcome.exe as a bare session) went with the beta apps;
+               without the shell there is no desktop, so the session simply does not start. */
             DbgPrintEx(DPFLTR_WARNING_LEVEL, "Desktop: cannot start the shell (0x%08X)\n", (uint32_t)Status);
-            if (First && HZ_SUCCESS(PsCreateProcess("\\??\\C:\\Nexora\\System\\welcome.exe", "welcome.exe", 0, &Shell)))
-                ObDereferenceObject(Shell);
             return;
         }
         KeWaitForSingleObject(Shell, NULL);
@@ -374,7 +374,7 @@ static void KiPhase1Initialization(void *Context)
              (unsigned long long)((KeQueryUptimeMicroseconds() - StageStartUs) / 1000));
     StageStartUs = KeQueryUptimeMicroseconds();
     bool DesktopOk = W32kRunSelfTests();
-    DbgPrint("Init: window-manager and UI self-tests took %llu ms\n",
+    DbgPrint("Init: window-manager check took %llu ms\n",
              (unsigned long long)((KeQueryUptimeMicroseconds() - StageStartUs) / 1000));
 
     /* Background system threads start after the self-tests so they cannot disturb the counts. */

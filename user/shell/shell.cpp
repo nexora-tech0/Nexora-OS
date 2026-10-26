@@ -10,6 +10,7 @@
 #include "hzcrypto.h"
 #include "hzfile.h"
 #include "taskbar.h"
+#include "widgets.h"
 
 namespace shell {
 
@@ -452,11 +453,8 @@ void Shell::OnShellRequest(uint64_t Request, uint64_t Detail)
             Desk->RefreshPrefs(); /* Settings may have changed the icon size or the sort order */
         if (Start)
             static_cast<Flyout *>(Start)->Dismiss();
-        if (WasFirstBoot && !FirstBoot) {
+        if (WasFirstBoot && !FirstBoot)
             HzPrint("shell: first-boot setup finished; hello, %s", DisplayName());
-            if (const hz::apps::App *Welcome = FindApp(hz::String("welcome")))
-                Launch(*Welcome);
-        }
     } else if (Request == HZ_SHELL_REQUEST_LOCK) {
         LockNow();
     } else if (Request == HZ_SHELL_REQUEST_SHUTDOWN) {
@@ -649,9 +647,8 @@ Icon IconByName(const hz::String &Name)
         /* Aliases: the same glyph under the words a manifest is likely to use. */
         {"Files", Icon::Folder},      {"FolderExplorer", Icon::Folder}, {"Text", Icon::Document},
         {"Editor", Icon::Document},   {"Terminal", Icon::Prompt},       {"Console", Icon::Prompt},
-        {"Blockyard", Icon::Cube},    {"Block", Icon::Cube},            {"Sound", Icon::Volume},
-        {"Audio", Icon::Volume},      {"Speaker", Icon::Volume},        {"Battery", Icon::Power},
-        {"Image", Icon::Palette},     {"Photo", Icon::Palette},         {"Timer", Icon::Stopwatch},
+        {"Audio", Icon::Volume},      {"Speaker", Icon::Volume},        {"Sound", Icon::Volume},
+        {"Battery", Icon::Power},     {"Image", Icon::Image},           {"Photo", Icon::Image},
         {"Web", Icon::Globe},         {"Browser", Icon::Globe},         {"Wireless", Icon::Wifi},
         {"Apps", Icon::AppWindow},    {"Window", Icon::AppWindow},      {"Gear", Icon::Settings},
         {"Wallpaper", Icon::Sun},     {"Theme", Icon::Palette},
@@ -706,7 +703,6 @@ public:
     {
         Big_ = HzGetFont(HZ_FONT_DISPLAY);
         Medium_ = HzGetFont(HZ_FONT_BODY_LARGE);
-        Prompting_ = g_Shell.HasPassword();
     }
 
     TextBox *Box = nullptr;
@@ -716,66 +712,79 @@ public:
     {
         const Rect &B = Bounds();
         float T = Leave_.Value();
+        float Prm = PromptTransition_.Value();
         int32_t Shift = (int32_t)(T * B.Height * 0.07f);
         float Fade = 1 - T;
+        float ClockFade = Fade * (1 - Prm);
+        
         uint32_t TopShade = HighContrast_ ? 0x74000000 : 0x35000000;
         uint32_t BottomShade = HighContrast_ ? 0xB8000000 : 0x71000000;
         P.FillVerticalGradient(Rect{B.X, B.Y, B.Width, B.Height / 2}, 0, ScaleAlpha(TopShade, Fade),
                                ScaleAlpha(0x08000000, Fade));
         P.FillVerticalGradient(Rect{B.X, B.Y + B.Height / 3, B.Width, B.Height - B.Height / 3}, 0,
                                ScaleAlpha(0x08000000, Fade), ScaleAlpha(BottomShade, Fade));
+        
         char Time[16], Date[64];
         FormatClock(Time, sizeof(Time), Date, sizeof(Date));
-        if (!g_Shell.HasPassword()) {
-            int32_t Y = B.Y + B.Height * 12 / 100 - Shift;
+        
+        /* The main clock and date fade out as the prompt arrives. */
+        if (ClockFade > 0.01f) {
+            int32_t Y = B.Y + B.Height * 12 / 100 - Shift - (int32_t)(Prm * 20);
             if (Big_) {
                 int32_t W = HzMeasureText(Big_, Time);
                 P.Text(Big_, B.X + (B.Width - W) / 2, Y + HzFontAscent(Big_), Time,
-                       ScaleAlpha(0xFFFFFFFF, Fade));
+                       ScaleAlpha(0xFFFFFFFF, ClockFade));
                 Y += HzFontLineHeight(Big_);
             }
             if (Medium_) {
                 int32_t W = HzMeasureText(Medium_, Date);
                 P.Text(Medium_, B.X + (B.Width - W) / 2, Y + HzFontAscent(Medium_), Date,
-                       ScaleAlpha(0xFFFFFFFF, Fade));
+                       ScaleAlpha(0xFFFFFFFF, ClockFade));
             }
-            if (Prompting_) {
+            if (g_Shell.HasPassword() && !Prompting_ && !Leaving_) {
                 hz::String Hello = hz::String::Format("Hello, %s", g_Shell.DisplayName());
                 P.TextLine(GetFont(FontRole::Subtitle),
                            Rect{B.X, B.Bottom() - 112 - Shift, B.Width, 32}, Hello.CStr(),
-                           ScaleAlpha(0xFFFFFFFF, Fade), Align::Center);
+                           ScaleAlpha(0xFFFFFFFF, ClockFade), Align::Center);
                 P.TextLine(GetFont(FontRole::Body),
                            Rect{B.X, B.Bottom() - 72 - Shift, B.Width, 24},
-                           "Press any key or click to unlock", ScaleAlpha(Theme::TextSecondary, Fade),
+                           "Press any key or click to continue", ScaleAlpha(Theme::TextSecondary, ClockFade),
                            Align::Center);
             }
-            return;
         }
-        int32_t Y = B.Y + 48 - Shift;
-        if (Big_) {
-            P.Text(Big_, B.X + 40, Y + HzFontAscent(Big_), Time, ScaleAlpha(0xFFFFFFFF, Fade));
-            Y += HzFontLineHeight(Big_) + 3;
-        }
-        if (Medium_) {
-            P.Text(Medium_, B.X + 42, Y + HzFontAscent(Medium_), Date, ScaleAlpha(0xF0FFFFFF, Fade));
-        }
-        int32_t CenterX = B.X + B.Width / 2;
-        int32_t CenterY = B.Y + B.Height * 46 / 100 - Shift;
-        P.FillRoundRect(Rect{CenterX - 190, CenterY - 162, 380, 320}, 14, 0x62424E60);
-        P.StrokeRoundRect(Rect{CenterX - 190, CenterY - 162, 380, 320}, 14, 1, 0x50FFFFFF);
-        P.FillCircle((float)CenterX, (float)CenterY - 105, 40, ScaleAlpha(0xB82A3544, Fade));
-        P.DrawIcon(Icon::Person, Rect{CenterX - 25, CenterY - 130, 50, 50}, ScaleAlpha(0xFFFFFFFF, Fade), 1.8f);
-        P.TextLine(GetFont(FontRole::Subtitle), Rect{B.X + 16, CenterY - 58, B.Width - 32, 34},
-                   g_Shell.DisplayName(), ScaleAlpha(0xFFFFFFFF, Fade), Align::Center);
-        const char *Hint = Wrong_ ? "That password did not match. Try again."
-                           : Prompting_ ? "Enter your password to sign in"
-                                        : "Press any key or click to continue";
-        P.TextLine(GetFont(FontRole::Body), Rect{B.X + 16, CenterY - 22, B.Width - 32, 24}, Hint,
-                   ScaleAlpha(Wrong_ ? 0xFFFFA18F : 0xE8FFFFFF, Fade), Align::Center);
-        if (!Prompting_) {
-            P.FillRoundRect(Rect{CenterX - 58, CenterY + 18, 116, 34}, 5, ScaleAlpha(0xCCFFFFFF, Fade));
-            P.TextLine(GetFont(FontRole::BodyStrong), Rect{CenterX - 58, CenterY + 18, 116, 34},
-                       "Continue", ScaleAlpha(0xFF18202A, Fade), Align::Center);
+        
+        /* The sign-in card slides up and fades in. */
+        if (Prm > 0.01f) {
+            float CardFade = Fade * Prm;
+            int32_t CardShift = (int32_t)((1.0f - Prm) * 40);
+            
+            int32_t Y = B.Y + 48 - Shift;
+            if (Big_) {
+                P.Text(Big_, B.X + 40, Y + HzFontAscent(Big_), Time, ScaleAlpha(0xFFFFFFFF, CardFade));
+                Y += HzFontLineHeight(Big_) + 3;
+            }
+            if (Medium_) {
+                P.Text(Medium_, B.X + 42, Y + HzFontAscent(Medium_), Date, ScaleAlpha(0xF0FFFFFF, CardFade));
+            }
+            
+            int32_t CenterX = B.X + B.Width / 2;
+            int32_t CenterY = B.Y + B.Height * 46 / 100 - Shift + CardShift;
+            
+            Color CardBg = ScaleAlpha(0x62424E60, CardFade);
+            Color CardStroke = ScaleAlpha(0x50FFFFFF, CardFade);
+            P.FillRoundRect(Rect{CenterX - 190, CenterY - 162, 380, 320}, 14, CardBg);
+            P.StrokeRoundRect(Rect{CenterX - 190, CenterY - 162, 380, 320}, 14, 1, CardStroke);
+            
+            P.FillCircle((float)CenterX, (float)CenterY - 105, 40, ScaleAlpha(0xB82A3544, CardFade));
+            P.DrawIcon(Icon::Person, Rect{CenterX - 25, CenterY - 130, 50, 50}, ScaleAlpha(0xFFFFFFFF, CardFade), 1.8f);
+            
+            P.TextLine(GetFont(FontRole::Subtitle), Rect{B.X + 16, CenterY - 58, B.Width - 32, 34},
+                       g_Shell.DisplayName(), ScaleAlpha(0xFFFFFFFF, CardFade), Align::Center);
+            
+            const char *Hint = Wrong_ ? "That password did not match. Try again."
+                               : "Enter your password to sign in";
+            P.TextLine(GetFont(FontRole::Body), Rect{B.X + 16, CenterY - 22, B.Width - 32, 24}, Hint,
+                       ScaleAlpha(Wrong_ ? 0xFFFFA18F : 0xE8FFFFFF, CardFade), Align::Center);
         }
     }
 
@@ -795,11 +804,12 @@ public:
         if (g_Shell.HasPassword() && !Accepted_) {
             if (!Prompting_) {
                 Prompting_ = true;
+                PromptTransition_.To(1.0f, Motion::ControlStateMs);
                 Box->SetVisible(true);
                 GetWindow()->SetFocus(Box);
                 GetWindow()->DropNextChar(); /* the key that opened the box is not part of the password */
                 HzPrint("shell: password prompt");
-                Invalidate();
+                StartAnimation();
             }
             return;
         }
@@ -813,8 +823,7 @@ public:
         if (hz::crypto::CheckPassword(Typed, g_Shell.PasswordSalt, g_Shell.PasswordHash)) {
             HzPrint("shell: password accepted");
             Accepted_ = true;
-            Prompting_ = false;
-            Box->SetVisible(false);
+            /* No need to reverse PromptTransition_; Leave_ will handle the exit. */
             Begin();
             return;
         }
@@ -828,9 +837,10 @@ public:
     void Cancel()
     {
         Prompting_ = Wrong_ = false;
+        PromptTransition_.To(0.0f, Motion::ControlStateMs);
         Box->SetText("");
         Box->SetVisible(false);
-        Invalidate();
+        StartAnimation();
     }
 
     void ToggleHighContrast()
@@ -842,15 +852,17 @@ public:
     bool Animate() override
     {
         Invalidate();
-        if (Leave_.Running())
+        if (Leave_.Running() || PromptTransition_.Running())
             return true;
-        g_Shell.Unlock();
+        if (Leaving_)
+            g_Shell.Unlock();
         return false;
     }
 
 private:
     HZ_FONT *Big_, *Medium_;
     Transition Leave_;
+    Transition PromptTransition_;
     bool Leaving_ = false;
     bool Prompting_ = false, Accepted_ = false, Wrong_ = false;
     bool HighContrast_ = false;
@@ -985,6 +997,12 @@ Window *CreateLockScreen()
     Lock->Background = 0x00000000;
     Grid *Root = new Grid();
     LockView *View = Root->Add<LockView>();
+    WidgetHost *Widgets = Root->Add<WidgetHost>();
+    Widgets->HorizontalAlignment = Align::Center;
+    Widgets->VerticalAlignment = Align::Start;
+    Widgets->Margin = Thickness(0, 100, 0, 0);
+    Widgets->Width = 680;
+    Widgets->Height = 400;
     TextBox *Box = Root->Add<TextBox>("Password");
     Box->Password = true;
     Box->MaxLength = 64;
@@ -1043,10 +1061,14 @@ void Shell::Unlock()
         L->Close();
         DeferDelete(L);
     }
-    if (Bar)
+    if (Bar) {
         NtUserShowWindow(Bar->Handle(), HZ_SW_SHOWNOACTIVATE); /* hidden while locked */
-    if (Dock && ShowTopDock)
+        Bar->Reveal();
+    }
+    if (Dock && ShowTopDock) {
         NtUserShowWindow(Dock->Handle(), HZ_SW_SHOWNOACTIVATE);
+        Dock->Reveal();
+    }
     if (Desk && ShowDesktopIcons) { /* hidden while locked; re-read so the icons replay their reveal */
         NtUserShowWindow(Desk->Handle(), HZ_SW_SHOWNOACTIVATE);
         Desk->Reload();
@@ -1065,8 +1087,6 @@ void Shell::Unlock()
         }
         HzPrint("shell: cannot start first-boot setup (0x%08X)", (uint32_t)Status);
     }
-    if (const hz::apps::App *Welcome = FindApp(hz::String("welcome")))
-        Launch(*Welcome);
 }
 
 /* ---- Shutdown (M11) ------------------------------------------------------------------------------- */
@@ -1184,7 +1204,7 @@ extern "C" int main(int argc, char **argv)
         return 1;
     }
     TopDock *Dock = new TopDock(g_Shell.Screen.Width);
-    if (!Dock->ShowAt(20, kTopDockTop)) {
+    if (!Dock->ShowAt(0, 0)) {
         HzPrint("shell: cannot create the top dock");
         return 1;
     }
@@ -1207,7 +1227,7 @@ extern "C" int main(int argc, char **argv)
     g_Shell.Desk = CreateDesktop();
     if (g_Shell.Desk)
         NtUserShowWindow(g_Shell.Desk->Handle(), HZ_SW_HIDE);
-    /* Restarted by the session after it exited (M11): no lock screen, no Welcome. */
+    /* Restarted by the session after it exited (M11): no lock screen. */
     bool Restarted = argc > 1 && strcmp(argv[1], "restart") == 0;
     if (Restarted) {
         HzPrint("shell: restarted");

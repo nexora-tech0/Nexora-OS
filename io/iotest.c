@@ -8,8 +8,8 @@
  *     (never on other partitions), including transfers larger than one AHCI command;
  *   - FAT32 on a volume labeled HZTEST (the test disk built by scripts/mkdisk.sh): known files
  *     (8.3, long names, a 300 KB pattern), then create/write/read/truncate/extend/rename/delete
- *     in a scratch directory, directory growth, and the free-cluster count afterwards;
- *   - fstest.exe: the same services from user mode.
+ *     in a scratch directory, directory growth, and the free-cluster count afterwards.
+ * The user-mode halves of these tests ran as fstest.exe, which was removed with the beta apps.
  * Missing hardware is not a failure: without a test disk the disk and FAT32 parts are skipped.
  */
 #include "disk.h"
@@ -18,7 +18,6 @@
 
 #define IOT_TAG HZ_POOL_TAG('I', 'o', 'T', 's')
 #define IOT_PATTERN_SIZE 300000u
-#define IOT_TIMEOUT_US (60ull * 1000 * 1000)
 
 static uint8_t IotPattern(uint64_t i)
 {
@@ -81,7 +80,7 @@ static void IotTestBootVolume(void)
     FILE_OBJECT *File;
     uint8_t Header[2] = {0, 0};
     uint32_t Got = 0;
-    bool Ok = HZ_SUCCESS(IotOpen("\\??\\C:\\Nexora\\System\\hello.exe", FILE_READ_DATA, FILE_OPEN, 0, &File));
+    bool Ok = HZ_SUCCESS(IotOpen("\\??\\C:\\Nexora\\System\\shell.exe", FILE_READ_DATA, FILE_OPEN, 0, &File));
     if (Ok) {
         uint64_t Zero = 0;
         Ok = HZ_SUCCESS(IoReadFile(File, Header, 2, &Zero, KernelMode, &Got)) && Got == 2 && Header[0] == 'M' &&
@@ -91,12 +90,12 @@ static void IotTestBootVolume(void)
     IotReport(Ok, "C: reads an image header");
 
     uint32_t Count = 0;
-    Ok = IotDirectoryContains("\\??\\C:\\Nexora\\System", "usertest.exe", &Count) &&
-         IotDirectoryContains("\\??\\C:\\Nexora\\System", "fstest.exe", NULL) && Count >= 4;
+    Ok = IotDirectoryContains("\\??\\C:\\Nexora\\System", "shell.exe", &Count) &&
+         IotDirectoryContains("\\??\\C:\\Nexora\\System", "files.exe", NULL) && Count >= 4;
     IotReport(Ok, "C: lists \\Nexora\\System");
 
     Ok = IotOpen("\\Device\\Ramdisk0\\new.txt", FILE_WRITE_DATA, FILE_CREATE, 0, &File) == STATUS_MEDIA_WRITE_PROTECTED &&
-         IotOpen("\\Device\\Ramdisk0\\Nexora\\System\\hello.exe", FILE_WRITE_DATA, FILE_OPEN, 0, &File) ==
+         IotOpen("\\Device\\Ramdisk0\\Nexora\\System\\shell.exe", FILE_WRITE_DATA, FILE_OPEN, 0, &File) ==
              STATUS_MEDIA_WRITE_PROTECTED &&
          IotOpen("\\Device\\Ramdisk0\\Nexora\\Nope\\x", FILE_READ_DATA, FILE_OPEN, 0, &File) ==
              STATUS_OBJECT_PATH_NOT_FOUND &&
@@ -388,24 +387,9 @@ static void IotTestFat32(char Letter)
 
 /* ---- User mode ------------------------------------------------------------------------------- */
 
-static void IotRunFsTest(char Letter)
-{
-    char CommandLine[32];
-    RtlFormatString(CommandLine, sizeof(CommandLine), "fstest.exe %c:", Letter ? Letter : '-');
-    EPROCESS *Process;
-    bool Ok = HZ_SUCCESS(PsCreateProcess("\\??\\C:\\Nexora\\System\\fstest.exe", CommandLine, 0, &Process));
-    if (Ok) {
-        uint64_t Timeout = IOT_TIMEOUT_US;
-        if (KeWaitForSingleObject(Process, &Timeout) == STATUS_TIMEOUT) {
-            PsTerminateProcess(Process, STATUS_TIMEOUT);
-            KeWaitForSingleObject(Process, NULL);
-        }
-        Ok = Process->ExitStatus == STATUS_SUCCESS;
-        ObDereferenceObject(Process);
-    }
-    IotReport(Ok, Letter ? "fstest.exe (file services from user mode, with the FAT32 test volume)"
-                         : "fstest.exe (file services from user mode, C: only)");
-}
+/* The user-mode half of the file tests (fstest.exe) was removed with the beta apps; the kernel
+   paths above now cover the same create/write/read/truncate/rename/delete on C: and the FAT32
+   test volume. */
 
 bool IoRunSelfTests(void)
 {
@@ -422,7 +406,6 @@ bool IoRunSelfTests(void)
         IotTestFat32(Letter);
     else
         DbgPrint("IoTest: no FAT32 volume labeled HZTEST: FAT32 tests skipped\n");
-    IotRunFsTest(Letter);
 
     /* Objects are deleted on the worker thread after their last reference, and (M11) an exited
        thread on another processor is reaped there a moment after its process is signaled; give

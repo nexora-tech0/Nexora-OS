@@ -205,14 +205,14 @@ class DockStatus final : public Element {
 public:
     DockStatus()
     {
-        Width = 78;
+        Width = 84;
         Height = 28;
         VerticalAlignment = Align::Center;
         Background = Theme::Glass;
         BorderColor = Theme::CardStroke;
         CornerRadius = 14;
         HitTestVisible = false;
-        ToolTip = "Network and accessibility indicators";
+        ToolTip = "Network and volume indicators";
     }
 
     /* Called when the shell switches colour scheme: the fill was captured at construction. */
@@ -228,8 +228,8 @@ public:
         const Rect &B = Bounds();
         const Color Ink = Theme::TextPrimary;
         P.DrawIcon(Icon::Wifi, Rect{B.X + 8, B.Y + 7, 14, 14}, Ink);
-        P.DrawIcon(Icon::Accessibility, Rect{B.X + 33, B.Y + 7, 14, 14}, Ink);
-        P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 55, B.Y + 4, 15, B.Height - 8}, "A", Ink, Align::Center);
+        P.DrawIcon(Icon::Volume, Rect{B.X + 31, B.Y + 7, 14, 14}, Ink);
+        P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 54, B.Y + 4, 20, B.Height - 8}, "A", Ink, Align::Center);
     }
 };
 
@@ -257,7 +257,7 @@ class DockClock final : public Element {
 public:
     DockClock()
     {
-        Width = 142;
+        Width = 172;
         Height = 28;
         VerticalAlignment = Align::Center;
         HitTestVisible = false;
@@ -268,12 +268,16 @@ public:
         uint64_t Now = 0;
         NtQuerySystemTime(&Now);
         hz::fs::CivilTime T = hz::fs::ToCivil(Now, g_Shell.UtcOffset);
-        char Text[40], Weekday[4];
+        char Text[64], Weekday[4];
         memcpy(Weekday, hz::fs::WeekdayNames[T.Weekday], 3);
         Weekday[3] = 0;
-        HzFormat(Text, sizeof(Text), "%02u:%02u   %s, %u %s", T.Hour, T.Minute, Weekday,
-                 T.Day, hz::fs::MonthNames[(T.Month - 1) % 12]);
-        P.TextLine(GetFont(FontRole::Caption), Bounds(), Text, Theme::TextPrimary, Align::Center);
+        /* Nava OS style: 14:32 Sat, April 10 78% */
+        HzFormat(Text, sizeof(Text), "%02u:%02u   %s, %s %u   78%%", T.Hour, T.Minute, Weekday,
+                 hz::fs::MonthNames[(T.Month - 1) % 12], T.Day);
+        const Rect &B = Bounds();
+        const Color Ink = Theme::TextPrimary;
+        P.TextLine(GetFont(FontRole::Caption), Rect{B.X, B.Y, B.Width - 24, B.Height}, Text, Ink, Align::Center);
+        P.DrawIcon(Icon::Power, Rect{B.Right() - 20, B.Y + 7, 14, 14}, Ink);
     }
 };
 
@@ -312,23 +316,26 @@ void Taskbar::ApplyTheme()
 }
 
 TopDock::TopDock(int32_t ScreenWidth)
-    : Window("Nexora Dock", ScreenWidth - 40, kTopDockHeight,
-             HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_MICA)
+    : Window("Nexora Dock", ScreenWidth, kTopDockHeight,
+             HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_MICA | HZ_WS_NOFRAME)
 {
+    Background = 0xA0080808; /* dark glassy background */
     Grid *Root = new Grid();
     Root->Columns.Push(GridLength::Stars(1));
     Root->Columns.Push(GridLength::AutoSize());
     Root->Columns.Push(GridLength::Stars(1));
-    Root->Padding = Thickness(12, 0);
-    Root->CornerRadius = 20;
+    Root->Padding = Thickness(20, 0);
 
     DockStatus *Status = Root->Add<DockStatus>();
     Status->VerticalAlignment = Align::Center;
     Status_ = Status;
 
-    StackPanel *Brand = Root->Add<StackPanel>(Orientation::Horizontal, 6);
+    StackPanel *Brand = Root->Add<StackPanel>(Orientation::Horizontal, 8);
     Brand->GridColumn = 1;
     Brand->VerticalAlignment = Align::Center;
+    Brand->Padding = Thickness(16, 0);
+    Brand->Background = 0x1AFFFFFF; /* glassy pill overlay */
+    Brand->CornerRadius = 14;
     Brand->Add<DockPages>();
     TextBlock *Name = Brand->Add<TextBlock>("Nexora OS", FontRole::BodyStrong);
     Name->VerticalAlignment = Align::Center;
@@ -339,14 +346,39 @@ TopDock::TopDock(int32_t ScreenWidth)
     Tray->GridColumn = 2;
     Tray->HorizontalAlignment = Align::End;
     Tray->VerticalAlignment = Align::Center;
-    Tray->Padding = Thickness(7, 0);
-    Tray->Background = Theme::Glass;
-    Tray->BorderColor = Theme::CardStroke;
-    Tray->CornerRadius = 16;
+    Tray->Padding = Thickness(10, 0);
+    Tray->Background = 0x1AFFFFFF; /* glassy pill overlay */
+    Tray->CornerRadius = 14;
     Clock_ = Tray->Add<DockClock>();
     Tray->Add<TaskButton>(TaskKind::Quick, (HWND)0, "", "", true);
     Tray_ = Tray;
     SetContent(Root);
+}
+
+void Taskbar::OnPaint(Painter &P)
+{
+    float T = Reveal_.Value();
+    if (T < 1.0f) {
+        int32_t Offset = (int32_t)((1.0f - T) * kTaskbarHeight);
+        P.PushClip(Rect{0, Offset, Width(), Height() - Offset});
+    }
+    Window::OnPaint(P);
+    if (T < 1.0f)
+        P.PopClip();
+}
+
+void Taskbar::Reveal()
+{
+    Reveal_.Jump(0);
+    Reveal_.To(1, Motion::FlyoutRevealMs);
+    StartAnimation();
+}
+
+void TopDock::Reveal()
+{
+    Reveal_.Jump(0);
+    Reveal_.To(1, Motion::FlyoutRevealMs);
+    StartAnimation();
 }
 
 void TopDock::ApplyTheme()
@@ -354,8 +386,7 @@ void TopDock::ApplyTheme()
     if (Status_)
         static_cast<DockStatus *>(Status_)->ApplyTheme();
     if (Tray_) {
-        Tray_->Background = Theme::Glass;
-        Tray_->BorderColor = Theme::CardStroke;
+        Tray_->Background = 0x1AFFFFFF;
         Tray_->Invalidate();
     }
     if (Name_) {
@@ -367,7 +398,14 @@ void TopDock::ApplyTheme()
 
 void TopDock::OnPaint(Painter &P)
 {
+    float T = Reveal_.Value();
+    if (T < 1.0f) {
+        int32_t Offset = (int32_t)((1.0f - T) * -kTopDockHeight);
+        P.PushClip(Rect{0, 0, Width(), Height() + Offset});
+    }
     Window::OnPaint(P);
+    if (T < 1.0f)
+        P.PopClip();
     if (!ClockTimer_ && IsOpen())
         ClockTimer_ = SetTimer(1000, [this]() { Clock_->Invalidate(); });
 }

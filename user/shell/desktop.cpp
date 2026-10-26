@@ -15,6 +15,7 @@
 #include "hzapps.h"
 #include "hzfile.h"
 #include "hzui.h"
+#include "widgets.h"
 
 namespace shell {
 
@@ -205,6 +206,13 @@ void LaunchApp(Window *Owner, const char *Id, const char *Argument)
 
 class DesktopView final : public Element {
 public:
+    WidgetHost *Widgets = nullptr;
+
+    DesktopView()
+    {
+        Widgets = new WidgetHost();
+        AddChild(Widgets);
+    }
     hz::Vector<DesktopItem> Shortcuts; /* the fixed icons, in order, before the folder's items */
     hz::Vector<DesktopItem> Items;     /* shortcuts then the desktop folder, as shown */
     hz::Vector<hz::fs::Entry> Entries; /* the desktop folder's content, sorted */
@@ -296,7 +304,13 @@ public:
             W->InvalidateRect(GridBounds());
     }
 
-    /* ---- Element ------------------------------------------------------------------------ */
+    void ArrangeOverride(Size S) override
+    {
+        /* Icons grid stays on the left, widgets on the right */
+        int32_t WidgetWidth = 340;
+        Widgets->SetFrame(Rect{S.Width - WidgetWidth - 32, kWorkAreaTop + 32, WidgetWidth, S.Height - kWorkAreaTop - kTaskbarHeight - 64});
+        Widgets->LayoutWidgets();
+    }
 
     void Paint(Painter &P) override
     {
@@ -337,7 +351,10 @@ public:
     {
         if (E.Button != HZ_MOUSE_LEFT)
             return;
-        SetSelected(IndexAt(E.Position));
+        size_t Index = IndexAt(E.Position);
+        SetSelected(Index);
+        if (Index != hz::NotFound && E.ClickCount >= 2 && OnOpen)
+            OnOpen(Index);
         E.Handled = true; /* keep the release (and its click count) for this element */
     }
 
@@ -355,12 +372,6 @@ public:
             }
             E.Handled = true;
             return;
-        }
-        if (E.Button == HZ_MOUSE_LEFT && Index != hz::NotFound && E.ClickCount >= 2) {
-            SetSelected(Index);
-            if (OnOpen)
-                OnOpen(Index);
-            E.Handled = true;
         }
     }
 

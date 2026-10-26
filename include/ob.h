@@ -26,7 +26,7 @@ HZ_EXTERN_C_BEGIN
 struct _EPROCESS;
 struct _OBJECT_TYPE;
 
-/* Resolves RemainingPath (e.g. "\Nexora\System\hello.exe") inside Object; returns a new
+/* Resolves RemainingPath (e.g. "\Nexora\System\notepad.exe") inside Object; returns a new
    referenced object in *Result. ParseContext is what the caller of ObReferenceObjectByNameEx
    passed (the I/O manager's open parameters), or NULL. */
 typedef STATUS (*OB_PARSE_PROCEDURE)(void *Object, const char *RemainingPath, void *ParseContext, void **Result);

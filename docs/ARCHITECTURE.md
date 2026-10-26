@@ -87,9 +87,9 @@ nexora-os/
 │                 lib/hzsys (syscall stubs), lib/hzrt (CRT, heap, hzcore, hzfile, hzapps),
 │                 lib/hzuser (win32k stubs, windows, drawing, fonts), lib/hzui (painter element
 │                 window controls textbox listview menu editor dialogs); shell/ (shell.exe: shell
-│                 taskbar flyouts); apps/<name>/ (one program per directory: clock notepad files
-│                 terminal calc settings taskmgr setup); tests/ (hello, usertest, crash, fstest,
-│                 wintest, uitest, apptest, welcome)
+│                 taskbar flyouts); apps/<name>/ (one program per directory: browser calc calendar
+│                 clock files notepad paint photos settings setup stopwatch sysinfo taskmgr
+│                 terminal)
 ├── tools/        host/build tools (fontgen, mksym.py)
 ├── rootfs/       files copied verbatim into the system volume (C:\ layout); Nexora/Apps/*.app
 │                 are the program manifests (M9)
@@ -753,10 +753,11 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
   - WaitForSingle/MultipleObjects (up to 64; pool wait blocks beyond 3), DelayExecution,
     YieldExecution;
   - QuerySystemInformation (basic, process list), QueryUptime.
-- **Self-tests** (`ps/pstest.c`, every boot, about 1 s under TCG, 0.25 s in VirtualBox): hello.exe at its preferred
-  base and relocated (exit 42), usertest.exe (100+ checks, exit 0 = no failures), and crash.exe
-  in seven fault modes plus int3. Then every Process/Thread/Event/File object must be gone and
-  pool usage must be back to the starting value.
+- **Self-tests** (`ps/pstest.c`, every boot): the object accounting after Phase 1 has settled -
+  every Process/Thread/Event/File object must be back at its baseline and pool usage must be back
+  to the starting value. The process program tests that ran here (hello.exe at its preferred base
+  and relocated, usertest.exe's 100+ checks, and crash.exe in seven fault modes plus int3) went
+  with the beta apps.
 - **Known gaps:**
   - No cross-process memory services.
   - No suspend/resume or APCs.
@@ -1109,16 +1110,12 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
   (`HzMeasureTextN`, `HzDrawTextN`, and `HzMeasureTextFixed` in 1/64 px for caret positions)
   serve the toolkit.
 - **Tests:**
-  - `wintest.exe` (run by `W32kRunSelfTests` before the desktop is shown; 139 checks since M7,
-    which added caption button hover and press, minimize/maximize/restore by buttons, commands,
-    double-click, drag and Alt+Tab, cursor shapes and their sprites, minimum sizes and explicit
-    capture) drives
-    windows, painting and composition (reading pixels back), corners and shadows, hit testing,
-    activation, injected keyboard and mouse input, timers, posted and quit messages, ownership
-    rules, invalid arguments, the heap and fonts. It leaves one window for thread exit to clean
-    up, and puts the cursor back where it was. The kernel then checks that no window and no
-    surface section is left.
-  - `welcome.exe` is the first desktop program, rewritten with hzui in M7 (§31).
+  - The boot check (`W32kRunSelfTests`, `win32k/w32test.cpp`) runs before the desktop is shown and
+    verifies the window manager starts with no window and no surface section. The self-test
+    programs that used to drive windows, painting and composition here - `wintest.exe` (139 checks
+    since M7, which added caption button hover and press, minimize/maximize/restore by buttons,
+    commands, double-click, drag and Alt+Tab, cursor shapes and their sprites, minimum sizes and
+    explicit capture), `uitest.exe` and `apptest.exe` - were removed with the beta apps.
 
 ## 31. hzcore and hzui, the C++ toolkit (M7)
 
@@ -1178,21 +1175,21 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
   strokes), radii (4 px controls, 8 px overlays), 32 px control height and the accent colour,
   Nexora orange `#FF9F5A` (the sun of the logo) with dark text on it. Fonts by role: body 14,
   body strong 14, caption 12, subtitle 20, title 28.
-- **Tests:** `uitest.exe` (104 checks, run at boot after wintest) covers hzcore, global
-  constructors, layout math, Painter pixels and controls rendered off-screen, and a live window
-  driven by injected input (Tab order, editing, every control, menus, the list, tooltips,
-  cursor shapes, maximize, close requests, tab view and scrolling). `welcome.exe` is the gallery
-  (Start, Controls, List and About tabs; the clock became `clock.exe` in M8); the `desktop` smoke
-  case types into it, tabs to a button and presses it, and drags it, all through QEMU's PS/2
-  devices.
+- **Tests:** the toolkit's boot tests were removed with the beta apps. `uitest.exe` (104 checks)
+  covered hzcore, global constructors, layout math, Painter pixels and controls rendered
+  off-screen, and a live window driven by injected input (Tab order, editing, every control,
+  menus, the list, tooltips, cursor shapes, maximize, close requests, tab view and scrolling);
+  `welcome.exe` was the gallery (Start, Controls, List and About tabs; the clock became
+  `clock.exe` in M8) that the `desktop` smoke case typed into, tabbed to a button and dragged,
+  all through QEMU's PS/2 devices. The controls remain in hzui and are exercised by the apps.
 
 ## 32. The shell (M8)
 
 - **Start-up.** After `[HZ] BOOT` the kernel shows the desktop and starts
-  `C:\Nexora\System\shell.exe` (falling back to `welcome.exe` if it is missing). The shell
-  creates the taskbar (hidden), registers it as the shell window, sets the work area to the
-  screen above the 48 px taskbar and shows the lock screen. Unlocking shows the taskbar and
-  starts `welcome.exe`.
+  `C:\Nexora\System\shell.exe` (there is no fallback program: the old `welcome.exe` fallback went
+  with the beta apps). The shell creates the taskbar (hidden), registers it as the shell window,
+  sets the work area to the screen above the 48 px taskbar and shows the lock screen. Unlocking
+  shows the taskbar and the desktop.
 - **State** (`user/shell/shell.cpp`): the installed programs (manifests, §34), the app windows
   in taskbar order (first seen first; refreshed from `EnumWindows` on every window notification)
   each with its process and program (looked up once, by the process's image name), the active
@@ -1304,7 +1301,7 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
     arrives to the window (`HZ_WM_USER + 1`, freed by the receiver) and, after end of file, the
     exit code (`HZ_WM_USER + 2`; "[exit code N]"). `>`/`>>` capture the output into a file.
     Output lines are mirrored to the kernel log (`terminal| ...`).
-  - **Calculator:** the engine (`apps/calc/engine.cpp`, also compiled into apptest) keeps an
+  - **Calculator:** the engine (`apps/calc/engine.cpp`) keeps an
     entry, an accumulator, a pending operator and the last operation (for repeated `=`); doubles
     are formatted with 15 significant digits (scientific notation outside 1e-9..1e15), the
     square root is `sqrtsd`; keyboard input.
@@ -1322,7 +1319,7 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
 - **Setup** (`user/apps/setup`, "Install Nexora OS" in Start on live systems) is an ordinary
   program: everything it writes goes through raw device handles and the file services, so the
   kernel only had to learn to read a partition table again (§23) and to pick C: from
-  `hz.system`. `installer.cpp` holds the pure parts (also compiled into apptest): CRC-32, random
+  `hz.system`. `installer.cpp` holds the pure parts: CRC-32, random
   version-4 GUIDs, the layout, GPT sectors, FAT32 geometry and sectors, the boot menu.
 - **Layout:** protective MBR; primary GPT at LBA 1-33 and the backup at the end (128 entries);
   ESP (type C12A7328-..., "EFI system partition") of 100 MiB at 1 MiB; the Nexora OS partition
@@ -1531,54 +1528,10 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
   - `hz::fs` gained `CopyTree`, `MoveTree`, `DeleteTree` and `IsInside` (a folder is never
     copied or moved into itself), and `Copy` streams in 256 KiB pieces (no size limit).
 
-## 38. Blockyard, the block game (M12)
+## 38. Blockyard, the block game (M12) — removed
 
-`user/apps/blockyard` is an original voxel sandbox (no other game's names or art). It shows what
-the system can carry: a CPU-only 3D renderer on every processor, a mouse-locked first-person
-camera, and a 4 MB world saved to FAT32.
+`user/apps/blockyard`, an original voxel sandbox (a CPU-only 3D renderer spread over every
+processor, a mouse-locked first-person camera and a 4 MB world saved to FAT32), was removed with
+the beta apps in the item 19 cleanup. The M12 mouse-lock window attribute it was built on
+(`HZ_WA_MOUSE_LOCK`) remains a win32k feature; nothing in the tree uses it now.
 
-- **World** (`world.cpp`): 256 x 64 x 256 one-byte cells, Y-major, indexed
-  `(y * 256 + z) * 256 + x`.
-  - The seed drives value-noise terrain: hills from 4-octave fractal noise, plus mountains
-    where a slow "continent" noise is high. Columns get bedrock, stone, 3 dirt and grass; sand
-    near and under the water; snow from height 47; water up to level 24. About 0.9% of grass
-    columns grow a tree (4-6 logs and a leaf crown).
-  - Generation takes 12-16 ms in VirtualBox and about 0.3 s under TCG.
-  - Save files ("HZBY") hold a header and then runs of (count, block). A changed world is about
-    160 KB and saves in about 30 ms. They go to the documents folder (`Blockyard.world`) on
-    exit, on Ctrl+S, and two minutes after changes.
-- **Renderer** (`render.cpp`): one ray per pixel of a low-resolution frame (window size / 3 by
-  default; R switches between 1/2, 1/3 and 1/4).
-  - Each ray steps cell by cell (Amanatides-Woo DDA) up to the view distance (default 64
-    blocks; V cycles 32 to 96).
-  - The first opaque face gives a texel from 16 x 16 textures generated from hash noise at
-    start: top, side and bottom variants per block.
-  - The texel is shaded per face (top 1.0, X sides 0.8, Z sides 0.66, bottom 0.5, a slight
-    darkening down each side) and by voxel ambient occlusion: the four corners of the face are
-    darkened by the solid neighbours of the cell in front of it, blended bilinearly.
-  - Then fog towards the sky colour from 55% of the view distance.
-  - Glass and the gaps in leaves have clear texels (alpha 0): the ray goes on, slightly tinted
-    after glass.
-  - Water is not a surface but a tint growing with the depth the ray travelled (and the whole
-    view under water).
-  - The sky is a gradient with a sun disc and a cloud layer (value noise on a plane 96 blocks
-    up, drifting).
-  - The selected block gets a dark outline from its face coordinates.
-- **Threads:** `Renderer::Start(processors)` starts up to 8 workers.
-  - Each frame sets every worker's start event; the workers trace interleaved rows (worker *i*
-    takes rows *i*, *i+n*, ...); the window thread waits for all of them
-    (`NtWaitForMultipleObjects`, wait-all) and then scales the frame up.
-  - The world is only changed between frames.
-  - QEMU (TCG, 4 CPUs, 333x202): 20-35 fps. VirtualBox: 3-6 ms per frame on 1-2 CPUs, so the
-    game runs at the 66 fps of hzui's 15 ms animation timer.
-- **Game** (`blockyard.cpp`): a `Window` subclass passes raw `KEYDOWN`/`KEYUP` (the toolkit
-  ignores key-up), `HZ_WM_MOUSEDELTA` and `HZ_WM_MOUSEUNLOCKED` to the view.
-  - A click captures the mouse; Esc or losing activation releases it, and the pause screen
-    lists the controls.
-  - Physics: walk 4.3 blocks/s (sprint 5.6), gravity 28 blocks/s², jump 8.4 blocks/s, a
-    0.6 x 1.8 box moved one axis at a time in steps of at most 0.4 blocks that shrink by
-    halves against solid cells. Swimming and flying (F) are supported.
-  - Picking repeats the DDA to 6 blocks. Breaking (bedrock excepted) lets neighbouring water in;
-    placing refuses the player's own cells. The middle button picks a block type.
-  - The frame and HUD are drawn into a back buffer and copied to the window surface in one
-    pass, because the compositor reads surfaces while they are painted.

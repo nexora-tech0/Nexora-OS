@@ -20,8 +20,8 @@ using namespace hzui;
 
 constexpr int32_t kTaskbarHeight = 48;
 constexpr int32_t kTopDockHeight = 48;
-constexpr int32_t kTopDockTop = 10;
-constexpr int32_t kWorkAreaTop = kTopDockTop + kTopDockHeight + 8;
+constexpr int32_t kTopDockTop = 0;
+constexpr int32_t kWorkAreaTop = kTopDockHeight;
 constexpr size_t kMaxRecent = 4;
 
 struct AppWindow {
@@ -69,7 +69,7 @@ struct Shell {
     bool ShowTopDock = true;       /* shell.ini "TopDock": the floating dock along the top */
     bool ShowDesktopIcons = true;  /* shell.ini "DesktopIcons": the desktop icon layer */
     bool LightMode = false;        /* shell.ini "Theme": 0 dark, 1 light. Applied in LoadSettings(). */
-    bool Started = false; /* unlocked once: Welcome or first-boot setup ran */
+    bool Started = false; /* unlocked once: the first-boot setup or the desktop was reached */
     /* Shutting down (M11): windows were asked to close; the timer checks until they are gone. */
     bool ShuttingDown = false, ShutdownAsked = false;
     uint32_t ShutdownAction = 0;

@@ -17,21 +17,25 @@ public:
     void Rebuild(); /* window buttons from g_Shell.Windows */
     void Refresh(); /* active indicators */
     void ApplyTheme(); /* re-fills the tray pill after a colour-scheme switch */
+    void Reveal(); /* slide up from the bottom */
 
 protected:
     void OnContextMenu(Point Screen) override;
+    void OnPaint(Painter &P) override;
 
 private:
     StackPanel *Apps_;
     StackPanel *Tray_ = nullptr;
     Element *Clock_;
     uint64_t ClockTimer_ = 0;
+    Transition Reveal_;
 };
 
 class TopDock final : public Window {
 public:
     explicit TopDock(int32_t ScreenWidth);
     void ApplyTheme(); /* re-fills the status pill and the tray after a colour-scheme switch */
+    void Reveal(); /* slide down from the top */
 
 protected:
     void OnPaint(Painter &P) override;
@@ -42,6 +46,7 @@ private:
     TextBlock *Name_ = nullptr;
     Element *Clock_;
     uint64_t ClockTimer_ = 0;
+    Transition Reveal_;
 };
 
 }  // namespace shell

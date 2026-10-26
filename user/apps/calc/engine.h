@@ -1,7 +1,7 @@
 /*
  * Nexora OS - user/apps/calc/engine.h
- * The calculator's engine (standard mode), kept apart from the window so apptest.exe can check
- * it: an entry being typed, an accumulator, a pending operator, repeated '=' (repeats the last
+ * The calculator's engine (standard mode), kept apart from the window so it can be exercised on
+ * its own: an entry being typed, an accumulator, a pending operator, repeated '=' (repeats the last
  * operation), percent, sign, reciprocal, square and square root, and number formatting with up
  * to 15 significant digits (scientific notation outside 1e-9 .. 1e15).
  */

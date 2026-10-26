@@ -1,6 +1,7 @@
 # Nexora OS progress
 
-Status at a glance: **M12 complete, version 1.1.0** (2026-10-08). The roadmap (M0–M11) ended
+Status at a glance: **M12 complete, version 1.1.0** (2026-10-08), then a **cleanup pass
+(2026-10-25)** that removed Blockyard and the beta/test programs. The roadmap (M0–M11) ended
 with 1.0.0; M12 added Blockyard, a block-building game, and the window manager's mouse lock. What
 could come next is listed under "Beyond 1.0" below.
 
@@ -14,22 +15,22 @@ Resume checklist for a new session:
    the ISO, so run them in that order, and after changing user-mode code start again at
    `install` (an installed disk carries the programs it was installed with).
    The normal boot ends on the shell's lock screen (any key unlocks; the taskbar appears and the
-   welcome program starts); `hz.desktop=off` on the kernel command line keeps the boot screen
-   instead.
+   desktop is shown); `hz.desktop=off` on the kernel command line keeps the boot screen instead.
 3. VirtualBox check: `make vbox`, then start the VM (or `scripts/create-vbox-vm.sh --headless`).
    COM1 is logged to `<VM folder>/serial-com1.log`. Boot the normal entry and at least the
    page-fault, stack-overflow, thread-overflow and pool diagnostic ISOs (`build/test/<case>.iso`,
    built by `make test`), and let one boot run for a minute (the status line must keep ticking).
-   The normal boot must show `Process self-tests: 12/12 passed` (user mode, loader, faults).
+   The normal boot must show `Process self-tests: 1/1 passed` (the object accounting after Phase 1;
+   the process program tests went with the beta apps).
    For the file system tests in VirtualBox attach the test disk once:
    `bash scripts/create-vbox-vm.sh build/nexora-os.iso --test-disk build/test/disk.img`; the boot
    must then show `Volume: D: ... FAT32 'HZTEST'` and `File system self-tests: 16/16 passed`.
-   Every boot must show `Window manager self-tests: wintest.exe exit 0x00000000, uitest.exe exit
-   0x00000000, apptest.exe exit 0x00000000, 0 windows and 0 surfaces left: OK`; then try the
-   desktop with the mouse and keyboard (unlock, drag, resize, the caption buttons, Tab and typing
-   in the welcome window, the logo key and Start search, the taskbar buttons, Alt+Tab, quick
-   settings and wallpapers) and the programs (with the test disk attached, Notepad can save to
-   D:, the terminal can run `dir`, `type` and `hello`, Task Manager can end Clock).
+   Every boot must show `Window manager: 0 windows and 0 surface sections before the desktop: OK`;
+   then try the
+   desktop with the mouse and keyboard (unlock, drag, resize, the caption buttons, Tab and typing,
+   the logo key and Start search, the taskbar buttons, Alt+Tab, quick settings and wallpapers) and
+   the programs (with the test disk attached, Notepad can save to D:, the terminal can run `dir`
+   and `type`, Task Manager can end Clock).
    Installing in VirtualBox: `bash scripts/create-vbox-vm.sh build/nexora-os.iso --wipe-disk
    --start` (an empty 16 GB system disk), run "Install Nexora OS" from Start on disk 0, power off,
    then `bash scripts/create-vbox-vm.sh --boot-disk --start` starts the installed system (first-
@@ -63,6 +64,22 @@ Resume checklist for a new session:
 
 ## Done
 
+### Cleanup: Blockyard and the beta apps removed (2026-10-25, after 1.1.0)
+- **Removed:** `user/apps/blockyard/` (4 files) and its manifest; the beta programs under
+  `user/tests/` (`hello`, `usertest`, `crash`, `fstest`, `wintest`, `uitest`, `apptest`, `welcome`)
+  and the `welcome.app` manifest; the browser's placeholder brochure page. The `Makefile`'s
+  `USER_PROGRAMS` list and its standalone-program rule are gone, so every executable is now an app
+  directory (and `scripts/validate-app-catalog.py` is fed `USER_APP_NAMES`).
+- **Call sites the deleted programs left behind:** `ps/pstest.c` no longer starts
+  `hello.exe`/`usertest.exe`/`crash.exe` (it keeps the object/pool accounting the programs ran
+  under); `win32k/w32test.cpp` keeps only the no-window/no-section invariant; `io/iotest.c`'s FAT32
+  boot-volume checks use `shell.exe` and the real apps and its `fstest.exe` half is gone;
+  `init/init.c` has no `welcome.exe` session fallback; `user/shell/shell.cpp` no longer launches
+  `welcome.exe` and its icon table maps "Image" to `Icon::Image` (item 7.12).
+- **Docs:** `README.md`, `docs/ARCHITECTURE.md` (§38 kept as a removed-note), `docs/PROGRESS.md`
+  and `NEXORA-OS-INSTALLER-AND-OS-DECISIONS.md` updated. Written, unverified — no build, no ISO,
+  no VM run.
+
 ### M12: Blockyard, a block-building game (version 1.1.0)
 - **Window manager:** a mouse lock for games (`HZ_WA_MOUSE_LOCK`). While it is held:
   - the cursor is hidden and parked;
@@ -71,16 +88,13 @@ Resume checklist for a new session:
 
   wintest checks it (12 checks: refused for an inactive window, the hidden and parked cursor,
   deltas, buttons, release by activation and by request).
-- **Blockyard** (`user/apps/blockyard`, pinned in Start with a new cube icon; ARCHITECTURE §38):
-  - **World:** an original voxel sandbox of 256 x 64 x 256 blocks generated from a seed (hills,
-    mountains, beaches, water, snow, trees), saved to the documents folder and loaded at the
-    next start.
-  - **Renderer:** a CPU raycaster with procedural 16 x 16 textures (no image files), face shading,
-    ambient occlusion, fog, see-through glass, leaves and water, a sky with sun and clouds, and
-    a block outline. Rows are rendered by one worker thread per processor.
-  - **Play:** first-person walking, jumping, swimming and flying with collision; breaking and
-    placing 9 block types (hotbar, 1-9, wheel, middle-click picking); a pause screen with the
-    controls; F3 details; adjustable resolution and view distance.
+- **Blockyard** (Removed in 2026-10-25 cleanup): previously a voxel sandbox renderer. Legacy references remain in ARCHITECTURE §38.
+
+### M13: UI Modernization & Foundation Polish (Current)
+- **UI Modernization:** Redesigned Top Dock with dark glassy theme, pill overlays, and Nexora OS branding.
+- **Boot Experience:** Windows 11 26H2 style "chasing dots" spinner with sine-mapped acceleration.
+- **Shell UX:** Smooth lock-screen-to-sign-in transitions and reveal animations for taskbar/dock.
+- **Installer:** Removed wallpaper selection and restored Nexora OS branding for physical PC compatibility.
 - **Tests:**
   - wintest 215 checks; apptest counts ten installed programs.
   - A new smoke case `blockyard` (35 cases), on 2 processors: Start, mouse capture, a block

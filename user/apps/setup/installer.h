@@ -1,6 +1,6 @@
 /*
  * Nexora OS - user/apps/setup/installer.h
- * What Setup writes to a disk, kept apart from the window so apptest.exe can check it:
+ * What Setup writes to a disk, kept apart from the window so it can be exercised on its own:
  *   - CRC-32 (IEEE, as GPT uses it) and GUIDs (random, version 4; text in the usual form, bytes
  *     in GPT on-disk order: the first three groups little-endian);
  *   - the disk layout: a GPT with 128 entries, an EFI system partition of 100 MiB at 1 MiB and a

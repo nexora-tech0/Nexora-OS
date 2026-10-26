@@ -1,6 +1,6 @@
 /*
  * Nexora OS - user/apps/terminal/parse.h
- * Command-line parsing for the terminal, apart from the window so apptest.exe can check it.
+ * Command-line parsing for the terminal, kept apart from the window so it can be exercised on its own.
  * Words are split at spaces and tabs; "double quotes" group words (the quotes are removed);
  * '>' or '>>' outside quotes redirects the output to a file (replace or append).
  */

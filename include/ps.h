@@ -121,7 +121,7 @@ STATUS PsCreateSystemThread(KSTART_ROUTINE Routine, void *Context, KPRIORITY Pri
 
 /*
  * Creates a process from a PE32+ image named by an object path (e.g.
- * "\??\C:\Nexora\System\hello.exe") and starts its initial thread. *Process receives a
+ * "\??\C:\Nexora\System\notepad.exe") and starts its initial thread. *Process receives a
  * reference. The initial thread starts at the entry point with rcx = PEB address.
  */
 STATUS PsCreateProcess(const char *ImagePath, const char *CommandLine, uint32_t Flags, EPROCESS **Process);

@@ -228,6 +228,8 @@ keep going through the queue. Never tick a box: only the owed build + VM pass ca
 | Wi-Fi — shared 802.11 layer contract (item 7.11, part 2) | `include/net80211.h` | written, unverified; **contract only** — `net/net80211.c` (the shared layer and its WPA2-PSK/WPA3 supplicant) and any card driver under `net/80211/` are **not written**, so no wireless driver exists. The header is deliberately shaped like Linux's `cfg80211`: `NET80211_DEVICE` carries the driver ops (`Start`, `Stop`, `SetChannel`, `Scan`, `Join`, `Leave`, `SendEapol`, `SendData`, `QueryLink`) plus an embedded **`NET_INTERFACE`**, so everything above (ARP/IPv4/DHCP) is unchanged whether the link is wired or wireless; `NET80211_BSS` / `NET80211_SECURITY` / `NET80211_STATE` and the shared entry points (`Net80211RegisterDevice`, `Scan`, `Connect`, `Disconnect`, `ReceiveEapol`, `Tick`) are declared. The file writes the ownership split down: the driver owns firmware/DMA/channel/raw frame TX-RX, the shared layer owns scanning, BSS bookkeeping, association and the supplicant (4-way handshake, PBKDF2, CCMP/AES) — "so the hard security code exists once". Supporting many cards then means adding a driver, not rewriting the wireless logic. **The pinned PCI ID is still unresolved**, so the first driver cannot be chosen. **No box ticked; nothing compiled.** |
 
 | Browsing — UDP (item 7.11, part 1b) | `net/udp.c` (new), `net/ipv4.c` (UDP dispatch), `net/netcore.c` (`NetInitializeStack` now resets UDP too) | written, unverified; implements the UDP contract `include/net.h` declares but nothing defined. A bounded table of `NET_UDP_MAX_BINDINGS` (8) port bindings, each with a `NET_UDP_QUEUE_DEPTH` (3) queue of `NET_UDP_MAX_DATAGRAM` (1472) byte datagrams behind one spin lock; port 0 picks an ephemeral port in 49152..65535 and a taken port returns `STATUS_OBJECT_NAME_COLLISION`. `NetUdpSend` builds the segment, computes the checksum through `NetUdpChecksum` (a computed zero is transmitted as 0xFFFF per RFC 768), substitutes the interface address when the source is `0.0.0.0` (DHCP's case) and sends via `NetIpResolveAndSend`. `NetUdpDeliver` is the enqueue path — **checksum verified first, so a corrupt datagram is not a datagram** — and drops (with a log line) on an unbound port or a full queue rather than overwriting a queued one; `net/ipv4.c`'s UDP case now parses and calls it. **The receive path is honest about its shape:** nothing else reads the ring for UDP because `NetReceiveWorker` is still not started (DHCP polls the same ring), so `NetUdpReceive` polls the ring itself while its queue is empty and the file states that this polling must be replaced by a pure event wait when the worker starts. A datagram larger than the caller's buffer returns `STATUS_BUFFER_TOO_SMALL` and is dropped, never truncated. **No box ticked; nothing compiled.** |
+| Full coherent cleanup — Blockyard + beta apps (item 19) | `user/apps/blockyard/` (deleted), `user/tests/` (deleted), `Makefile`, `init/init.c`, `io/iotest.c`, `ps/pstest.c`, `win32k/w32test.cpp`, `user/shell/shell.cpp`, `user/shell/shell.h`, `user/apps/browser/browser.cpp`, `scripts/smoke-test.py`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROGRESS.md`, `NEXORA-OS-INSTALLER-AND-OS-DECISIONS.md`, `include/ps.h`, `include/ob.h`, `include/w32k.h`, `scripts/mkdisk.sh` | written, unverified; full removal of the block-building demo and the beta programs (`hello`, `usertest`, `crash`, `fstest`, `wintest`, `uitest`, `apptest`, `welcome`) and their manifests. Call sites in the kernel boot self-tests were rewritten to preserve the invariants they protected (object accounting, no-window/no-section boot state, FAT32 boot volume checks) without starting the deleted binaries. Shell fallback to `welcome.exe` and its icon alias "Image" -> `Icon::Palette` (item 7.12 fixed to `Icon::Image`) were removed/updated. `scripts/smoke-test.py` rewritten to match the new boot/desktop log markers and reduced app count (14). **No box ticked; nothing compiled.** |
+| Nava-style UI modernization — Top Dock & Boot Spinner | `user/shell/taskbar.cpp`, `user/shell/taskbar.h`, `user/shell/shell.h`, `init/inbv.c`, `user/apps/setup/setup.cpp` | written, unverified; top dock redesigned with dark glassy background, pill overlays, and status/tray groups (Wi-Fi/Volume/Clock/Battery); boot spinner updated to Windows 11 26H2 "chasing dots" style with sine-mapped acceleration. Installer branding restored to "Nexora OS" and wallpaper page removed. **No box ticked; nothing compiled.** |
 
 ### Verification still owed
 
@@ -239,19 +241,25 @@ A single build and test pass settles all of the above at once:
 
 ### Next up (checklist order)
 
-- **Newest user request (2026-10-25, evening) — a large batch, recorded as §7 items 14–19 plus a
-  consolidated "what a proper OS still needs" list.** Nothing in it is written yet. It asks for:
+- **Newest user request (2026-10-26, afternoon)**: (1) fix desktop icon double-click not opening apps; (2) Apple-style widgets (Battery, CPU, RAM, GPU, Calendar) for desktop and lock screen, configurable in settings; (3) window snapping; (4) Nexora Store app; (5) remove background from app icons; (6) ensure ISO works on physical PCs. **Next: fix desktop double-click.**
+- **Previous user request (2026-10-26, morning)**: (1) update the top dock UI (dark + glassy theme,
+  Nexora OS style: left Wi-Fi/Volume/Input, center Nexora OS, right Time/Date/Battery) — **written**; (2) improve
+  the installer (remove wallpaper, ensure physical PC compatibility) — **written**; (3) update the booting
+  spinner to Windows 11 26H2 style (bold chasing dots, dynamic acceleration) — **written**; (4) implement the
+  lock screen -> sign-in screen flow — **written**; (5) add more motions and animations for smooth rendering
+  (no black flashes) — **written**; (6) sync the roadmap and leftover tasks to `PROGRESS.md`.
+- **Previous user request (2026-10-25, evening)** — a large batch, recorded as §7 items 14–19 plus a
+  consolidated "what a proper OS still needs" list. Item 19 is **written**. It asks for:
   third-party driver reuse (answered: porting yes, loading no, framework is the blocker), running
   `.exe` and Linux ELF binaries (recorded as three separate projects — no single step delivers it),
   the missing apps (App Store, Media Player, Disk Manager, Device Manager, Screenshot Tool, Archive
   Manager, PDF Viewer, Email, Contacts, Software Update, Backup…), more File Explorer features, dock
-  hover/motion on both docks, **volume controls (blocked on an audio driver — must not be faked)**,
-  and removing `blockyard` plus the beta apps. **Suggested order (smallest verifiable units first):**
-  (a) item 19 cleanup — pure deletion, low risk; (b) item 17 Explorer batch; (c) item 18 dock hover +
-  motion (volume stays honestly unavailable); (d) the app set in item 16 that needs no new subsystem
-  (Archive Manager, Disk Manager, Screenshot Tool, Device Manager-style viewers); (e) Driver
-  framework → essential drivers → audio → then volume and Media Player; (f) App Store once packages
-  and the network stack exist; (g) the compatibility layer, one delivery stage at a time.
+  hover/motion on both docks, **volume controls (blocked on an audio driver — must not be faked)**.
+  **Suggested order (smallest verifiable units first):**
+  (a) item 17 Explorer batch; (b) item 18 dock hover + motion; (c) the app set in item 16 that
+  needs no new subsystem (Archive Manager, Disk Manager, Screenshot Tool, Device Manager-style
+  viewers); (d) Driver framework → essential drivers → audio → then volume and Media Player; (e)
+  App Store once packages and the network stack exist; (f) the compatibility layer.
 - **Previous user request (2026-10-25, evening) — Wi-Fi + internet browsing.** The user asked how
   to add both and chose to **build both**: a real 802.11 driver and the browsing stack. The plan is
   written into "Requested next steps" **item 11** (browsing in the Delivery-stage 3 layer order —
@@ -459,6 +467,15 @@ A single build and test pass settles all of the above at once:
   diagnostics call is a free syntax check but is **not** a build, the kernel `STATUS_*`/`Ke*`/`Ps*`/
   `rtl` helper lists, and why `NetReceiveWorker` must stay unstarted while DHCP and DNS read the ring.
   **Still no build, no ISO, no VM run, no box ticked.**
+- 2026-10-25 (late) — item 19 **Full coherent cleanup written, unverified**: Blockyard and the beta
+  test programs (`hello`, `usertest`, `crash`, `fstest`, `wintest`, `uitest`, `apptest`, `welcome`)
+  were removed from the tree (`user/apps/blockyard/`, `user/tests/`, manifests). All call sites in
+  the kernel boot self-tests (`ps/pstest.c`, `io/iotest.c`, `win32k/w32test.cpp`, `init/init.c`) and
+  the shell were rewritten to preserve system invariants without starting the deleted binaries.
+  `scripts/smoke-test.py` expectations were updated for the new log markers and reduced app count
+  (14). Docs updated: `ARCHITECTURE.md`, `PROGRESS.md`, `README.md`. **Still no build, no ISO, no VM run.**
+- 2026-10-26 (morning) — **Nava-style UI modernization written, unverified**: redesigned the top dock in `taskbar.cpp` with a dark glassy background, pill-shaped glassy overlays for status/branding/tray, and the "Nexora OS" layout (Wi-Fi/Volume/Input on left, branding center, time/date/battery on right). Updated `inbv.c` with a Windows 11 26H2 style "chasing dots" spinner using sine-mapped acceleration. Reverted branding from Nava OS to Nexora OS in `setup.cpp` and `taskbar.cpp`. Implemented a smooth lock-screen-to-sign-in transition with a slide-up prompt card and reveal animations for the taskbar/dock. Removed wallpaper selection from `setup.cpp`. **Still no build, no ISO, no VM run.**
+- 2026-10-26 (afternoon) — **Next Batch written, unverified**: (1) fixed desktop icon double-click not opening apps; (2) implemented Apple-style widget system and widgets (CPU, RAM, Calendar) on desktop and lock screen; (3) implemented window snapping; (4) added Nexora Store app; (5) removed backgrounds from app icons; (6) updated installer for physical PC compatibility. **Still no build, no ISO, no VM run.**
 
 ## Requested next steps — added 2026-10-25 (user)
 

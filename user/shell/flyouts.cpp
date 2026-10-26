@@ -714,17 +714,18 @@ Window *CreateStartMenu()
     Flyout *Start = new Flyout("Start", Width, Height, &g_Shell.Start);
     Grid *Root = new Grid();
     Root->Rows.Push(GridLength::AutoSize()); /* the search box */
-    Root->Rows.Push(GridLength::AutoSize()); /* the app drawer */
-    Root->Rows.Push(GridLength::Stars(1));   /* recent */
+    Root->Rows.Push(GridLength::Stars(1));   /* scrollable apps and recent sections */
     Root->Rows.Push(GridLength::Pixels(64)); /* the user and power band */
 
     TextBox *Search = Root->Add<TextBox>("Search for programs");
     Search->Margin = Thickness(24, 24, 24, 0);
-    AppSection *Apps = Root->Add<AppSection>();
-    Apps->GridRow = 1;
+    ScrollViewer *Content = Root->Add<ScrollViewer>();
+    Content->GridRow = 1;
+    StackPanel *Sections = new StackPanel(Orientation::Vertical);
+    Content->SetContent(Sections);
+    AppSection *Apps = Sections->Add<AppSection>();
     Apps->Margin = Thickness(24, 18, 24, 8);
-    StackPanel *Recommended = Root->Add<StackPanel>(Orientation::Vertical, 2);
-    Recommended->GridRow = 2;
+    StackPanel *Recommended = Sections->Add<StackPanel>(Orientation::Vertical, 2);
     Recommended->Margin = Thickness(32, 16, 32, 0);
     Heading(Recommended, "Recent")->Margin = Thickness(0, 0, 0, 6);
     size_t RecentCount = 0;

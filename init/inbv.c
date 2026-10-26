@@ -9,7 +9,7 @@
 #include "rtl.h"
 
 #define SPLASH_BACKGROUND 0x000000
-#define SPLASH_MARK 0xC9DDF2    /* pale blue mark on black, as Windows 11 shows while starting */
+#define SPLASH_MARK 0xC9DDF2    /* pale blue Nexora mark on black */
 #define SPLASH_SPINNER 0xFFFFFF
 #define STOP_BG 0x2A0E17
 #define STOP_ACCENT 0xFF9E5E
@@ -93,26 +93,14 @@ static const int16_t SplashSin[256] = {
 
 #define SPLASH_FADE_FRAMES 14    /* the mark is opaque after ~230 ms at the 60 Hz cadence */
 #define SPLASH_SPINNER_START 8   /* the ring appears as the mark reaches full brightness */
-#define SPLASH_SPINNER_DOTS 8    /* classic Windows ring: eight dots, 45 degrees apart */
-#define SPLASH_SPINNER_STEP 32   /* circle steps between two dots (256 / 8) */
-#define SPLASH_SPINNER_SPEED 3   /* circle steps per frame: ~1.4 s per revolution */
-
-/* The Windows 11 boot mark: four panes in a 2x2 grid separated by a thin gap. */
-static void InbvDrawMark(int X, int Y, int Size, uint32_t Color)
-{
-    int Gap = HZ_MAX(2, Size / 12);
-    int Pane = (Size - Gap) / 2;
-    VidFillRect(X, Y, Pane, Pane, Color);
-    VidFillRect(X + Pane + Gap, Y, Pane, Pane, Color);
-    VidFillRect(X, Y + Pane + Gap, Pane, Pane, Color);
-    VidFillRect(X + Pane + Gap, Y + Pane + Gap, Pane, Pane, Color);
-}
+#define SPLASH_SPINNER_DOTS 6    /* chasing dots for Win11 26H2 style */
+#define SPLASH_SPINNER_SPEED 4   /* faster base speed for acceleration feel */
 
 static void InbvDrawSpinner(int Width, int Height, int MarkSize, int MarkY)
 {
-    int Radius = HZ_MAX(10, HZ_MIN(MarkSize * 13 / 100, 26));
-    int DotRadius = HZ_MAX(2, Radius / 8);
-    int Reach = Radius + DotRadius + 2; /* the ring plus the antialiased edge of a dot */
+    int Radius = HZ_MAX(12, HZ_MIN(MarkSize * 15 / 100, 30));
+    int DotRadius = HZ_MAX(3, Radius / 5); /* bold chasing dots */
+    int Reach = Radius + DotRadius + 4;
     int CenterX = Width / 2;
     int CenterY = HZ_MIN(Height - Reach - 8, MarkY + MarkSize + Height * 9 / 100);
 
@@ -120,9 +108,14 @@ static void InbvDrawSpinner(int Width, int Height, int MarkSize, int MarkY)
     /* Clear the whole ring in one write so no dot leaves a trail behind it. */
     VidFillRect(CenterX - Reach, CenterY - Reach, Reach * 2, Reach * 2, SPLASH_BACKGROUND);
     for (int I = 0; I < SPLASH_SPINNER_DOTS; I++) {
-        uint32_t Step = (Inbv.Phase + (uint32_t)I * SPLASH_SPINNER_STEP) & 255;
-        /* Head brightest, tail fading: the eight dots read as one travelling sweep. */
-        uint32_t Alpha = 255 - (uint32_t)I * 255 / SPLASH_SPINNER_DOTS;
+        /* Chasing effect: each dot i follows the one before it with a non-linear gap.
+           Dynamic acceleration: map the linear phase through a sine curve to bunch/spread dots. */
+        uint32_t RawStep = (Inbv.Phase - (uint32_t)I * 12) & 255;
+        int32_t Accel = (SPLASH_SIN(RawStep) * 40) >> 15;
+        uint32_t Step = (RawStep + Accel) & 255;
+
+        /* Head brightest, tail fading: the dots read as one travelling sweep. */
+        uint32_t Alpha = 255 - (uint32_t)I * 255 / (SPLASH_SPINNER_DOTS + 2);
         int32_t DotX = ((int32_t)CenterX << 16) + ((int32_t)Radius * SPLASH_COS(Step)) * 2;
         int32_t DotY = ((int32_t)CenterY << 16) + ((int32_t)Radius * SPLASH_SIN(Step)) * 2;
         VidFillDiscAA(DotX, DotY, (int32_t)DotRadius << 16, VidBlend(SPLASH_BACKGROUND, SPLASH_SPINNER, Alpha),
@@ -147,7 +140,8 @@ void InbvAnimate(void)
         if (Inbv.Frame <= SPLASH_FADE_FRAMES) {
             uint32_t Remaining = SPLASH_FADE_FRAMES - Inbv.Frame;
             uint32_t Fade = 255 - Remaining * Remaining * 255 / (SPLASH_FADE_FRAMES * SPLASH_FADE_FRAMES);
-            InbvDrawMark((W - MarkSize) / 2, MarkY, MarkSize, VidBlend(SPLASH_BACKGROUND, SPLASH_MARK, Fade));
+            VidDrawLogoTinted((W - MarkSize) / 2, MarkY, MarkSize, SPLASH_BACKGROUND,
+                              VidBlend(SPLASH_BACKGROUND, SPLASH_MARK, Fade));
         }
         if (Inbv.Frame >= SPLASH_SPINNER_START)
             InbvDrawSpinner(W, H, MarkSize, MarkY);

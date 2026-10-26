@@ -73,7 +73,8 @@ is kept for future revisions.
   Files, Browser, Terminal, Notepad, Calculator, Calendar, Clock, Stopwatch, System Information,
   Task Manager, Photo viewer, Music player, Video player and Screenshot tool. Paint, Email,
   Contacts, Archive manager, App Store and PDF viewer start unselected. Include an app only when
-  its core function is implemented; Blockyard is not in the selected catalog currently.
+  its core function is implemented; the block-building demo (Blockyard) was removed with the beta
+  apps and is not in any catalog.
 - Always show Wi-Fi/Bluetooth setup with a Skip action. If a feature is unsupported, clearly say
   so; never simulate discovery, pairing or connectivity.
 - No telemetry. Network use is allowed after setup; troubleshooting logs stay local, and any future

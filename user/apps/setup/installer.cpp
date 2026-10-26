@@ -247,7 +247,7 @@ void BuildBootSector(const FatParameters &P, uint64_t HiddenSectors, uint8_t *S)
     S[0] = 0xEB;
     S[1] = 0x58;
     S[2] = 0x90;
-    memcpy(S + 3, "HORIZON ", 8);
+    memcpy(S + 3, "NEXORA  ", 8);
     Put16(S + 11, kSectorSize);
     S[13] = (uint8_t)P.SectorsPerCluster;
     Put16(S + 14, (uint16_t)P.ReservedSectors);
