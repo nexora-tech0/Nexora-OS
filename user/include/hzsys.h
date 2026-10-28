@@ -126,7 +126,7 @@ static inline STATUS HzTcpClose(HZ_TCP_HANDLE Connection)
 static inline HZ_TEB *HzCurrentTeb(void)
 {
     HZ_TEB *Teb;
-    __asm__ volatile("mov %%gs:0, %0" : "=r"(Teb));
+    __asm__ volatile("mov %%gs:0x30, %0" : "=r"(Teb));
     return Teb;
 }
 

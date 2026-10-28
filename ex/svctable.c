@@ -62,10 +62,13 @@ static const KSYSTEM_SERVICE ExpServiceTable[HzSysServiceCount] = {
     [HzSysWinHeapAlloc] = {NtWinHeapAlloc, 4, "WinHeapAlloc"},
     [HzSysWinHeapFree] = {NtWinHeapFree, 3, "WinHeapFree"},
     [HzSysWinGetModuleHandle] = {NtWinGetModuleHandle, 3, "WinGetModuleHandle"},
-    [HzSysWinSocketApi] = {NtWinSocketApi, 5, "WinSocketApi"},
+    [HzSysWinSocketApi] = {NtWinSocketApi, 8, "WinSocketApi"},
     [HzSysWinGetProcAddress] = {NtWinGetProcAddress, 3, "WinGetProcAddress"},
     [HzSysWinCreateFile] = {NtWinCreateFile, 4, "WinCreateFile"},
     [HzSysWinGetFileAttributes] = {NtWinGetFileAttributes, 1, "WinGetFileAttributes"},
+    [HzSysWinGetFileVersionInfoSizeW] = {NtWinGetFileVersionInfoSizeW, 2, "WinGetFileVersionInfoSizeW"},
+    [HzSysWinGetFileVersionInfoW] = {NtWinGetFileVersionInfoW, 4, "WinGetFileVersionInfoW"},
+    [HzSysWinVerQueryValueW] = {NtWinVerQueryValueW, 4, "WinVerQueryValueW"},
 };
 
 void ExInitializeSystem(void)

@@ -32,7 +32,7 @@ __attribute__((section(".CRT$XCA"), used)) const HZ_INITIALIZER HzpInitializersB
 __attribute__((section(".CRT$XCZ"), used)) const HZ_INITIALIZER HzpInitializersEnd = nullptr;
 }
 
-    static_assert(HzSysServiceCount == 53, "update the SERVICE list in user/lib/hzsys/hzsys.asm");
+    static_assert(HzSysServiceCount == 56, "update the SERVICE list in user/lib/hzsys/hzsys.asm");
 static_assert(sizeof(HANDLE) == 8 && offsetof(HZ_TEB, TlsSlots) == 0x148 && sizeof(HZ_PEB) == 888, "ABI layout");
 
 namespace {

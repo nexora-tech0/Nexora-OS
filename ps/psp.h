@@ -40,7 +40,7 @@ typedef struct _PSP_WIN_MODULE {
 #define PSP_MIN_STACK_RESERVE (64 * 1024)
 #define PSP_MAX_STACK_RESERVE (16 * 1024 * 1024)
 #define PSP_MAX_IMAGE_FILE (256ull * 1024 * 1024)
-#define PSP_WINCOMPAT_THUNK_PAGE_SIZE (PAGE_SIZE * 4u)
+#define PSP_WINCOMPAT_THUNK_PAGE_SIZE (PAGE_SIZE * 16u)
 
 extern KSPIN_LOCK PspLock;
 extern LIST_ENTRY PspActiveProcessList;

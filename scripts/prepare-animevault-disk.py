@@ -29,6 +29,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("installer", type=Path, help="AnimeVault Windows NSIS installer executable")
     parser.add_argument("output", type=Path, help="destination raw disk image")
+    parser.add_argument("--rebuild", action="store_true", help="re-extract the installer even when the disk is current")
     args = parser.parse_args()
 
     installer = args.installer.resolve()
@@ -37,6 +38,10 @@ def main() -> int:
         parser.error(f"installer not found: {installer}")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.parent.resolve().relative_to(ROOT)
+    if (not args.rebuild and output.is_file() and output.stat().st_size == DISK_BYTES and
+            output.stat().st_mtime >= installer.stat().st_mtime):
+        print(f"animevault-disk: reusing {output} ({DISK_BYTES} bytes)")
+        return 0
 
     with tempfile.TemporaryDirectory(prefix="nexora-animevault-") as temporary:
         work = Path(temporary)

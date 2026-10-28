@@ -167,7 +167,12 @@ STATUS PspMapImage(EPROCESS *Process, const void *File, uint64_t FileSize, uint3
     }
 
     uint64_t ThunkBase = 0;
-    uint8_t ThunkPage[PSP_WINCOMPAT_THUNK_PAGE_SIZE];
+    uint8_t *ThunkPage = ExAllocatePoolZero(NonPagedPool, PSP_WINCOMPAT_THUNK_PAGE_SIZE, PSP_IMAGE_TAG);
+    if (!ThunkPage) {
+        ExFreePoolWithTag(Image, PSP_IMAGE_TAG);
+        MmFreeVirtualMemory(As, Base);
+        return STATUS_NO_MEMORY;
+    }
     int64_t Delta = (int64_t)((uint64_t)Base - Opt->ImageBase);
     if (Delta != 0)
         Status = PspApplyRelocations(Image, ImageSize, &Headers, Delta);
@@ -181,7 +186,7 @@ STATUS PspMapImage(EPROCESS *Process, const void *File, uint64_t FileSize, uint3
         uint32_t O = 128u * 96u;
 #define EMIT8(v) do { ThunkPage[O++] = (uint8_t)(v); } while (0)
 #define EMIT64(v) do { uint64_t _x = (uint64_t)(v); memcpy(ThunkPage + O, &_x, 8); O += 8; } while (0)
-        if (!ThunkBase || O + CallbackCount * 32u + 32u >= sizeof(ThunkPage))
+        if (!ThunkBase || O + CallbackCount * 32u + 32u >= PSP_WINCOMPAT_THUNK_PAGE_SIZE)
             Status = STATUS_NOT_SUPPORTED;
         else {
             EMIT8(0x49); EMIT8(0x89); EMIT8(0xCC); /* mov r12, rcx */
@@ -204,6 +209,7 @@ STATUS PspMapImage(EPROCESS *Process, const void *File, uint64_t FileSize, uint3
     if (!HZ_SUCCESS(Status)) {
         if (ThunkBase)
             MmFreeVirtualMemory(As, (void *)ThunkBase);
+        ExFreePoolWithTag(ThunkPage, PSP_IMAGE_TAG);
         MmFreeVirtualMemory(As, Base);
         ExFreePoolWithTag(Image, PSP_IMAGE_TAG);
         return Status;
@@ -230,6 +236,7 @@ STATUS PspMapImage(EPROCESS *Process, const void *File, uint64_t FileSize, uint3
         PsDetachProcess(Previous);
     }
     ExFreePoolWithTag(Image, PSP_IMAGE_TAG);
+    ExFreePoolWithTag(ThunkPage, PSP_IMAGE_TAG);
     if (!HZ_SUCCESS(Status)) {
         MmFreeVirtualMemory(As, Base);
         if (ThunkBase)

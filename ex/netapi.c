@@ -307,6 +307,7 @@ enum {
     EXP_WSA_GETADDRINFO,
     EXP_WSA_FREEADDRINFO,
     EXP_WSA_GETADDRINFOW,
+    EXP_WSA_GETNAMEINFOW,
 };
 
 typedef struct _EXP_WSA_DATA {
@@ -812,6 +813,47 @@ STATUS NtWinSocketApi(const uint64_t *Args)
         return ExpWinFreeAddrInfo(Args[1]);
     case EXP_WSA_GETADDRINFOW:
         return ExpWinGetAddrInfo(Args[1], Args[2], Args[3], Args[4], true);
+    case EXP_WSA_GETNAMEINFOW: {
+        enum { WSAEFAULT = 10014, WSAEINVAL = 10022, WSAEAI_NONAME = 11001,
+               WSAEAFNOSUPPORT = 10047, NI_NAMEREQD = 0x04u };
+        if (Args[2] < sizeof(EXP_WSA_SOCKADDR_IN) || !Args[1])
+            return WSAEFAULT;
+        EXP_WSA_SOCKADDR_IN Address;
+        if (!HZ_SUCCESS(MmCopyFromUser(&Address, (const void *)Args[1], sizeof(Address))))
+            return WSAEFAULT;
+        if (Address.Family != 2)
+            return WSAEAFNOSUPPORT;
+        if (Args[7] & ~0x1Fu)
+            return WSAEINVAL;
+        /* Reverse DNS is not implemented. Without NI_NAMEREQD, Windows permits numeric fallback. */
+        if (Args[7] & NI_NAMEREQD)
+            return WSAEAI_NONAME;
+        char Host[16];
+        RtlFormatString(Host, sizeof(Host), "%u.%u.%u.%u", (uint32_t)Address.Address[0],
+                        (uint32_t)Address.Address[1], (uint32_t)Address.Address[2],
+                        (uint32_t)Address.Address[3]);
+        uint16_t Wide[16];
+        size_t HostChars = strlen(Host);
+        for (size_t I = 0; I <= HostChars; ++I)
+            Wide[I] = (uint8_t)Host[I];
+        if (Args[3]) {
+            if (Args[4] <= HostChars ||
+                !HZ_SUCCESS(MmCopyToUser((void *)Args[3], Wide, (HostChars + 1) * sizeof(uint16_t))))
+                return WSAEFAULT;
+        }
+        if (Args[5]) {
+            uint16_t Port = (uint16_t)((Address.Port >> 8) | (Address.Port << 8));
+            char Service[6];
+            RtlFormatString(Service, sizeof(Service), "%u", (uint32_t)Port);
+            size_t ServiceChars = strlen(Service);
+            for (size_t I = 0; I <= ServiceChars; ++I)
+                Wide[I] = (uint8_t)Service[I];
+            if (Args[6] <= ServiceChars ||
+                !HZ_SUCCESS(MmCopyToUser((void *)Args[5], Wide, (ServiceChars + 1) * sizeof(uint16_t))))
+                return WSAEFAULT;
+        }
+        return 0;
+    }
     default:
         return STATUS_INVALID_PARAMETER;
     }

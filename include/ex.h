@@ -91,6 +91,9 @@ STATUS NtWinGetProcAddress(const uint64_t *Args);
 STATUS NtWinCreateFile(const uint64_t *Args);
 STATUS NtWinGetFileAttributes(const uint64_t *Args);
 STATUS NtWinSocketApi(const uint64_t *Args);
+STATUS NtWinGetFileVersionInfoSizeW(const uint64_t *Args);
+STATUS NtWinGetFileVersionInfoW(const uint64_t *Args);
+STATUS NtWinVerQueryValueW(const uint64_t *Args);
 /* Called when the last process thread exits, including abnormal Windows PE termination. */
 void ExCleanupWinSocketsForCurrentProcess(void);
 

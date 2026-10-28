@@ -468,6 +468,25 @@ CASES = {
         "warn_markers": ["BOOT DEGRADED"],
         "timeout": 180.0,
     },
+    "nexoracode-launch": {
+        "entry": None,
+        # The 64-bit Electron app is extracted from the NSIS wrapper; the installer itself
+        # is not run by Windows or Nexora during disk preparation.
+        "disk": "from:build/test/nexoracode-app-disk.img",
+        "nexoracode_payload": True,
+        "actions": [
+            ("shell: lock screen shown", ["sendkey spc"]),
+            ("shell: sign-in", ["sendkey ret"]),
+            ("shell: unlocked", ["sendkey meta_l", "sleep 1", "type:terminal", "sendkey ret"]),
+            ("terminal: started", ["type:start D:\\NexoraCode.exe", "sendkey ret"]),
+            ("Process: started NexoraCode.exe", ["sleep 15", "screenshot:nexoracode-launch-result.png"]),
+        ],
+        "expect": ["Volume: D: is ", "terminal: started", "Process: started NexoraCode.exe"],
+        "expect_any": ["[HZ] BOOT OK", "[HZ] BOOT DEGRADED"],
+        "fail": ["*** STOP", "ERROR:", "could not create NexoraCode.exe"],
+        "warn_markers": ["BOOT DEGRADED"],
+        "timeout": 240.0,
+    },
     "ntfs-volume-probe": {
         "entry": None,
         "cmdline": "hz.ntfs-probe=1",
@@ -1321,6 +1340,17 @@ def run_case(case, timeout):
         if prepared.returncode != 0:
             shutil.rmtree(tmp, ignore_errors=True)
             log(f"{case}: FAIL (could not prepare the complete AnimeVault payload disk)")
+            return False
+    if spec.get("nexoracode_payload"):
+        installer = os.path.join(ROOT, TEST_DIR, "Nexora-Code-Setup.exe")
+        output = os.path.join(ROOT, TEST_DIR, "nexoracode-app-disk.img")
+        prepared = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "scripts", "prepare-nexoracode-disk.py"), installer, output],
+            cwd=ROOT,
+        )
+        if prepared.returncode != 0:
+            shutil.rmtree(tmp, ignore_errors=True)
+            log(f"{case}: FAIL (could not prepare the complete Nexora Code payload disk)")
             return False
     if disk is True:
         shutil.copyfile(os.path.join(ROOT, TEST_DISK), disk_copy)

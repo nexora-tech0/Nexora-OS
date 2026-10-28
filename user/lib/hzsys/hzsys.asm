@@ -80,8 +80,11 @@ SERVICE NtWinSocketApi                      ; HzSysWinSocketApi
 SERVICE NtWinGetProcAddress                 ; HzSysWinGetProcAddress
 SERVICE NtWinCreateFile                      ; HzSysWinCreateFile
 SERVICE NtWinGetFileAttributes               ; HzSysWinGetFileAttributes
+SERVICE NtWinGetFileVersionInfoSizeW          ; HzSysWinGetFileVersionInfoSizeW
+SERVICE NtWinGetFileVersionInfoW              ; HzSysWinGetFileVersionInfoW
+SERVICE NtWinVerQueryValueW                   ; HzSysWinVerQueryValueW
 
-%if HZ_SERVICE_NUMBER != 53
+%if HZ_SERVICE_NUMBER != 56
 %error "service stub count does not match HzSysServiceCount"
 %endif
 

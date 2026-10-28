@@ -11,7 +11,7 @@
 #define WINCOMPAT_IMPORTS_PER_MODULE 4096u
 #define WINCOMPAT_NAME_CAPACITY 260u
 #define WINCOMPAT_THUNK_STRIDE 96u
-#define WINCOMPAT_THUNK_COUNT 128u
+#define WINCOMPAT_THUNK_COUNT 512u
 #define WINCOMPAT_THUNK_PAGE_SIZE PSP_WINCOMPAT_THUNK_PAGE_SIZE
 #define WINCOMPAT_REPORT_MAX 4096u
 #define WINCOMPAT_DIRECTORY_DELAY_IMPORT 13u
@@ -81,6 +81,16 @@ typedef enum _WINCOMPAT_API {
     WinCompatApiFreeAddrInfo,
     WinCompatApiGetAddrInfoW,
     WinCompatApiFreeAddrInfoW,
+    WinCompatApiGetAddrInfoExW,
+    WinCompatApiGetAddrInfoExCancel,
+    WinCompatApiGetNameInfoW,
+    WinCompatApiWsaCloseEvent,
+    WinCompatApiWsaCreateEvent,
+    WinCompatApiWsaResetEvent,
+    WinCompatApiWsaSetEvent,
+    WinCompatApiWsaWaitForMultipleEvents,
+    WinCompatApiWsaEventSelect,
+    WinCompatApiWsaEnumNetworkEvents,
     WinCompatApiGetCommandLineA,
     WinCompatApiGetProcessHeap,
     WinCompatApiHeapAlloc,
@@ -93,6 +103,40 @@ typedef enum _WINCOMPAT_API {
     WinCompatApiCreateFileW,
     WinCompatApiGetFileAttributesW,
     WinCompatApiGetCommandLineW,
+    WinCompatApiGetFileVersionInfoSizeW,
+    WinCompatApiGetFileVersionInfoW,
+    WinCompatApiVerQueryValueW,
+    WinCompatApiMidiInAddBuffer,
+    WinCompatApiMidiInClose,
+    WinCompatApiMidiInGetDevCapsW,
+    WinCompatApiMidiInGetNumDevs,
+    WinCompatApiMidiInOpen,
+    WinCompatApiMidiInPrepareHeader,
+    WinCompatApiMidiInReset,
+    WinCompatApiMidiInStart,
+    WinCompatApiMidiInUnprepareHeader,
+    WinCompatApiMidiOutClose,
+    WinCompatApiMidiOutGetDevCapsW,
+    WinCompatApiMidiOutGetNumDevs,
+    WinCompatApiMidiOutLongMsg,
+    WinCompatApiMidiOutOpen,
+    WinCompatApiMidiOutPrepareHeader,
+    WinCompatApiMidiOutReset,
+    WinCompatApiMidiOutShortMsg,
+    WinCompatApiMidiOutUnprepareHeader,
+    WinCompatApiTimeBeginPeriod,
+    WinCompatApiTimeEndPeriod,
+    WinCompatApiTimeGetTime,
+    WinCompatApiWaveInGetNumDevs,
+    WinCompatApiWaveOutClose,
+    WinCompatApiWaveOutGetNumDevs,
+    WinCompatApiWaveOutOpen,
+    WinCompatApiWaveOutPause,
+    WinCompatApiWaveOutPrepareHeader,
+    WinCompatApiWaveOutReset,
+    WinCompatApiWaveOutRestart,
+    WinCompatApiWaveOutUnprepareHeader,
+    WinCompatApiWaveOutWrite,
 } WINCOMPAT_API;
 
 typedef struct _WINCOMPAT_HEAP_ALLOCATION {
@@ -458,6 +502,7 @@ STATUS PspBuildWindowsImportReport(const void *File, uint64_t FileSize,
         bool SupportedModule = WinCompatEqual(Module, "kernel32.dll") ||
                                WinCompatEqual(Module, "kernelbase.dll") ||
                                WinCompatEqual(Module, "ws2_32.dll") ||
+                               WinCompatEqual(Module, "version.dll") ||
                                WinCompatEqual(Module, "msvcrt.dll") ||
                                WinCompatEqual(Module, "ucrtbase.dll");
         uint64_t LookupRva = Descriptor.OriginalFirstThunk ?
@@ -553,13 +598,17 @@ static uint32_t WinCompatService(WINCOMPAT_API Api)
     case WinCompatApiExitProcess: return HzSysWinExitProcess;
     case WinCompatApiCloseHandle: return HzSysClose;
     case WinCompatApiQueryPerformanceCounter: return HzSysQueryUptime;
-    case WinCompatApiGetTickCount:
-    case WinCompatApiGetTickCount64: return HzSysQueryUptime;
     case WinCompatApiGetModuleHandleW:
     case WinCompatApiGetModuleHandleA: return HzSysWinGetModuleHandle;
     case WinCompatApiGetProcAddress: return HzSysWinGetProcAddress;
     case WinCompatApiCreateFileW: return HzSysWinCreateFile;
     case WinCompatApiGetFileAttributesW: return HzSysWinGetFileAttributes;
+    case WinCompatApiGetFileVersionInfoSizeW: return HzSysWinGetFileVersionInfoSizeW;
+    case WinCompatApiGetFileVersionInfoW: return HzSysWinGetFileVersionInfoW;
+    case WinCompatApiVerQueryValueW: return HzSysWinVerQueryValueW;
+    case WinCompatApiGetTickCount:
+    case WinCompatApiGetTickCount64:
+    case WinCompatApiTimeGetTime: return UINT32_MAX;
     case WinCompatApiGetCommandLineW:
         return UINT32_MAX;
     case WinCompatApiWsaStartup:
@@ -573,6 +622,11 @@ static uint32_t WinCompatService(WINCOMPAT_API Api)
     case WinCompatApiFreeAddrInfo: return HzSysWinSocketApi;
     case WinCompatApiGetAddrInfoW:
     case WinCompatApiFreeAddrInfoW: return HzSysWinSocketApi;
+    case WinCompatApiGetNameInfoW: return HzSysWinSocketApi;
+    case WinCompatApiWsaCloseEvent: return HzSysClose;
+    case WinCompatApiWsaResetEvent: return HzSysResetEvent;
+    case WinCompatApiWsaSetEvent: return HzSysSetEvent;
+    case WinCompatApiWsaWaitForMultipleEvents: return HzSysWaitForMultipleObjects;
     case WinCompatApiGetSystemTimeAsFileTime: return HzSysQuerySystemTime;
     case WinCompatApiGetLastError:
     case WinCompatApiSetLastError:
@@ -583,6 +637,8 @@ static uint32_t WinCompatService(WINCOMPAT_API Api)
     case WinCompatApiInitializeSListHead:
     case WinCompatApiGetCommandLineA:
     case WinCompatApiGetProcessHeap:
+    case WinCompatApiGetAddrInfoExW:
+    case WinCompatApiGetAddrInfoExCancel:
     case WinCompatApiWsaGetLastError:
     case WinCompatApiWsaSetLastError:
     case WinCompatApiCrtMemcpy:
@@ -593,6 +649,7 @@ static uint32_t WinCompatService(WINCOMPAT_API Api)
     case WinCompatApiHeapFree: return HzSysWinHeapFree;
     case WinCompatApiCrtMalloc: return HzSysWinHeapAlloc;
     case WinCompatApiCrtFree: return HzSysWinHeapFree;
+    default: break; /* local thunks do not issue a system call */
     }
     return UINT32_MAX;
 }
@@ -637,6 +694,43 @@ static bool WinCompatFindApi(const char *Name, WINCOMPAT_API *Api)
         *Api = WinCompatApiGetFileAttributesW;
     else if (WinCompatEqual(Name, "GetCommandLineW"))
         *Api = WinCompatApiGetCommandLineW;
+    else if (WinCompatEqual(Name, "GetFileVersionInfoSizeW"))
+        *Api = WinCompatApiGetFileVersionInfoSizeW;
+    else if (WinCompatEqual(Name, "GetFileVersionInfoW"))
+        *Api = WinCompatApiGetFileVersionInfoW;
+    else if (WinCompatEqual(Name, "VerQueryValueW"))
+        *Api = WinCompatApiVerQueryValueW;
+    else if (WinCompatEqual(Name, "midiInAddBuffer")) *Api = WinCompatApiMidiInAddBuffer;
+    else if (WinCompatEqual(Name, "midiInClose")) *Api = WinCompatApiMidiInClose;
+    else if (WinCompatEqual(Name, "midiInGetDevCapsW")) *Api = WinCompatApiMidiInGetDevCapsW;
+    else if (WinCompatEqual(Name, "midiInGetNumDevs")) *Api = WinCompatApiMidiInGetNumDevs;
+    else if (WinCompatEqual(Name, "midiInOpen")) *Api = WinCompatApiMidiInOpen;
+    else if (WinCompatEqual(Name, "midiInPrepareHeader")) *Api = WinCompatApiMidiInPrepareHeader;
+    else if (WinCompatEqual(Name, "midiInReset")) *Api = WinCompatApiMidiInReset;
+    else if (WinCompatEqual(Name, "midiInStart")) *Api = WinCompatApiMidiInStart;
+    else if (WinCompatEqual(Name, "midiInUnprepareHeader")) *Api = WinCompatApiMidiInUnprepareHeader;
+    else if (WinCompatEqual(Name, "midiOutClose")) *Api = WinCompatApiMidiOutClose;
+    else if (WinCompatEqual(Name, "midiOutGetDevCapsW")) *Api = WinCompatApiMidiOutGetDevCapsW;
+    else if (WinCompatEqual(Name, "midiOutGetNumDevs")) *Api = WinCompatApiMidiOutGetNumDevs;
+    else if (WinCompatEqual(Name, "midiOutLongMsg")) *Api = WinCompatApiMidiOutLongMsg;
+    else if (WinCompatEqual(Name, "midiOutOpen")) *Api = WinCompatApiMidiOutOpen;
+    else if (WinCompatEqual(Name, "midiOutPrepareHeader")) *Api = WinCompatApiMidiOutPrepareHeader;
+    else if (WinCompatEqual(Name, "midiOutReset")) *Api = WinCompatApiMidiOutReset;
+    else if (WinCompatEqual(Name, "midiOutShortMsg")) *Api = WinCompatApiMidiOutShortMsg;
+    else if (WinCompatEqual(Name, "midiOutUnprepareHeader")) *Api = WinCompatApiMidiOutUnprepareHeader;
+    else if (WinCompatEqual(Name, "timeBeginPeriod")) *Api = WinCompatApiTimeBeginPeriod;
+    else if (WinCompatEqual(Name, "timeEndPeriod")) *Api = WinCompatApiTimeEndPeriod;
+    else if (WinCompatEqual(Name, "timeGetTime")) *Api = WinCompatApiTimeGetTime;
+    else if (WinCompatEqual(Name, "waveInGetNumDevs")) *Api = WinCompatApiWaveInGetNumDevs;
+    else if (WinCompatEqual(Name, "waveOutClose")) *Api = WinCompatApiWaveOutClose;
+    else if (WinCompatEqual(Name, "waveOutGetNumDevs")) *Api = WinCompatApiWaveOutGetNumDevs;
+    else if (WinCompatEqual(Name, "waveOutOpen")) *Api = WinCompatApiWaveOutOpen;
+    else if (WinCompatEqual(Name, "waveOutPause")) *Api = WinCompatApiWaveOutPause;
+    else if (WinCompatEqual(Name, "waveOutPrepareHeader")) *Api = WinCompatApiWaveOutPrepareHeader;
+    else if (WinCompatEqual(Name, "waveOutReset")) *Api = WinCompatApiWaveOutReset;
+    else if (WinCompatEqual(Name, "waveOutRestart")) *Api = WinCompatApiWaveOutRestart;
+    else if (WinCompatEqual(Name, "waveOutUnprepareHeader")) *Api = WinCompatApiWaveOutUnprepareHeader;
+    else if (WinCompatEqual(Name, "waveOutWrite")) *Api = WinCompatApiWaveOutWrite;
     else if (WinCompatEqual(Name, "GetTickCount"))
         *Api = WinCompatApiGetTickCount;
     else if (WinCompatEqual(Name, "GetTickCount64"))
@@ -667,6 +761,21 @@ static bool WinCompatFindApi(const char *Name, WINCOMPAT_API *Api)
         *Api = WinCompatApiGetAddrInfoW;
     else if (WinCompatEqual(Name, "FreeAddrInfoW"))
         *Api = WinCompatApiFreeAddrInfoW;
+    else if (WinCompatEqual(Name, "FreeAddrInfoExW"))
+        *Api = WinCompatApiFreeAddrInfoW;
+    else if (WinCompatEqual(Name, "GetAddrInfoExW"))
+        *Api = WinCompatApiGetAddrInfoExW;
+    else if (WinCompatEqual(Name, "GetAddrInfoExCancel"))
+        *Api = WinCompatApiGetAddrInfoExCancel;
+    else if (WinCompatEqual(Name, "GetNameInfoW"))
+        *Api = WinCompatApiGetNameInfoW;
+    else if (WinCompatEqual(Name, "WSACloseEvent")) *Api = WinCompatApiWsaCloseEvent;
+    else if (WinCompatEqual(Name, "WSACreateEvent")) *Api = WinCompatApiWsaCreateEvent;
+    else if (WinCompatEqual(Name, "WSAResetEvent")) *Api = WinCompatApiWsaResetEvent;
+    else if (WinCompatEqual(Name, "WSASetEvent")) *Api = WinCompatApiWsaSetEvent;
+    else if (WinCompatEqual(Name, "WSAWaitForMultipleEvents")) *Api = WinCompatApiWsaWaitForMultipleEvents;
+    else if (WinCompatEqual(Name, "WSAEventSelect")) *Api = WinCompatApiWsaEventSelect;
+    else if (WinCompatEqual(Name, "WSAEnumNetworkEvents")) *Api = WinCompatApiWsaEnumNetworkEvents;
     else if (WinCompatEqual(Name, "GetCommandLineA"))
         *Api = WinCompatApiGetCommandLineA;
     else if (WinCompatEqual(Name, "GetProcessHeap"))
@@ -692,14 +801,20 @@ static bool WinCompatFindApi(const char *Name, WINCOMPAT_API *Api)
 
 static bool WinCompatApiBelongsToModule(const char *Module, WINCOMPAT_API Api)
 {
-    bool IsSocketApi = Api >= WinCompatApiWsaStartup && Api <= WinCompatApiFreeAddrInfoW;
+    bool IsSocketApi = Api >= WinCompatApiWsaStartup && Api <= WinCompatApiWsaEnumNetworkEvents;
     bool IsCrtApi = Api >= WinCompatApiCrtMemcpy && Api <= WinCompatApiCrtFree;
+    bool IsVersionApi = Api >= WinCompatApiGetFileVersionInfoSizeW && Api <= WinCompatApiVerQueryValueW;
+    bool IsWinMmApi = Api >= WinCompatApiMidiInAddBuffer && Api <= WinCompatApiWaveOutWrite;
     if (WinCompatEqual(Module, "ws2_32.dll"))
         return IsSocketApi;
     if (WinCompatEqual(Module, "msvcrt.dll") || WinCompatEqual(Module, "ucrtbase.dll"))
         return IsCrtApi;
+    if (WinCompatEqual(Module, "version.dll"))
+        return IsVersionApi;
+    if (WinCompatEqual(Module, "winmm.dll"))
+        return IsWinMmApi;
     if (WinCompatEqual(Module, "kernel32.dll") || WinCompatEqual(Module, "kernelbase.dll"))
-        return !IsSocketApi && !IsCrtApi;
+        return !IsSocketApi && !IsCrtApi && !IsVersionApi && !IsWinMmApi;
     return false;
 }
 
@@ -708,6 +823,140 @@ static bool WinCompatApiBelongsToModule(const char *Module, WINCOMPAT_API Api)
    QueryPerformanceCounter returns uptime microseconds, so its matching frequency is 1 MHz. */
 static void WinCompatBuildThunk(uint8_t *Code, uint32_t Service, WINCOMPAT_API Api)
 {
+    if (Api == WinCompatApiGetAddrInfoExW || Api == WinCompatApiGetAddrInfoExCancel) {
+        /* Extended async resolver operations are unavailable; return WSAEOPNOTSUPP so callers
+           can fall back to the synchronous getaddrinfo path. */
+        static const uint8_t Unsupported[] = {0xB8,0x3D,0x27,0x00,0x00,0xC3}; /* WSAEOPNOTSUPP */
+        memcpy(Code, Unsupported, sizeof(Unsupported));
+        return;
+    }
+    if (Api == WinCompatApiWsaCreateEvent) {
+        static const uint8_t CreateEvent[] = {
+            0x48,0x83,0xEC,0x38,                  /* stack scratch */
+            0x48,0x8D,0x4C,0x24,0x20,             /* rcx = output handle */
+            0x48,0xC7,0xC2,1,0,0,0,              /* manual-reset event */
+            0x45,0x31,0xC0,                        /* initially nonsignaled */
+            0x4C,0x8B,0xD1,
+            0xB8,0,0,0,0,                         /* HzSysCreateEvent */
+            0x0F,0x05,
+            0x85,0xC0,0x75,0x0D,
+            0x48,0x8B,0x44,0x24,0x20,
+            0x48,0x83,0xC4,0x38,0xC3,
+            0x48,0xC7,0xC0,0xFF,0xFF,0xFF,0xFF,
+            0x48,0x83,0xC4,0x38,0xC3,
+        };
+        memcpy(Code, CreateEvent, sizeof(CreateEvent));
+        uint32_t CreateService = HzSysCreateEvent;
+        memcpy(Code + 24, &CreateService, sizeof(CreateService));
+        return;
+    }
+    if (Api == WinCompatApiWsaSetEvent) {
+        static const uint8_t SetEvent[] = {
+            0x48,0x83,0xEC,0x28,
+            0x31,0xD2,                              /* no previous-state output */
+            0x4C,0x8B,0xD1,
+            0xB8,0,0,0,0,
+            0x0F,0x05,
+            0x85,0xC0,0x0F,0x99,0xC0,0x0F,0xB6,0xC0,
+            0x48,0x83,0xC4,0x28,0xC3,
+        };
+        memcpy(Code, SetEvent, sizeof(SetEvent));
+        uint32_t SetService = HzSysSetEvent;
+        memcpy(Code + 10, &SetService, sizeof(SetService));
+        return;
+    }
+    if (Api == WinCompatApiWsaWaitForMultipleEvents) {
+        static const uint8_t WaitEvents[] = {
+            0x48,0x83,0xEC,0x38,
+            0x41,0x83,0xF9,0xFF,                  /* INFINITE timeout? */
+            0x0F,0x84,0x0C,0,0,0,
+            0x49,0x69,0xC9,0xE8,0x03,0,0,        /* timeout ms -> us */
+            0x4C,0x89,0x4C,0x24,0x20,
+            0x4C,0x8D,0x4C,0x24,0x20,
+            0xEB,0x03,
+            0x45,0x31,0xC9,                        /* infinite => NULL */
+            0x45,0x85,0xC0,                        /* wait-all ? */
+            0x0F,0x94,0xC0,
+            0x0F,0xB6,0xC0,
+            0x4C,0x8B,0xD1,
+            0xB8,0,0,0,0,
+            0x0F,0x05,
+            0x85,0xC0,0x79,0x05,
+            0xB8,0xFF,0xFF,0xFF,0xFF,
+            0x48,0x83,0xC4,0x38,0xC3,
+        };
+        memcpy(Code, WaitEvents, sizeof(WaitEvents));
+        uint32_t WaitService = HzSysWaitForMultipleObjects;
+        memcpy(Code + 49, &WaitService, sizeof(WaitService));
+        return;
+    }
+    if (Api == WinCompatApiWsaEventSelect || Api == WinCompatApiWsaEnumNetworkEvents) {
+        static const uint8_t Unsupported[] = {
+            0x65,0xC7,0x04,0x25,0x68,0,0,0,0x3D,0x27,0,0, /* TEB.LastError = WSAEOPNOTSUPP */
+            0xB8,0xFF,0xFF,0xFF,0xFF,0xC3,               /* SOCKET_ERROR */
+        };
+        memcpy(Code, Unsupported, sizeof(Unsupported));
+        return;
+    }
+    if (Api == WinCompatApiGetNameInfoW) {
+        static const uint8_t NameInfo[] = {
+            0x48,0x83,0xEC,0x48,                  /* reserve stack args and alignment */
+            0x4C,0x89,0x4C,0x24,0x20,             /* arg5 = host length */
+            0x48,0x8B,0x44,0x24,0x70,             /* rax = caller arg5 (service buffer) */
+            0x48,0x89,0x44,0x24,0x28,             /* service arg6 */
+            0x48,0x8B,0x44,0x24,0x78,
+            0x48,0x89,0x44,0x24,0x30,             /* service arg7 */
+            0x48,0x8B,0x44,0x24,0x80,
+            0x48,0x89,0x44,0x24,0x38,             /* service arg8 */
+            0x4D,0x8B,0xC8,                        /* host buffer -> r9 */
+            0x4C,0x8B,0xC2,                        /* sockaddr length -> r8 */
+            0x48,0x8B,0xD1,                        /* sockaddr -> rdx */
+            0xB9,11,0,0,0,                         /* EXP_WSA_GETNAMEINFOW */
+            0x4C,0x8B,0xD1,
+            0xB8,0,0,0,0,                          /* HzSysWinSocketApi */
+            0x0F,0x05,
+            0x48,0x83,0xC4,0x48,0xC3,
+        };
+        memcpy(Code, NameInfo, sizeof(NameInfo));
+        memcpy(Code + 57, &Service, sizeof(Service));
+        return;
+    }
+    if (Api == WinCompatApiGetTickCount || Api == WinCompatApiGetTickCount64 || Api == WinCompatApiTimeGetTime) {
+        static const uint8_t Tick[] = {
+            0x48,0x83,0xEC,0x28,                   /* reserve syscall scratch and home space */
+            0x48,0x8D,0x4C,0x24,0x20,              /* rcx = &uptime */
+            0x4C,0x8B,0xD1,                        /* r10 = rcx */
+            0xB8,0,0,0,0,                          /* eax = HzSysQueryUptime */
+            0x0F,0x05,                             /* syscall */
+            0x48,0x8B,0x44,0x24,0x20,              /* rax = uptime microseconds */
+            0x48,0x31,0xD2,                        /* clear high half */
+            0x48,0xB9,0xE8,0x03,0,0,0,0,0,0,      /* rcx = 1000 */
+            0x48,0xF7,0xF1,                        /* rax = uptime milliseconds */
+            0x48,0x83,0xC4,0x28,
+            0xC3,
+        };
+        memcpy(Code, Tick, sizeof(Tick));
+        uint32_t QueryUptime = HzSysQueryUptime;
+        memcpy(Code + 14, &QueryUptime, sizeof(QueryUptime));
+        return;
+    }
+    if (Api == WinCompatApiTimeBeginPeriod || Api == WinCompatApiTimeEndPeriod) {
+        static const uint8_t Success[] = {0x31,0xC0,0xC3}; /* timer resolution request accepted */
+        memcpy(Code, Success, sizeof(Success));
+        return;
+    }
+    if (Api >= WinCompatApiMidiInAddBuffer && Api <= WinCompatApiWaveOutWrite) {
+        if (Api == WinCompatApiMidiInGetNumDevs || Api == WinCompatApiMidiOutGetNumDevs ||
+            Api == WinCompatApiWaveInGetNumDevs || Api == WinCompatApiWaveOutGetNumDevs) {
+            static const uint8_t NoDevices[] = {0x31,0xC0,0xC3};
+            memcpy(Code, NoDevices, sizeof(NoDevices));
+        } else {
+            /* No MIDI or waveform device is currently enumerated; return MMSYSERR_NODRIVER. */
+            static const uint8_t NoDriver[] = {0xB8,0x06,0x00,0x00,0x00,0xC3};
+            memcpy(Code, NoDriver, sizeof(NoDriver));
+        }
+        return;
+    }
     if (Api == WinCompatApiGetLastError || Api == WinCompatApiWsaGetLastError) {
         static const uint8_t Get[] = {0x65, 0x8B, 0x04, 0x25, 0x68, 0x00, 0x00, 0x00, 0xC3};
         memcpy(Code, Get, sizeof(Get)); /* mov eax, dword ptr gs:[0x68]; ret */
@@ -1111,6 +1360,7 @@ static void WinCompatBuildThunk(uint8_t *Code, uint32_t Service, WINCOMPAT_API A
     memcpy(Code + At, &Service, sizeof(Service)); At += sizeof(Service);
     memcpy(Code + At, Call, sizeof(Call)); At += sizeof(Call);
     if (Api == WinCompatApiWriteFile || Api == WinCompatApiCloseHandle || Api == WinCompatApiHeapFree ||
+        Api == WinCompatApiGetFileVersionInfoW || Api == WinCompatApiVerQueryValueW ||
         Api == WinCompatApiQueryPerformanceCounter) {
         static const uint8_t ToBool[] = {0x85, 0xC0, 0x0F, 0x99, 0xC0, 0x0F, 0xB6, 0xC0};
         memcpy(Code + At, ToBool, sizeof(ToBool)); At += sizeof(ToBool);
@@ -1214,6 +1464,8 @@ STATUS PspResolveWindowsImports(EPROCESS *Process, uint8_t *Image, uint64_t Imag
         bool SupportedModule = WinCompatEqual(Module, "kernel32.dll") ||
                                WinCompatEqual(Module, "kernelbase.dll") ||
                                WinCompatEqual(Module, "ws2_32.dll") ||
+                               WinCompatEqual(Module, "version.dll") ||
+                               WinCompatEqual(Module, "winmm.dll") ||
                                WinCompatEqual(Module, "msvcrt.dll") ||
                                WinCompatEqual(Module, "ucrtbase.dll");
 

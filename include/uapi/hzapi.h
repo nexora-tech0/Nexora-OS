@@ -143,6 +143,9 @@ enum HZ_SYSTEM_SERVICE {
     HzSysWinGetProcAddress,
     HzSysWinCreateFile,
     HzSysWinGetFileAttributes,
+    HzSysWinGetFileVersionInfoSizeW,
+    HzSysWinGetFileVersionInfoW,
+    HzSysWinVerQueryValueW,
     HzSysServiceCount
 };
 
