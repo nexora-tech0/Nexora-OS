@@ -8,41 +8,54 @@ namespace shell {
 
 namespace {
 
-constexpr float kCorner = 22.0f;
-constexpr int32_t kGap = 14;
+constexpr float kCorner = 26.0f;
+constexpr int32_t kGap = 16;
 const char *const kCatalog[] = {"Clock", "Calendar", "CPU", "RAM", "Battery", "GPU"};
 
 Color GlassFill()
 {
-    return Theme::Current() == Theme::Scheme::Light ? 0xD8F4F4F6 : 0xC41C1C1E;
+    /* Opaque surfaces keep wallpaper pixels from bleeding through as dark compositor blocks. */
+    return Theme::Current() == Theme::Scheme::Light ? 0xFFF5F6F8 : 0xFF30333B;
+}
+
+Color GlassFillBottom()
+{
+    return Theme::Current() == Theme::Scheme::Light ? 0xFFEAEDF2 : 0xFF272A32;
 }
 
 Color GlassStroke()
 {
-    return Theme::Current() == Theme::Scheme::Light ? 0x3A000000 : 0x40FFFFFF;
+    return Theme::Current() == Theme::Scheme::Light ? 0x26000000 : 0x38FFFFFF;
 }
 
 Color GlassHighlight()
 {
-    return Theme::Current() == Theme::Scheme::Light ? 0x55FFFFFF : 0x28FFFFFF;
+    return Theme::Current() == Theme::Scheme::Light ? 0x65FFFFFF : 0x24FFFFFF;
 }
 
 } /* namespace */
 
 int32_t WidgetPixelWidth(WidgetSize Size)
 {
-    return Size == WidgetSize::Small ? 155 : 329;
+    switch (Size) {
+    case WidgetSize::Small:
+        return 164;
+    case WidgetSize::Medium:
+        return 300;
+    default:
+        return 320;
+    }
 }
 
 int32_t WidgetPixelHeight(WidgetSize Size)
 {
     switch (Size) {
     case WidgetSize::Small:
-        return 155;
+        return 156;
     case WidgetSize::Medium:
-        return 155;
+        return 168;
     default:
-        return 345;
+        return 280;
     }
 }
 
@@ -58,7 +71,7 @@ WidgetSize NextWidgetSize(WidgetSize Size)
 Widget::Widget(WidgetSize Size, const char *Id, const char *Title, Icon Glyph)
     : Size_(Size), Id_(Id), Title_(Title), Glyph_(Glyph)
 {
-    Padding = Thickness(14, 28, 14, 12);
+    Padding = Thickness(18, 36, 18, 16);
     SetSizeKind(Size);
 }
 
@@ -96,28 +109,29 @@ Rect Widget::Body() const
 Rect Widget::RemoveButtonRect() const
 {
     const Rect &B = Bounds();
-    return Rect{B.X - 6, B.Y - 6, 22, 22};
+    return Rect{B.X - 7, B.Y - 7, 24, 24};
 }
 
 Rect Widget::SizeHandleRect() const
 {
     const Rect &B = Bounds();
-    return Rect{B.Right() - 18, B.Bottom() - 18, 16, 16};
+    return Rect{B.Right() - 22, B.Bottom() - 22, 18, 18};
 }
 
 void Widget::Paint(Painter &P)
 {
     const Rect &R = Bounds();
-    P.FillRoundRect(R, kCorner, GlassFill());
-    P.FillRoundRect(Rect{R.X, R.Y, R.Width, 22}, kCorner, GlassHighlight());
+    P.FillRoundRect(Rect{R.X, R.Y + 4, R.Width, R.Height}, kCorner, 0x26000000);
+    P.FillVerticalGradient(R, kCorner, GlassFill(), GlassFillBottom());
+    P.FillRoundRect(Rect{R.X + 1, R.Y + 1, R.Width - 2, 32}, kCorner - 1, GlassHighlight());
     P.StrokeRoundRect(R, kCorner, 1.0f, GlassStroke());
 
-    Rect Header{R.X + 12, R.Y + 8, R.Width - 24, 16};
+    Rect Header{R.X + 18, R.Y + 13, R.Width - 36, 18};
     if (Glyph_ != Icon::None)
-        P.DrawIcon(Glyph_, Rect{Header.X, Header.Y, 14, 14}, Theme::TextTertiary, 1.2f);
+        P.DrawIcon(Glyph_, Rect{Header.X, Header.Y + 1, 15, 15}, Theme::TextSecondary, 1.25f);
     P.TextLine(GetFont(FontRole::Caption),
-               Rect{Header.X + (Glyph_ != Icon::None ? 18 : 0), Header.Y, Header.Width - 18, 16},
-               Title_.CStr(), Theme::TextTertiary);
+               Rect{Header.X + (Glyph_ != Icon::None ? 22 : 0), Header.Y, Header.Width - 22, 18},
+               Title_.CStr(), Theme::TextSecondary);
 }
 
 void Widget::PaintOverlay(Painter &P)
@@ -187,9 +201,9 @@ void CPUWidget::Paint(Painter &P)
                        Theme::Accent);
         }
     } else {
-        Rect Graph{R.X, R.Bottom() - 8, R.Width, 6};
-        P.FillRoundRect(Graph, 3, ScaleAlpha(Theme::TextPrimary, 0.08f));
-        P.FillRoundRect(Rect{Graph.X, Graph.Y, (int32_t)(Graph.Width * Usage_), Graph.Height}, 3, Theme::Accent);
+        Rect Graph{R.X, R.Bottom() - 10, R.Width, 7};
+        P.FillRoundRect(Graph, 3.5f, ScaleAlpha(Theme::TextPrimary, 0.08f));
+        P.FillRoundRect(Rect{Graph.X, Graph.Y, (int32_t)(Graph.Width * Usage_), Graph.Height}, 3.5f, Theme::Accent);
     }
 }
 
@@ -227,14 +241,14 @@ void RAMWidget::Paint(Painter &P)
         P.TextLine(GetFont(FontRole::Caption), Rect{R.X, R.Y + 70, R.Width, 18},
                    hz::String::Format("%s total", hz::fs::FormatSize(TotalMem).CStr()).CStr(), Theme::TextTertiary);
 
-    Rect Graph{R.X, R.Bottom() - 8, R.Width, 6};
-    P.FillRoundRect(Graph, 3, ScaleAlpha(Theme::TextPrimary, 0.08f));
-    P.FillRoundRect(Rect{Graph.X, Graph.Y, (int32_t)(Graph.Width * Usage), Graph.Height}, 3, 0xFF34C759);
+    Rect Graph{R.X, R.Bottom() - 10, R.Width, 7};
+    P.FillRoundRect(Graph, 3.5f, ScaleAlpha(Theme::TextPrimary, 0.08f));
+    P.FillRoundRect(Rect{Graph.X, Graph.Y, (int32_t)(Graph.Width * Usage), Graph.Height}, 3.5f, 0xFF34C759);
 }
 
 /* ---- Calendar ------------------------------------------------------------------------------- */
 
-CalendarWidget::CalendarWidget() : Widget(WidgetSize::Medium, "Calendar", "Calendar", Icon::Calendar) {}
+CalendarWidget::CalendarWidget() : Widget(WidgetSize::Small, "Calendar", "Calendar", Icon::Calendar) {}
 
 void CalendarWidget::Paint(Painter &P)
 {
@@ -392,14 +406,40 @@ int WidgetHost::DefaultEnabled(const char *Id) const
     return 1;
 }
 
-void WidgetHost::AddWidget(Widget *W)
+void WidgetHost::AddWidget(Widget *W, bool PlaceInFreeArea)
 {
     if (!W)
         return;
+    if (PlaceInFreeArea) {
+        int32_t Width = WidgetPixelWidth(W->GetSize());
+        int32_t Height = WidgetPixelHeight(W->GetSize());
+        int32_t MaxX = hz::Max(Bounds().Width - Width, 0);
+        int32_t MaxY = hz::Max(Bounds().Height - Height, 0);
+        bool Placed = false;
+        for (int32_t Y = 0; Y <= MaxY && !Placed; Y += Height + kGap) {
+            for (int32_t X = 0; X <= MaxX; X += Width + kGap) {
+                Rect Candidate{X, Y, Width, Height};
+                bool Occupied = false;
+                for (Widget *Existing : Widgets_)
+                    if (!Candidate.Intersect(Existing->Frame_).Empty()) {
+                        Occupied = true;
+                        break;
+                    }
+                if (!Occupied) {
+                    W->SetFrame(Candidate);
+                    Placed = true;
+                    break;
+                }
+            }
+        }
+        if (!Placed)
+            W->SetFrame(Rect{MaxX, MaxY, Width, Height});
+    }
     if (W->Frame_.Width <= 0) {
         int32_t Col = (int32_t)(Widgets_.Size() % 2);
         int32_t Row = (int32_t)(Widgets_.Size() / 2);
-        W->SetFrame(Rect{Col * (155 + kGap), Row * (155 + kGap), WidgetPixelWidth(W->GetSize()),
+        W->SetFrame(Rect{Col * (WidgetPixelWidth(WidgetSize::Small) + kGap),
+                         Row * (WidgetPixelHeight(WidgetSize::Small) + kGap), WidgetPixelWidth(W->GetSize()),
                          WidgetPixelHeight(W->GetSize())});
     }
     Widgets_.Push(W);
@@ -442,7 +482,7 @@ void WidgetHost::RefreshPrefs()
 {
     hz::fs::Settings Prefs;
     STATUS Status = Prefs.Load(hz::fs::SettingsPath("desktop"));
-    if (!HZ_SUCCESS(Status) && Status != STATUS_NOT_FOUND) {
+    if (!HZ_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_NOT_FOUND) {
         HzPrint("shell: cannot read widget settings (0x%08X)", (uint32_t)Status);
         return;
     }
@@ -462,10 +502,10 @@ void WidgetHost::RefreshPrefs()
         W->SetSizeKind(SizeValue <= 0 ? WidgetSize::Small : SizeValue == 1 ? WidgetSize::Medium : WidgetSize::Large);
         hz::String XKey = hz::String::Format("%s%sX", KeyPrefix(), Id);
         hz::String YKey = hz::String::Format("%s%sY", KeyPrefix(), Id);
-        int32_t X = Prefs.GetInt(XKey.CStr(), (Index % 2) * (155 + kGap));
-        int32_t Y = Prefs.GetInt(YKey.CStr(), (Index / 2) * (155 + kGap));
+        int32_t X = Prefs.GetInt(XKey.CStr(), (Index % 2) * (WidgetPixelWidth(WidgetSize::Small) + kGap));
+        int32_t Y = Prefs.GetInt(YKey.CStr(), (Index / 2) * (WidgetPixelHeight(WidgetSize::Small) + kGap));
         W->SetFrame(Rect{X, Y, WidgetPixelWidth(W->GetSize()), WidgetPixelHeight(W->GetSize())});
-        AddWidget(W);
+        AddWidget(W, true);
         Index++;
     }
     InvalidateLayout();
@@ -521,6 +561,35 @@ void WidgetHost::ArrangeOverride(const Rect &Content)
         W->Frame_.Height = Wh;
         W->Frame_.X = hz::Clamp(W->Frame_.X, 0, hz::Max(Content.Width - Ww, 0));
         W->Frame_.Y = hz::Clamp(W->Frame_.Y, 0, hz::Max(Content.Height - Wh, 0));
+
+        /* Saved widget positions can overlap after a display-size or widget-size change.
+           Resolve collisions into the nearest free 16 px grid cell before painting. */
+        auto Collides = [this, W](const Rect &Candidate) {
+            for (Widget *Placed : Widgets_) {
+                if (Placed == W)
+                    break;
+                if (!Candidate.Intersect(Placed->Frame_).Empty())
+                    return true;
+            }
+            return false;
+        };
+        Rect Candidate = W->Frame_;
+        if (Collides(Candidate)) {
+            bool Found = false;
+            int32_t MaxX = hz::Max(Content.Width - Ww, 0);
+            int32_t MaxY = hz::Max(Content.Height - Wh, 0);
+            for (int32_t Y = 0; Y <= MaxY && !Found; Y += kGap) {
+                for (int32_t X = 0; X <= MaxX; X += kGap) {
+                    Candidate = Rect{X, Y, Ww, Wh};
+                    if (!Collides(Candidate)) {
+                        Found = true;
+                        break;
+                    }
+                }
+            }
+            if (Found)
+                W->Frame_ = Candidate;
+        }
         W->Width = Ww;
         W->Height = Wh;
         W->Arrange(Rect{Content.X + W->Frame_.X, Content.Y + W->Frame_.Y, Ww, Wh});
@@ -641,7 +710,7 @@ void WidgetHost::SaveWidgetPrefs()
 {
     hz::fs::Settings Prefs;
     STATUS Status = Prefs.Load(hz::fs::SettingsPath("desktop"));
-    if (!HZ_SUCCESS(Status) && Status != STATUS_NOT_FOUND) {
+    if (!HZ_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_NOT_FOUND) {
         HzPrint("shell: cannot load widget settings for save (0x%08X)", (uint32_t)Status);
         return;
     }

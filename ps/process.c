@@ -64,6 +64,8 @@ void PspDeleteProcess(void *Object)
         Process->ObjectTable = NULL;
         ObKillHandleTable(Table, Process);
     }
+    PspFreeWindowsHeapAllocations(Process);
+    PspFreeWinModules(Process);
     if (Process->AddressSpace && !Process->IsSystem)
         MmDeleteAddressSpace(Process->AddressSpace);
     DbgPrintEx(DPFLTR_TRACE_LEVEL, "Process: %s (PID %u) deleted\n", Process->ImageName, Process->ProcessId);
@@ -104,6 +106,8 @@ void PsInitializeSystem(void)
     System->ProcessId = 4;
     System->ExitStatus = STATUS_PENDING;
     InitializeListHead(&System->ThreadListHead);
+    InitializeListHead(&System->WinCompatHeapAllocations);
+    InitializeListHead(&System->WinCompatModules);
     RtlStringCopy(System->ImageName, sizeof(System->ImageName), "System");
     KeInitializeProcess(&System->Pcb, &MmKernelAddressSpace, KI_THREAD_PRIORITY_DEFAULT, "System", 4);
     InsertTailList(&PspActiveProcessList, &System->ActiveProcessLinks);
@@ -139,7 +143,15 @@ static STATUS PspCreatePeb(EPROCESS *Process, const char *CommandLine, const HAN
     Block.ProcessId = Process->ProcessId;
     Block.ParentProcessId = Process->ParentProcessId;
     RtlStringCopy(Block.ImageName, sizeof(Block.ImageName), Process->ImageName);
-    RtlStringCopy(Block.CommandLine, sizeof(Block.CommandLine), CommandLine ? CommandLine : Process->ImageName);
+    const char *Command = CommandLine ? CommandLine : Process->ImageName;
+    RtlStringCopy(Block.CommandLine, sizeof(Block.CommandLine), Command);
+    size_t CommandIndex = 0;
+    while (Command[CommandIndex] &&
+           CommandIndex + 1 < sizeof(Block.CommandLineW) / sizeof(Block.CommandLineW[0])) {
+        Block.CommandLineW[CommandIndex] = (uint8_t)Command[CommandIndex];
+        ++CommandIndex;
+    }
+    Block.CommandLineW[CommandIndex] = 0;
     Block.StandardInput = (uint64_t)Standard[0];
     Block.StandardOutput = (uint64_t)Standard[1];
     Block.StandardError = (uint64_t)Standard[2];
@@ -190,6 +202,8 @@ STATUS PsCreateProcessEx(const char *ImagePath, const char *CommandLine, uint32_
         return Status;
     }
     InitializeListHead(&Process->ThreadListHead);
+    InitializeListHead(&Process->WinCompatHeapAllocations);
+    InitializeListHead(&Process->WinCompatModules);
     Process->ExitStatus = STATUS_PENDING;
     Process->CreateTimeUs = KeQueryUptimeMicroseconds();
     EPROCESS *Parent = PsGetCurrentProcess();
@@ -224,7 +238,8 @@ STATUS PsCreateProcessEx(const char *ImagePath, const char *CommandLine, uint32_
 
     ETHREAD *Thread = NULL;
     if (HZ_SUCCESS(Status))
-        Status = PsCreateUserThread(Process, Process->EntryPoint, Process->PebAddress, 0, &Thread);
+        Status = PsCreateUserThread(Process, Process->TlsStartupThunk ? Process->TlsStartupThunk : Process->EntryPoint,
+                                    Process->PebAddress, 0, &Thread);
     if (!HZ_SUCCESS(Status)) {
         DbgPrintEx(DPFLTR_INFO_LEVEL, "Process: could not create %s from %s (0x%08X)\n", Process->ImageName,
                    ImagePath, (uint32_t)Status);
@@ -266,6 +281,7 @@ STATUS PsTerminateProcess(EPROCESS *Process, STATUS ExitStatus)
 
 void PspProcessExited(EPROCESS *Process)
 {
+    ExCleanupWinSocketsForCurrentProcess();
     HANDLE_TABLE *Table = Process->ObjectTable;
     Process->ObjectTable = NULL;
     if (Table)

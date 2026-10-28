@@ -17,6 +17,19 @@ namespace {
 
 constexpr int kTileColumns = 5;
 
+void RequestLockFromFlyout()
+{
+    HWND ShellWindow = 0;
+    STATUS Status = NtUserGetShellWindow(&ShellWindow);
+    if (!HZ_SUCCESS(Status) || !ShellWindow) {
+        HzPrint("shell: cannot request lock from popup (0x%08X)", (uint32_t)Status);
+        return;
+    }
+    Status = NtUserPostMessage(ShellWindow, HZ_WM_SHELLREQUEST, HZ_SHELL_REQUEST_LOCK, 0);
+    if (!HZ_SUCCESS(Status))
+        HzPrint("shell: cannot queue lock request (0x%08X)", (uint32_t)Status);
+}
+
 /* Launches a program from Start (the menu closes first; the copy outlives it). */
 void LaunchFromStart(const hz::apps::App &Program)
 {
@@ -759,7 +772,7 @@ Window *CreateStartMenu()
     Power->VerticalAlignment = Align::Center;
     Power->OnClick = [Start, Power]() {
         hz::Vector<MenuItem> Items;
-        Items.Push(MenuItem::Make("Lock", []() { g_Shell.LockNow(); }));
+        Items.Push(MenuItem::Make("Lock", RequestLockFromFlyout));
         Items.Push(MenuItem::Make("Restart", []() { g_Shell.RequestShutdown(HZ_SHUTDOWN_REBOOT); }));
         Items.Push(MenuItem::Make("Shut down", []() { g_Shell.RequestShutdown(HZ_SHUTDOWN_POWER_OFF); }));
         Point O = Start->ScreenOrigin();
@@ -842,7 +855,7 @@ Window *CreateQuickSettings()
         else
             HzPrint("shell: Settings is not installed");
     });
-    ActionRow->Add<QuickAction>("Lock", Icon::Person, []() { g_Shell.LockNow(); });
+    ActionRow->Add<QuickAction>("Lock", Icon::Person, RequestLockFromFlyout);
     TextBlock *PowerInfo = Actions->Add<TextBlock>("Battery and power status unavailable", FontRole::Caption);
     PowerInfo->Foreground = Theme::TextTertiary;
 

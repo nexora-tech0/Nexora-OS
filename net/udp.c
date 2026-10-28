@@ -4,13 +4,7 @@
  * datagrams, layered on the IPv4 send/receive path in net/ipv4.c. Nothing above this file can reach
  * the network until it exists (DNS name lookups are the first caller).
  *
- * Receive path, stated plainly: the queues are filled by NetUdpDeliver(), which net/ipv4.c calls for
- * every inbound UDP datagram. Nothing else reads the interface ring for UDP in this build, because
- * NetReceiveWorker() is deliberately not started yet (net/netcore.c explains why: DHCP still polls
- * the same ring, and two readers of one ring would steal each other's frames). NetUdpReceive()
- * therefore polls the ring itself while its queue is empty. When the worker is started,
- * NetUdpReceive()'s polling must be deleted and replaced by a pure wait on the binding; otherwise
- * the two readers would race.
+ * Inbound datagrams are dispatched by the sole NetReceiveWorker into the bounded port queues.
  */
 #include "ke.h"
 #include "net.h"
@@ -18,7 +12,7 @@
 
 #define NETP_UDP_EPHEMERAL_MIN 49152u
 #define NETP_UDP_EPHEMERAL_MAX 65535u
-#define NETP_UDP_POLL_US 5000ull
+#define NETP_UDP_POLL_US 2000ull
 
 typedef struct _NETP_UDP_DATAGRAM {
     uint32_t Length;
@@ -217,19 +211,6 @@ void NetUdpDeliver(NET_INTERFACE *Interface, const NET_IPV4_VIEW *Ipv4, const NE
     KeReleaseSpinLock(&NetpUdpLock, OldIrql); /* unbound port: dropped */
 }
 
-/* Drains one frame from the interface ring into the stack (and so into the bound queues). */
-static STATUS NetpUdpPollRing(NET_INTERFACE *Interface)
-{
-    uint8_t Frame[NETIF_MAX_FRAME_SIZE];
-    uint32_t Length = 0;
-    STATUS Status = Interface->ReceiveFrame(Interface, Frame, sizeof(Frame), &Length);
-    if (HZ_SUCCESS(Status) && Length) {
-        NetProcessFrame(Interface, Frame, Length);
-        return STATUS_SUCCESS;
-    }
-    return Status;
-}
-
 STATUS NetUdpReceive(NET_UDP_BINDING *Binding, void *Buffer, uint32_t Capacity, uint8_t Source[4],
                      uint16_t *SourcePort, uint32_t *Received, uint64_t TimeoutUs)
 {
@@ -239,7 +220,6 @@ STATUS NetUdpReceive(NET_UDP_BINDING *Binding, void *Buffer, uint32_t Capacity, 
     if (!NetpUdpInitialized)
         return STATUS_DEVICE_NOT_READY;
 
-    NET_INTERFACE *Interface = NetFindConfiguredInterface();
     uint64_t Elapsed = 0;
     while (Elapsed < TimeoutUs) {
         bool Dequeued = false;
@@ -266,12 +246,6 @@ STATUS NetUdpReceive(NET_UDP_BINDING *Binding, void *Buffer, uint32_t Capacity, 
         if (Dequeued)
             return STATUS_SUCCESS;
 
-        if (Interface) {
-            STATUS Status = NetpUdpPollRing(Interface);
-            if (!HZ_SUCCESS(Status) && Status != STATUS_NO_MORE_ENTRIES && Status != STATUS_DEVICE_DATA_ERROR)
-                return Status; /* a real device failure: do not spin on it */
-            Interface = NetFindConfiguredInterface();
-        }
         KeDelayExecutionThread(NETP_UDP_POLL_US);
         Elapsed += NETP_UDP_POLL_US;
     }

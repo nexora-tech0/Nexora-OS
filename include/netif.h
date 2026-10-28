@@ -38,6 +38,7 @@ struct _NET_INTERFACE {
 /* Called by a bus/device driver during I/O initialization. Interfaces remain registered thereafter. */
 STATUS NetRegisterInterface(NET_INTERFACE *Interface);
 NET_INTERFACE *NetGetInterfaceList(void);
+/* Initializes the protocol stack and launches one DHCP worker for every registered interface. */
 STATUS NetStart(void);
 bool NetRunProtocolSelfTests(void);
 bool NetDhcpRunSelfTests(void);

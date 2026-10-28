@@ -24,9 +24,11 @@ manager's mouse lock.
 - **Multiprocessor:** every processor the firmware reports (up to 8) runs threads: one ready
   queue shared under the dispatcher lock, thread affinity, inter-processor interrupts for
   rescheduling, TLB shootdown and stopping the others at a crash.
-- **Hardware:** PCI, an initial Intel 82540EM (VirtualBox E1000) Ethernet driver, AHCI SATA disks
-  with GPT partitions, PS/2 keyboard and mouse, the CMOS clock, ACPI power off and reset, the UEFI
-  framebuffer.
+- **Hardware:** PCI inventory in Settings > Devices, AHCI/SATA and NVMe storage with GPT
+  partitions, an Intel 82540EM (`8086:100E`) Ethernet driver, PS/2 keyboard and mouse, the CMOS
+  clock, ACPI power off and reset, and the UEFI framebuffer. QEMU smoke tests verify full Setup
+  installation and readback on AHCI and NVMe disks. Physical devices still need model-by-model
+  validation. See [network adapter support](docs/NETWORK_DRIVERS.md) for NIC coverage.
 - **File systems:** a read-only C: from the boot ramdisk on the live system, and read/write
   FAT32 with long file names (write-back FAT cache, multi-cluster transfers).
 - **Desktop:** win32k's windows, message queues and input routing, a compositor with Mica-like
@@ -46,9 +48,10 @@ manager's mouse lock.
 - **Programs:** Notepad (word wrap, find, undo), Files (copy, cut, paste and delete of whole
   folders, with item context menus), Terminal (built-in commands, console programs, `> file`, `| more`, line wrapping),
   Calculator, Clock, Calendar, Stopwatch, System Information, Paint (mouse drawing and BMP export),
-  Browser (native shell with address entry, history, bookmarks, downloads listing and local
-  text/HTML file loading through absolute paths or file URLs; HTML uses a bounded text parser,
-  while remote page loading and CSS layout are not yet supported), Settings (searchable Home and
+  Browser (native shell with address entry, history, bookmarks, downloads listing, local files,
+  bounded HTTP GET and verified TLS 1.2 HTTPS; pages use structured HTML, a conservative CSS
+  subset, and bounded PNG/JPEG/GIF/BMP images; JavaScript and full browser compatibility are not
+  supported), Settings (searchable Home and
   category navigation, five shared wallpaper choices, account credentials, display/storage/network
   status, time zone and live system information; sound, USB/Bluetooth and advanced management
   features are clearly marked unavailable when their system APIs are not implemented), Task Manager (processes,
@@ -118,6 +121,7 @@ make iso
 make run                # QEMU + OVMF, serial on stdio (QEMU_SMP=4 make run: four processors)
 make test               # headless boot tests: boot, desktop, shell, apps, SMP, recovery, install,
                         # boot from disk, accounts, diagnostics, input, power; screenshots in build/test/
+python3 tests/wincompat/loader_cases/test_pe_fixtures.py # structural PE-fixture model, not OS execution
 python3 scripts/smoke-test.py --case catalog-apps  # launch the expanded built-in app catalog
 python3 scripts/smoke-test.py --case network-interface  # probe the E1000 driver in QEMU
 QEMU_SMP=4 make test    # the same on four processors
@@ -125,21 +129,36 @@ make testdisk           # build/test/disk.img: the GPT + FAT32 test disk (make r
 make vbox               # create or refresh the VirtualBox VM "Nexora OS" with the new ISO
 ```
 
-Nexora currently runs its own statically linked PE32+ applications. It does not yet provide
-general Windows application compatibility or a Linux ELF/syscall runtime; those require separate
-loader and API work and are not implied by the native app catalog. Files and Terminal can launch
-Nexora-compatible `.exe` programs, but Windows executables that import DLLs are not supported yet.
+Nexora runs its own statically linked PE32+ applications and has an initial, deliberately narrow
+Windows console compatibility path for AMD64 PE32+ console images. Built-in `kernel32.dll` and
+`kernelbase.dll` import thunks currently cover `GetStdHandle`, synchronous `WriteFile`,
+`ExitProcess`, `GetLastError`, `SetLastError`, `CloseHandle`, `GetCurrentProcessId`,
+`GetCurrentThreadId`, `QueryPerformanceCounter` (1 MHz), `GetSystemTimeAsFileTime`,
+`InitializeSListHead`, `GetCommandLineA`, `GetProcessHeap`, `HeapAlloc`, and `HeapFree`; the heap
+shim uses tracked page-backed allocations and is not the Windows heap implementation. This is not
+a Windows DLL loader.
+Unsupported architectures, GUI subsystems, TLS/delay imports, DLLs, and APIs fail closed. Terminal
+and desktop launch failures can show a bounded compatibility report listing the image format and
+imported DLL/API support status. The report does not imply that listed imports are implemented as
+full Windows contracts: for example, overlapped I/O and consistent Win32 last-error mapping are
+not supported. General CRT startup, app-local/redistributable DLL loading, exception/unwind
+behavior, Win32 GUI APIs, and Windows drivers remain unsupported. Settings > Devices reports
+enumerated PCI IDs and the actual startup result for supported built-in drivers. Nexora currently
+has native AHCI and NVMe storage drivers; Windows `.sys` drivers cannot be loaded by Nexora's
+kernel. The Intel 82579LM entry is identity-only, not an operational NIC driver.
+This is not general Windows
+application compatibility or a Linux ELF/syscall runtime.
 The native Nexora Browser shell can open local text and HTML files using an absolute path or a
-`file:///C:/...` URL; HTML is rendered as bounded text with scripts and styles disabled. The kernel
-provides a bounded DNS A-record lookup syscall for native apps, including ARP next-hop resolution
-and serialized DNS-over-UDP access through the configured interface. The Browser can resolve a
-host but does not yet fetch remote pages: application TCP connections, HTTP, and verified HTTPS/TLS
-are not implemented. The Intel E1000 driver can initialize VirtualBox's PRO/1000 MT Desktop
-adapter, and the bounded DHCPv4 client requests and reports an IPv4 address, gateway, and DNS server.
-Firefox also requires DLL loading and Windows API support that Nexora does not provide. The
-`network-interface` smoke case exercises the E1000 driver and DHCP handshake on QEMU user-mode NAT;
-the `dns-api` smoke case also exercises a real DNS A lookup through the app-facing syscall. Neither
-test verifies HTTP/HTTPS page loading or general browser Internet access.
+`file:///C:/...` URL. Remote pages use a bounded structured HTML renderer, a small external
+stylesheet subset, and limited PNG/JPEG/GIF/BMP loading; JavaScript, the DOM, full CSS layout,
+and general-purpose browser compatibility are not implemented. Its networking code supports
+bounded HTTP GET and TLS 1.2 HTTPS with certificate and hostname checks. The latest QEMU/NAT HTTP
+fixture passed, but the latest external HTTPS test resolved DNS and then timed out before a verified
+page load; reliable external browsing is therefore not yet verified. Network hardware support is
+limited to the documented Intel 82540EM (`8086:100E`)
+driver; other physical NICs are not claimed to work. The `network-interface` and `dns-api` smoke
+cases verify QEMU E1000/NAT initialization and DNS, respectively, not general physical-network
+support. Firefox also requires DLL loading and Windows API support that Nexora does not provide.
 
 On Windows, run these from a WSL2 shell in the checkout; `make vbox` drives the Windows
 VirtualBox through `VBoxManage.exe`. The VM logs COM1 to `serial-com1.log` in its VM folder.

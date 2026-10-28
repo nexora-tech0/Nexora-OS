@@ -90,7 +90,16 @@ display_args=(-display "$display" "${display_args[@]}")
 
 disk_args=()
 if [ -n "${QEMU_DISK:-}" ]; then
-    disk_args=(-drive "file=$QEMU_DISK,if=none,id=hd0,format=raw" -device ide-hd,drive=hd0,bus=ide.0)
+    case "${QEMU_DISK_INTERFACE:-ide}" in
+        ide)
+            disk_args=(-drive "file=$QEMU_DISK,if=none,id=hd0,format=raw" -device ide-hd,drive=hd0,bus=ide.0)
+            ;;
+        nvme)
+            disk_args=(-drive "file=$QEMU_DISK,if=none,id=nvme0,format=raw" \
+                       -device nvme,drive=nvme0,serial=NEXORA-NVME-TEST)
+            ;;
+        *) echo "run-qemu: unsupported QEMU_DISK_INTERFACE '${QEMU_DISK_INTERFACE}' (use ide or nvme)" >&2; exit 1 ;;
+    esac
 fi
 media_args=(-cdrom "$ISO" -boot d)
 if [ "$ISO" = "none" ]; then
@@ -99,7 +108,7 @@ if [ "$ISO" = "none" ]; then
 fi
 
 exec "$QEMU" \
-    -machine q35 \
+    -machine "${QEMU_MACHINE:-q35}" \
     -m "${QEMU_MEM:-2048}" \
     -smp "${QEMU_SMP:-1}" \
     "${accel_args[@]}" \

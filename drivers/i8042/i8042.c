@@ -14,6 +14,7 @@
  */
 #include "bootinfo.h"
 #include "hal.h"
+#include "input.h"
 #include "io.h"
 #include "ps.h"
 #include "rtl.h"
@@ -36,7 +37,6 @@
 #define PS2_RESEND 0xFE
 
 #define RAW_RING 256
-#define EVENT_QUEUE 128
 
 typedef struct _I8042_RING {
     volatile uint8_t Bytes[RAW_RING];
@@ -44,19 +44,7 @@ typedef struct _I8042_RING {
     volatile uint32_t Tail; /* written by the DPC */
 } I8042_RING;
 
-typedef struct _INPUT_QUEUE {
-    KSPIN_LOCK Lock;
-    KEVENT Available;       /* notification: set while the queue is not empty */
-    uint32_t EventSize;
-    uint32_t Head, Count;
-    uint8_t Events[EVENT_QUEUE][24];
-    uint64_t Dropped;
-} INPUT_QUEUE;
-
-_Static_assert(sizeof(HZ_KEY_EVENT) <= 24 && sizeof(HZ_MOUSE_EVENT) <= 24, "input event slot size");
-
 static I8042_RING I8042KeyboardRing, I8042MouseRing;
-static INPUT_QUEUE I8042KeyboardQueue, I8042MouseQueue;
 static KDPC I8042Dpc;
 static bool I8042HasMouse, I8042MouseWheel;
 
@@ -127,60 +115,6 @@ static bool I8042SendDevice(bool Mouse, uint8_t Byte)
             return false;
     }
     return false;
-}
-
-/* ---- Event queues ------------------------------------------------------------------------------ */
-
-static void InputQueueInitialize(INPUT_QUEUE *Q, uint32_t EventSize)
-{
-    KeInitializeSpinLock(&Q->Lock);
-    KeInitializeEvent(&Q->Available, NotificationEvent, false);
-    Q->EventSize = EventSize;
-}
-
-static void InputQueuePush(INPUT_QUEUE *Q, const void *Event)
-{
-    KIRQL OldIrql;
-    KeAcquireSpinLock(&Q->Lock, &OldIrql);
-    if (Q->Count == EVENT_QUEUE) {
-        Q->Head = (Q->Head + 1) % EVENT_QUEUE; /* drop the oldest */
-        Q->Count--;
-        Q->Dropped++;
-    }
-    memcpy(Q->Events[(Q->Head + Q->Count) % EVENT_QUEUE], Event, Q->EventSize);
-    Q->Count++;
-    KeSetEvent(&Q->Available);
-    KeReleaseSpinLock(&Q->Lock, OldIrql);
-}
-
-static STATUS InputQueueRead(INPUT_QUEUE *Q, IRP *Irp)
-{
-    uint32_t Capacity = Irp->Length / Q->EventSize;
-    if (Capacity == 0)
-        return STATUS_BUFFER_TOO_SMALL;
-    for (;;) {
-        KIRQL OldIrql;
-        KeAcquireSpinLock(&Q->Lock, &OldIrql);
-        uint32_t n = HZ_MIN(Capacity, Q->Count);
-        for (uint32_t i = 0; i < n; i++) {
-            memcpy((uint8_t *)Irp->Buffer + i * Q->EventSize, Q->Events[Q->Head], Q->EventSize);
-            Q->Head = (Q->Head + 1) % EVENT_QUEUE;
-            Q->Count--;
-        }
-        if (Q->Count == 0)
-            KeResetEvent(&Q->Available);
-        KeReleaseSpinLock(&Q->Lock, OldIrql);
-        if (n) {
-            Irp->IoStatus.Information = n * Q->EventSize;
-            return STATUS_SUCCESS;
-        }
-        void *Object = &Q->Available;
-        STATUS Status = KeWaitForMultipleObjectsEx(1, &Object, WaitAny, NULL, NULL, Irp->RequestorMode == UserMode);
-        if (Status == STATUS_ALERTED) {
-            Irp->IoStatus.Information = 0;
-            return STATUS_ALERTED;
-        }
-    }
 }
 
 /* ---- Keyboard decoding (scan code set 1) ------------------------------------------------------- */
@@ -306,7 +240,7 @@ static void KbdDecode(uint8_t Byte)
         static const char Keypad[] = "789-456+1230.";
         Event.Character = (uint8_t)Keypad[Scan - 0x47];
     }
-    InputQueuePush(&I8042KeyboardQueue, &Event);
+    InputSubmitKeyEvent(&Event);
 }
 
 static void MouseDecode(uint8_t Byte)
@@ -334,7 +268,7 @@ static void MouseDecode(uint8_t Byte)
         Event.Wheel = (int16_t)-Z;
     }
     Event.Buttons = (Flags & 1 ? HZ_MOUSE_LEFT : 0) | (Flags & 2 ? HZ_MOUSE_RIGHT : 0) | (Flags & 4 ? HZ_MOUSE_MIDDLE : 0);
-    InputQueuePush(&I8042MouseQueue, &Event);
+    InputSubmitMouseEvent(&Event);
 }
 
 static void I8042DpcRoutine(KDPC *Dpc, void *Context, void *Arg1, void *Arg2)
@@ -371,13 +305,7 @@ static bool I8042Interrupt(KTRAP_FRAME *Frame, void *Context)
     return Handled;
 }
 
-/* ---- Devices --------------------------------------------------------------------------------- */
-
-static STATUS I8042Read8042Device(DEVICE_OBJECT *Device, IRP *Irp)
-{
-    INPUT_QUEUE *Q = Device->DeviceType == FILE_DEVICE_KEYBOARD ? &I8042KeyboardQueue : &I8042MouseQueue;
-    return InputQueueRead(Q, Irp);
-}
+/* ---- Diagnostic input reader ---------------------------------------------------------------- */
 
 static void I8042EchoThread(void *Context)
 {
@@ -435,6 +363,7 @@ static bool I8042InitializeMouse(void)
 
 static STATUS I8042DriverEntry(DRIVER_OBJECT *Driver)
 {
+    (void)Driver;
     if (HalReadPort8(I8042_STATUS) == 0xFF)
         return STATUS_NO_SUCH_DEVICE;
     I8042Command(0xAD); /* disable both ports while configuring */
@@ -478,18 +407,11 @@ static STATUS I8042DriverEntry(DRIVER_OBJECT *Driver)
     }
     I8042Flush();
 
-    InputQueueInitialize(&I8042KeyboardQueue, sizeof(HZ_KEY_EVENT));
-    InputQueueInitialize(&I8042MouseQueue, sizeof(HZ_MOUSE_EVENT));
     KeInitializeDpc(&I8042Dpc, I8042DpcRoutine, NULL);
-    Driver->MajorFunction[IRP_MJ_READ] = I8042Read8042Device;
-
-    DEVICE_OBJECT *Device;
     uint8_t Vector;
-    if (Keyboard && HZ_SUCCESS(IoCreateDevice(Driver, 0, "\\Device\\Keyboard0", FILE_DEVICE_KEYBOARD, 0, &Device)) &&
-        HZ_SUCCESS(KeConnectInterruptAnyVector(I8042_IRQL, I8042Interrupt, NULL, &Vector)))
+    if (Keyboard && HZ_SUCCESS(KeConnectInterruptAnyVector(I8042_IRQL, I8042Interrupt, NULL, &Vector)))
         HalEnableIsaInterrupt(1, Vector);
-    if (I8042HasMouse && HZ_SUCCESS(IoCreateDevice(Driver, 0, "\\Device\\Mouse0", FILE_DEVICE_MOUSE, 0, &Device)) &&
-        HZ_SUCCESS(KeConnectInterruptAnyVector(I8042_IRQL, I8042Interrupt, NULL, &Vector)))
+    if (I8042HasMouse && HZ_SUCCESS(KeConnectInterruptAnyVector(I8042_IRQL, I8042Interrupt, NULL, &Vector)))
         HalEnableIsaInterrupt(12, Vector);
 
     /* The configuration byte was read while both ports were disabled: clear the clock-disable

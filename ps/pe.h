@@ -24,7 +24,11 @@
 #define PE_DIRECTORY_IMPORT 1
 #define PE_DIRECTORY_BASERELOC 5
 #define PE_DIRECTORY_TLS 9
+#define PE_DIRECTORY_DELAY_IMPORT 13
 #define PE_DIRECTORY_COUNT 16
+
+#define PE_SUBSYSTEM_WINDOWS_GUI 2
+#define PE_SUBSYSTEM_WINDOWS_CUI 3
 
 #define PE_SCN_CNT_UNINITIALIZED_DATA 0x00000080u
 #define PE_SCN_MEM_DISCARDABLE 0x02000000u
@@ -107,8 +111,34 @@ typedef struct HZ_PACKED _PE_BASE_RELOCATION {
     uint32_t BlockSize; /* including this header */
 } PE_BASE_RELOCATION;
 
+typedef struct HZ_PACKED _PE_TLS_DIRECTORY64 {
+    uint64_t StartAddressOfRawData;
+    uint64_t EndAddressOfRawData;
+    uint64_t AddressOfIndex;
+    uint64_t AddressOfCallBacks;
+    uint32_t SizeOfZeroFill;
+    uint32_t Characteristics;
+} PE_TLS_DIRECTORY64;
+
+typedef struct HZ_PACKED _PE_EXPORT_DIRECTORY {
+    uint32_t Characteristics;
+    uint32_t TimeDateStamp;
+    uint16_t MajorVersion;
+    uint16_t MinorVersion;
+    uint32_t Name;
+    uint32_t Base;
+    uint32_t NumberOfFunctions;
+    uint32_t NumberOfNames;
+    uint32_t AddressOfFunctions;
+    uint32_t AddressOfNames;
+    uint32_t AddressOfNameOrdinals;
+} PE_EXPORT_DIRECTORY;
+
+#define PE_EXPORT_NAME_MAX 512u
+
 _Static_assert(sizeof(PE_OPTIONAL_HEADER64) == 240, "PE32+ optional header is 240 bytes");
 _Static_assert(sizeof(PE_SECTION_HEADER) == 40, "section header is 40 bytes");
+_Static_assert(sizeof(PE_TLS_DIRECTORY64) == 40, "PE32+ TLS directory is 40 bytes");
 
 /* Located headers of an image validated by PsValidatePeImage. */
 typedef struct _PE_HEADERS {
@@ -118,6 +148,18 @@ typedef struct _PE_HEADERS {
 } PE_HEADERS;
 
 STATUS PspLocatePeHeaders(const void *Image, size_t Size, PE_HEADERS *Headers);
+STATUS PspLocateMappedPeHeaders(const void *Image, size_t Size, PE_HEADERS *Headers);
+/* Resolves an export from an on-disk PE image. Forwarders are returned as bounded strings and
+   must be resolved against another loaded module by the caller. Exactly one of Name or Ordinal
+   must be selected. */
+STATUS PeFindFileExport(const void *File, size_t FileSize, const PE_HEADERS *Headers,
+                        const char *Name, uint16_t Ordinal, bool ByOrdinal,
+                        uint32_t *FunctionRva, char *Forwarder, size_t ForwarderCapacity);
+/* Resolves an export from a mapped PE image; forwarded exports return their forwarder string. */
+STATUS PeFindImageExport(const void *Image, size_t ImageSize, const PE_HEADERS *Headers,
+                         const char *Name, uint16_t Ordinal, bool ByOrdinal,
+                         uint32_t *FunctionRva, char *Forwarder, size_t ForwarderCapacity);
+
 
 static inline const PE_DATA_DIRECTORY *PeDirectory(const PE_HEADERS *Headers, unsigned Index)
 {

@@ -384,19 +384,19 @@ static void AhciInitializePort(AHCI_CONTROLLER *Hba, uint32_t Number)
                (unsigned long long)P->Sectors, DiskNumber, (uint32_t)Status);
 }
 
-static void AhciInitializeController(PCI_DEVICE *Pci)
+static bool AhciInitializeController(PCI_DEVICE *Pci)
 {
     if (!Pci->Bar[5] || Pci->BarIsIo[5])
-        return;
+        return false;
     AHCI_CONTROLLER *Hba = ExAllocatePoolZero(NonPagedPool, sizeof(AHCI_CONTROLLER), AHCI_TAG);
     if (!Hba)
-        return;
+        return false;
     Hba->Pci = Pci;
     uint64_t Size = HZ_MAX(Pci->BarSize[5], 0x1100);
     Hba->Abar = MmMapIoSpace(Pci->Bar[5], Size, MM_CACHE_UNCACHED);
     if (!Hba->Abar) {
         ExFreePoolWithTag(Hba, AHCI_TAG);
-        return;
+        return false;
     }
     PciEnableDevice(Pci, PCI_COMMAND_MEMORY | PCI_COMMAND_BUS_MASTER);
 
@@ -428,14 +428,19 @@ static void AhciInitializeController(PCI_DEVICE *Pci)
         if (Implemented & (1u << i))
             AhciInitializePort(Hba, i);
     }
+    return true;
 }
 
 static STATUS AhciDriverEntry(DRIVER_OBJECT *Driver)
 {
     uint32_t Count = 0;
     for (PCI_DEVICE *Pci = PciFindDevice(0x01, 0x06, 0x01, NULL); Pci; Pci = PciFindDevice(0x01, 0x06, 0x01, Pci)) {
-        AhciInitializeController(Pci);
-        Count++;
+        if (AhciInitializeController(Pci)) {
+            PciSetDriverStatus(Pci, PciDriverStarted, "AHCI storage");
+            Count++;
+        } else {
+            PciSetDriverStatus(Pci, PciDriverStartFailed, "AHCI storage");
+        }
     }
     return Count ? STATUS_SUCCESS : STATUS_NO_SUCH_DEVICE;
 }

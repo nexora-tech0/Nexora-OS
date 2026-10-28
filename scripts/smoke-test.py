@@ -28,6 +28,9 @@ Processors (M11): every case boots with QEMU_SMP processors from the environment
 
 import argparse
 import errno
+import gzip
+import http.server
+import json
 import os
 import re
 import shutil
@@ -36,6 +39,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zlib
 
@@ -73,16 +77,42 @@ CASES = {
         # welcome app went with the beta apps), so this case proves the shell reaches a usable
         # desktop: it locks, unlocks, shows the desktop, opens Start and closes it again.
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
                     ("shell: ready", ["sendkey meta_l"]),
-                    ("shell: start opened", ["sendkey esc"])],
+                    ("shell: start opened", ["sendkey meta_l"])],
         "expect": ["Desktop: compositor at ", "Window manager: ", "[HZ] BOOT OK",
                    "shell: unlocked", "shell: ready", "shell: start opened", "shell: start closed"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:"],
+    },
+    "taskbar-dock": {
+        "entry": None,
+        "disk": False,
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
+                    ("shell: unlocked", ["sendkey meta_l"]),
+                    ("shell: start opened",
+                     ["type:clock", "sendkey ret"]),
+                    ("clock: started", ["sleep 2", "screenshot:taskbar-dock-active.png"])],
+        "expect": ["shell: unlocked", "shell: start opened", "shell: launched clock.exe", "clock: started"],
+        "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:"],
+        "timeout": 150.0,
+    },
+    "store-ui": {
+        "entry": None,
+        "disk": False,
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
+                    ("shell: unlocked", ["sendkey meta_l", "sleep 1", "type:store", "sendkey ret"])],
+        "expect": ["[HZ] BOOT OK", "shell: unlocked", "shell: launched store.exe",
+                   "store: catalog scroll ready", "store: opened (15 apps)"],
+        "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "store: catalog has no scroll range"],
+        "timeout": 180.0,
     },
     "control-center-reference": {
         "entry": None,
         "disk": False,
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
                     ("shell: ready",
                      ["sleep 2", "screenshot:top-dock-dark.png", "sendkey meta_l"]),
                     ("shell: start opened",
@@ -164,7 +194,7 @@ CASES = {
                     ("calendar: started", ["sendkey meta_l", "sleep 1", "type:stopwatch", "sendkey ret"]),
                     ("stopwatch: started", ["sendkey meta_l", "sleep 1", "type:paint", "sendkey ret"]),
                     ("paint: started", [])],
-        "expect": ["[HZ] BOOT OK", "shell: 14 programs installed",
+        "expect": ["[HZ] BOOT OK", "shell: 15 programs installed",
                    "shell: launched notepad.exe", "notepad: saved D:\\smoke.txt (25 bytes)",
                    "terminal| Hello from the smoke test", "terminal|  Directory of D:\\",
                    "terminal: wrote 6 bytes to D:\\out.txt", "terminal| piped",
@@ -210,6 +240,7 @@ CASES = {
         "disk": False,
         "qemu_args": ["-netdev", "user,id=net0", "-device", "e1000,netdev=net0"],
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
                     ("shell: ready", ["sendkey meta_l"]),
                     ("shell: start opened", ["type:settings", "sendkey ret"]),
                     ("settings: Home", ["type:network", "sendkey tab", "sendkey down", "sendkey ret"]),
@@ -220,11 +251,83 @@ CASES = {
                     ("settings: Apps", ["sendkey shift-tab", "sendkey ctrl-a", "type:home",
                                            "sendkey tab", "sendkey down", "sendkey ret"])],
         "expect": ["Network: interface eth0 registered", "E1000: ", "up link", "Network protocol self-tests: ",
-                   "passed", "DHCP self-tests: 6/6 passed", "DHCP: eth0 configured",
+                   "passed", "DHCP self-tests: 8/8 passed", "DNS self-tests: 9/9 passed", "DHCP: eth0 configured",
                    "shell: ready", "settings: Home", "settings: Network & Internet",
                    "settings: System", "settings: Apps"],
         "fail": ["*** STOP", "ERROR:"],
         "timeout": 120.0,
+    },
+    "rtl8139": {
+        "entry": None,
+        "disk": False,
+        "qemu_args": ["-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0"],
+        "expect": ["RTL8139: ", "Realtek RTL8139 Ethernet", "Network: interface eth0 registered",
+                   "up link", "Network protocol self-tests: ", "passed", "DHCP: eth0 configured", "shell: ready"],
+        "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "could not allocate", "reset timed out"],
+        "timeout": 120.0,
+    },
+    "network-multi-interface": {
+        "entry": None,
+        "disk": False,
+        "qemu_args": ["-netdev", "user,id=net0", "-device", "e1000,netdev=net0",
+                      "-netdev", "user,id=net1", "-device", "rtl8139,netdev=net1"],
+        "expect": ["Network: interface eth0 registered", "Network: interface eth1 registered",
+                   "Network: DHCP started on 2 interface(s)", "DHCP: eth0 configured", "DHCP: eth1 configured",
+                   "shell: ready"],
+        "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "could not start DHCP"],
+        "timeout": 120.0,
+    },
+    "network-pcnet": {
+        "entry": None,
+        "disk": False,
+        "qemu_args": ["-netdev", "user,id=net0", "-device", "pcnet,netdev=net0"],
+        "expect": ["PCnet: ", "DMA rings started", "Network: interface eth0 registered",
+                   "Network: DHCP started on 1 interface(s)", "DHCP: eth0 configured", "shell: ready"],
+        "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "PCnet: initialization timed out"],
+        "timeout": 45.0,
+    },
+    "virtio-storage": {
+        "entry": None,
+        "disk": False,
+        "virtio_disk": True,
+        "qemu_args": ["-device", "virtio-blk-pci,drive=vblk,disable-modern=on"],
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"])],
+        "expect": ["VirtIO block: ", "Disk: Harddisk0 is 'VirtIO block device'",
+                   "Volume: D: is ", "FAT32 'HZTEST'", "File system self-tests: ", "passed",
+                   "shell: ready"],
+        "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "VirtIO block: .*initialization failed"],
+        "timeout": 120.0,
+    },
+    "virtio-network": {
+        "entry": None,
+        "disk": False,
+        "qemu_args": ["-netdev", "user,id=net0", "-device",
+                      "virtio-net-pci,netdev=net0,disable-modern=on"],
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"])],
+        "expect": ["VirtIO network: ", "Network: interface eth0 registered",
+                   "DHCP: eth0 configured", "shell: ready"],
+        "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:", "DHCP: configuration failed"],
+        "timeout": 120.0,
+    },
+    "xhci-controller": {
+        "entry": None,
+        "disk": False,
+        "machine": "q35,i8042=off",
+        "qemu_args": ["-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0",
+                      "-device", "usb-mouse,bus=xhci.0"],
+        "actions": [("shell: ready", ["qmpkey:a", "qmpmouse:12:-7:none"]),
+                    ("USB HID: mouse report buttons=00 dx=12 dy=-7", ["qmpmouse:0:0:left-down"]),
+                    ("USB HID: mouse report buttons=01", ["qmpmouse:0:0:left-up"])],
+        "expect": ["xHCI: 00:03.0 PCI", "command/event rings running", "USB: port ",
+                   "slot ", "enabled (speed id ", "USB: device enumerated", "VID=0627 PID=0001",
+                   "USB HID: boot keyboard ready", "USB HID: boot mouse ready", "USB HID: key 4 down",
+                   "USB HID: mouse report buttons=00 dx=12 dy=-7", "USB HID: mouse report buttons=01",
+                   "shell: ready"],
+        "expect_counts": {"USB: device enumerated": 2},
+        "fail": ["*** STOP", "ERROR:", "descriptor enumeration failed"],
+        "timeout": 90.0,
     },
     "settings-visual": {
         "entry": None,
@@ -295,34 +398,125 @@ CASES = {
     },
     "catalog-apps": {
         "entry": None,
+        "disk": False,
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
                     ("shell: ready", ["sendkey meta_l"]),
                     ("shell: start opened", ["type:system information", "sendkey ret"]),
                     ("sysinfo: started", ["sendkey meta_l", "sleep 1", "type:calendar", "sendkey ret"]),
                     ("calendar: started", ["sendkey meta_l", "sleep 1", "type:stopwatch", "sendkey ret"]),
                     ("stopwatch: started", ["sendkey meta_l", "sleep 1", "type:paint", "sendkey ret"]),
-                    ("paint: started", ["sendkey meta_l", "sleep 1", "type:browser", "sendkey ret"])],
-        "expect": ["shell: 14 programs installed", "shell: ready", "sysinfo: started", "calendar: started",
-                   "stopwatch: started", "paint: started",
-                   "browser: started; local renderer and DNS lookup ready; page networking unavailable"],
+                    ("paint: started", ["sendkey meta_l", "sleep 1", "type:store", "sendkey ret"])],
+        "expect": ["shell: 15 programs installed", "shell: ready", "sysinfo: started", "calendar: started",
+                   "stopwatch: started", "paint: started", "store: opened (15 apps)"],
         # The current partition-table self-test failure is tracked separately; this case focuses
         # on manifest discovery and launching the newly added apps.
         "fail": ["*** STOP", "sysinfo: cannot create the window", "calendar: cannot create the window",
                  "stopwatch: cannot create the window", "paint: cannot create the window"],
         "timeout": 180.0,
     },
+    "windows-console-compat": {
+        "entry": None,
+        "disk": True,
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
+                    ("shell: unlocked", ["sendkey meta_l", "sleep 1", "type:terminal", "sendkey ret"]),
+                    ("terminal: started", ["type:start C:\\Nexora\\System\\wincompat-probe.exe", "sendkey ret"]),
+                    ("WinCompat: wincompat-probe.exe ExitProcess(0)",
+                     ["type:start C:\\Nexora\\System\\wincompat-missing-api.exe", "sendkey ret"])],
+        "expect": ["WinCompat: wincompat-probe.exe ExitProcess(0)",
+                   "Volume: D: is ",
+                   "terminal| Started wincompat-probe.exe (process",
+                   "image: Win32 import report [AMD64 PE32+", "kernel32.dll!GetCurrentDirectoryA",
+                   "[module=SUPPORTED api=UNSUPPORTED]"],
+        "expect_any": ["[HZ] BOOT OK", "[HZ] BOOT DEGRADED"],
+        "fail": ["*** STOP", "ERROR:"],
+        "check_disk": True,
+        "disk_files": {"::/wincompat-file-probe.tmp": "CreateFileW-write-probe"},
+        "warn_markers": ["BOOT DEGRADED"],
+        "timeout": 180.0,
+    },
+    "windows-winsock": {
+        "entry": None,
+        "disk": False,
+        "host_http_fixture": True,
+        "qemu_args": ["-netdev", "user,id=net0", "-device", "e1000,netdev=net0"],
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
+                    ("shell: unlocked", ["sendkey meta_l", "sleep 1", "type:terminal", "sendkey ret"]),
+                    ("terminal: started", ["type:start C:\\Nexora\\System\\wincompat-network-probe.exe {host_http_port}", "sendkey ret"])],
+        "expect": ["WinCompat: wincompat-network-probe.exe ExitProcess(0)"],
+        "fail": ["*** STOP", "shell: A program (process", "raised STATUS_"],
+        "warn_markers": ["BOOT DEGRADED"],
+        "timeout": 180.0,
+    },
+    "animevault-launch": {
+        "entry": None,
+        # Use the extracted AMD64 Electron app, not the 32-bit NSIS installer wrapper. The
+        # disk generator extracts and copies the complete release payload without running NSIS.
+        "disk": "from:build/test/animevault-app-disk.img",
+        "animevault_payload": True,
+        "actions": [
+            ("shell: lock screen shown", ["sendkey spc"]),
+            ("shell: sign-in", ["sendkey ret"]),
+            ("shell: unlocked", ["sendkey meta_l", "sleep 1", "type:terminal", "sendkey ret"]),
+            ("terminal: started", ["type:start D:\\AnimeVault.exe", "sendkey ret"]),
+            ("Process: started AnimeVault.exe", ["screenshot:animevault-launch-result.png"]),
+        ],
+        "expect": ["Volume: D: is ", "terminal: started", "Process: started AnimeVault.exe"],
+        "expect_any": ["[HZ] BOOT OK", "[HZ] BOOT DEGRADED"],
+        "fail": ["*** STOP", "ERROR:", "could not create AnimeVault.exe"],
+        "warn_markers": ["BOOT DEGRADED"],
+        "timeout": 180.0,
+    },
+    "ntfs-volume-probe": {
+        "entry": None,
+        "cmdline": "hz.ntfs-probe=1",
+        "ntfs_fixture": True,
+        "disk": "from:build/test/ntfs-test-disk.img",
+        "actions": [],
+        "expect": ["NTFS: boot, $MFT data, and root-directory metadata validated",
+                   "File system self-tests: 7/7 passed"],
+        "fail": ["*** STOP", "ERROR:"],
+        "timeout": 120.0,
+    },
+    "device-inventory": {
+        "entry": None,
+        "disk": False,
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
+                    ("shell: unlocked", ["sendkey meta_l"]),
+                    ("shell: start opened", ["type:settings", "sendkey ret"]),
+                    ("settings: started", ["sendkey alt-f4"])],
+        "expect": ["shell: unlocked", "settings: started", "settings: PCI inventory ",
+                   "device(s), ", " driver(s) started, ", " failed, ", " unmatched"],
+        "fail": ["*** STOP", "settings: cannot create the window", "crashed"],
+        "timeout": 150.0,
+    },
+    "installer-pnp": {
+        # Exercise the actual install boot path. A live-desktop test image never starts Setup.
+        "entry": "/Install Nexora OS (verbose log)",
+        "disk": "empty:384",
+        "actions": [("setup: started", ["sendkey ret"]),
+                    ("setup: disk 0 ", ["screenshot:installer-hardware.png"])],
+        # The PCI summary is rendered in the UI; serial reports the inventory counts and disk scan.
+        "expect": ["Installer: Setup launched automatically", "setup: started", "setup: hardware inventory ",
+                   "setup: disk 0 'QEMU HARDDISK'"],
+        "fail": ["*** STOP", "setup: cannot create the window", "crashed"],
+        "timeout": 180.0,
+    },
     "browser": {
         "entry": None,
         "disk": False,
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
                     ("shell: ready", ["sendkey meta_l", "type:browser", "sendkey ret"]),
-                    ("browser: started; local renderer and DNS lookup ready; page networking unavailable",
+                    ("browser: started; local files, bounded HTTP, and verified TLS 1.2 HTTPS ready",
                      ["type:https://example.com", "sendkey ret"]),
                     ("browser: DNS lookup failed for example.com",
                      ["sendkey ctrl-l", "type:https://example.com:99999999999999999999", "sendkey ret"])],
-        "expect": ["shell: 14 programs installed",
+        "expect": ["shell: 18 programs installed",
                    "DNS self-tests: 8/8 passed",
-                   "browser: started; local renderer and DNS lookup ready; page networking unavailable",
+                   "browser: started; local files, bounded HTTP, and verified TLS 1.2 HTTPS ready",
                    "browser: DNS lookup failed for example.com",
                    "browser: rejected invalid address"],
         "fail": ["*** STOP", "ERROR:", "crashed"],
@@ -332,12 +526,13 @@ CASES = {
         "entry": None,
         "disk": False,
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
                     ("shell: ready", ["sendkey meta_l", "type:browser", "sendkey ret"]),
-                    ("browser: started; local renderer and DNS lookup ready; page networking unavailable",
+                    ("browser: started; local files, bounded HTTP, and verified TLS 1.2 HTTPS ready",
                      ["type:C:\\Nexora\\Licenses\\ThirdPartyNotices.md", "sendkey ret"]),
                     ("browser: local file loaded C:\\Nexora\\Licenses\\ThirdPartyNotices.md (",
                      ["sendkey ctrl-l", "type:C:\\Nexora\\missing.html", "sendkey ret"])],
-        "expect": ["shell: 14 programs installed",
+        "expect": ["shell: 18 programs installed",
                    "browser: local file loaded C:\\Nexora\\Licenses\\ThirdPartyNotices.md (",
                    "browser: local read failed for C:\\Nexora\\missing.html"],
         "fail": ["*** STOP", "ERROR:", "crashed"],
@@ -348,12 +543,49 @@ CASES = {
         "disk": False,
         "qemu_args": ["-netdev", "user,id=net0", "-device", "e1000,netdev=net0"],
         "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
                     ("shell: ready", ["sendkey meta_l", "type:browser", "sendkey ret"]),
-                    ("browser: started; local renderer and DNS lookup ready; page networking unavailable",
+                    ("browser: started; local files, bounded HTTP, and verified TLS 1.2 HTTPS ready",
                      ["type:https://example.com", "sendkey ret"])],
         "expect": ["Network: interface eth0 registered", "DHCP: eth0 configured",
-                   "browser: DNS resolved example.com to ", "; no page fetched"],
+                   "browser: DNS resolved example.com to "],
         "fail": ["*** STOP", "crashed"],
+        "timeout": 180.0,
+    },
+    "browser-ipv4-http": {
+        "entry": None,
+        "disk": False,
+        "host_http_fixture": True,
+        "qemu_args": ["-netdev", "user,id=net0", "-device", "e1000,netdev=net0"],
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
+                    ("DHCP: eth0 configured", []),
+                    ("shell: ready", []),
+                    ("shell: unlocked", ["sendkey meta_l", "type:browser", "sendkey ret"]),
+                    ("browser: started; local files, bounded HTTP, and verified TLS 1.2 HTTPS ready",
+                     ["type:http://10.0.2.2:{host_http_port}/nat-page.html", "sendkey ret"])],
+        "expect": ["Network: interface eth0 registered", "DHCP: eth0 configured",
+                   "browser: using IPv4 literal 10.0.2.2 without DNS",
+                   "browser: loaded stylesheet http://10.0.2.2:{host_http_port}/nat-style.css (",
+                   "browser: loaded image http://10.0.2.2:{host_http_port}/nat-image.bmp (70 bytes, 2x2)",
+                   "browser: HTTP 200 loaded http://10.0.2.2:{host_http_port}/nat-page.html"],
+        "fail": ["*** STOP", "crashed"],
+        "timeout": 180.0,
+    },
+    "browser-https": {
+        "entry": None,
+        "disk": False,
+        "qemu_args": ["-netdev", "user,id=net0", "-device", "e1000,netdev=net0"],
+        "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                    ("shell: sign-in", ["sendkey ret"]),
+                    ("shell: ready", []),
+                    ("shell: unlocked", ["sendkey meta_l", "type:browser", "sendkey ret"]),
+                    ("browser: started; local files, bounded HTTP, and verified TLS 1.2 HTTPS ready",
+                     ["type:https://example.com", "sendkey ret"])],
+        "expect": ["Network: interface eth0 registered", "DHCP: eth0 configured",
+                   "browser: DNS resolved example.com to ", "browser: HTTPS 200 loaded https://example.com"],
+        "fail": ["*** STOP", "crashed", "browser: HTTPS stream ended without TLS close_notify",
+                 "browser: HTTPS transport read failed"],
         "timeout": 180.0,
     },
     "install": {
@@ -411,7 +643,7 @@ CASES = {
         "expect": ["Disk: \\Device\\Harddisk0\\Partition2 is the system partition (hz.system)",
                    "Volume: C: is \\Device\\Harddisk0\\Partition2, FAT32 'NEXORAOS'",
                    "File system self-tests: ", "[HZ] BOOT OK",
-                   "shell: 14 programs installed", "shell: settings loaded: user 'Guest', wallpaper 0, first boot",
+                   "shell: 15 programs installed", "shell: settings loaded: user 'Guest', wallpaper 0, first boot",
                    "shell: first boot: started first-boot setup", "shell: wallpaper 1 (requested)",
                    "setup: first boot done: user 'Ada', wallpaper 1 (settings saved: 0x00000000)",
                    "shell: first-boot setup finished; hello, Ada", "shell: ready"],
@@ -561,6 +793,24 @@ CASES = {
                    "[HZ] BOOT OK"],
         "fail": ["*** STOP", "BOOT DEGRADED", "ERROR:"],
     },
+    "xhci-storage": {
+        "entry": "Nexora OS (Live, verbose log)",
+        "disk": False,
+        "usb_disk": True,
+        "usb_disk_count": 2,
+        "check_usb_disk": True,
+        "qemu_args": ["-device", "qemu-xhci,id=xhci,p3=0", "-device", "usb-kbd,bus=xhci.0",
+                      "-device", "usb-storage,bus=xhci.0,drive=usbtest",
+                      "-device", "usb-storage,bus=xhci.0,drive=usbtest2"],
+        "actions": [("[HZ] HEARTBEAT", ["qmpkey:a"])],
+        "expect": ["xHCI: 00:03.0 PCI", "USB: device enumerated", "USB MSC: BOT disk 0 online",
+                   "USB MSC: BOT disk 1 online",
+                   "USB HID: boot keyboard ready", "USB HID: key 4 down",
+                   "Disk: Harddisk0 is 'USB Mass Storage (BOT)'", "Volume: D: is \\Device\\Harddisk0\\Partition1",
+                   "File system self-tests: 15/15 passed", "[HZ] BOOT OK"],
+        "fail": ["*** STOP", "BOOT DEGRADED", "USB MSC: port "],
+        "timeout": 120.0,
+    },
     "bugcheck": {
         "entry": "Diagnostics/Stop screen test (manual bug check)",
         "expect": ["*** STOP 0x000000E2 MANUALLY_INITIATED_CRASH", "KeBugCheckEx", HALTED],
@@ -661,9 +911,60 @@ CASES = {
     },
 }
 
+# Reuse the complete install-and-readback checks with QEMU's PCIe NVMe controller. This exercises
+# discovery, namespace identify, PRP-based DMA, sector reads/writes, GPT creation and Setup's copy
+# verification through the same storage stack used by real NVMe disks.
+CASES["install-nvme"] = {
+    **CASES["install"],
+    "entry": "/Install Nexora OS",
+    "disk_interface": "nvme",
+    # Boot clock tolerance is covered by the boot cases; this case isolates NVMe install I/O.
+    # Keep all installer milestones and host readback checks, while reporting degraded boot as a
+    # warning instead of obscuring whether the NVMe storage path passed.
+    "expect": [(Marker.replace("QEMU HARDDISK", "QEMU NVMe Ctrl")
+                if Marker.startswith("setup: disk 0 'QEMU HARDDISK'") else Marker)
+               for Marker in CASES["install"]["expect"] if Marker != "[HZ] BOOT OK"],
+    "defer_fail": [],
+    "defer_expect": [],
+    "fail": [Marker for Marker in CASES["install"]["fail"] if Marker != "BOOT DEGRADED"],
+    "warn_markers": ["BOOT DEGRADED"],
+    "save_disk": os.path.join("build", "test", "installed-nvme.img"),
+}
+CASES["installer-nvme"] = {
+    **CASES["installer-pnp"],
+    "disk_interface": "nvme",
+    "expect": [Marker.replace("QEMU HARDDISK", "QEMU NVMe Ctrl")
+               if Marker.startswith("setup: disk 0 'QEMU HARDDISK'") else Marker
+               for Marker in CASES["installer-pnp"]["expect"]] + ["NVMe:"],
+}
+CASES["network-e1000e"] = {
+    **CASES["network-interface"],
+    "qemu_args": ["-netdev", "user,id=net0", "-device", "e1000e,netdev=net0"],
+    "actions": [("shell: lock screen shown", ["sendkey spc"]),
+                ("shell: sign-in", ["sendkey ret"])],
+    "expect": ["Network: interface eth0 registered", "E1000: 00:02.0 8086:10D3",
+               "up link", "DHCP: eth0 configured", "shell: ready"],
+}
+
 
 def log(msg):
     print(f"[smoke] {msg}", flush=True)
+
+
+def start_host_http_fixture():
+    fixture_dir = os.path.join(ROOT, "user", "apps", "browser", "tests", "fixtures")
+
+    class FixtureHandler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=fixture_dir, **kwargs)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", 0), FixtureHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
 
 
 def build_iso(case):
@@ -685,14 +986,17 @@ def build_iso(case):
                 continue
             if line.startswith("timeout:"):
                 line = "timeout: 0"
-            elif line == "cmdline: hz.installer=1":
-                line = "cmdline: hz.desktop=1"
+            elif line.strip() == "cmdline: hz.installer=1":
+                line = "    cmdline: hz.desktop=1" + (
+                    f" {CASES[case]['cmdline']}" if CASES[case].get("cmdline") else "")
             out.append(line)
         out.extend([
             "",
             entry,
             "    protocol: limine",
             "    path: ${KERNEL}",
+            "    cmdline: hz.desktop=1" +
+            (f" {CASES[case]['cmdline']}" if CASES[case].get("cmdline") else ""),
             "    module_path: ${RAMDISK}",
             "    module_string: ramdisk",
             "    module_path: ${SYMBOLS}",
@@ -727,8 +1031,13 @@ def read_ppm(ppm_path, timeout=10.0):
     m = None
     deadline = time.time() + timeout
     while True:
-        with open(ppm_path, "rb") as f:
-            data = f.read()
+        try:
+            with open(ppm_path, "rb") as f:
+                data = f.read()
+        except OSError as error:
+            if error.errno not in (errno.ENOENT, errno.EAGAIN, errno.EWOULDBLOCK, getattr(errno, "ENODATA", -1)):
+                raise
+            data = b""
         m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+(\d+)\s", data)
         if m and len(data) >= m.end() + int(m.group(1)) * int(m.group(2)) * 3:
             break
@@ -759,7 +1068,8 @@ def ppm_to_png(ppm_path, png_path):
 
 
 def monitor_command(sock_path, command):
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    family = socket.AF_INET if isinstance(sock_path, tuple) else socket.AF_UNIX
+    s = socket.socket(family, socket.SOCK_STREAM)
     s.settimeout(10)
     s.connect(sock_path)
     s.recv(4096)  # banner
@@ -770,6 +1080,100 @@ def monitor_command(sock_path, command):
     except socket.timeout:
         pass
     s.close()
+
+
+def qmp_send_key(socket_path, key):
+    """Inject a key through QMP's input subsystem for the emulated USB keyboard."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5)
+    try:
+        sock.connect(socket_path)
+        buffered = b""
+
+        def receive_reply():
+            nonlocal buffered
+            while b"\n" not in buffered:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise RuntimeError("QMP closed while waiting for a reply")
+                buffered += chunk
+            line, buffered = buffered.split(b"\n", 1)
+            return json.loads(line)
+
+        greeting = receive_reply()
+        if "QMP" not in greeting:
+            raise RuntimeError(f"invalid QMP greeting: {greeting}")
+        sock.sendall(b'{"execute":"qmp_capabilities"}\n')
+        while "return" not in receive_reply():
+            pass
+        request = {
+            "execute": "input-send-event",
+            "arguments": {"events": [
+                {"type": "key", "data": {"down": True, "key": {"type": "qcode", "data": key}}},
+                {"type": "key", "data": {"down": False, "key": {"type": "qcode", "data": key}}},
+            ]},
+        }
+        sock.sendall((json.dumps(request) + "\n").encode())
+        while True:
+            reply = receive_reply()
+            if "error" in reply:
+                raise RuntimeError(f"QMP input-send-event failed: {reply['error']}")
+            if "return" in reply:
+                return
+    finally:
+        sock.close()
+
+
+def qmp_send_mouse(socket_path, dx, dy, button="left"):
+    """Inject relative mouse motion and one press/release through QMP."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5)
+    try:
+        sock.connect(socket_path)
+        buffered = b""
+
+        def receive_reply():
+            nonlocal buffered
+            while b"\n" not in buffered:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise RuntimeError("QMP closed while waiting for a reply")
+                buffered += chunk
+            line, buffered = buffered.split(b"\n", 1)
+            return json.loads(line)
+
+        greeting = receive_reply()
+        if "QMP" not in greeting:
+            raise RuntimeError(f"invalid QMP greeting: {greeting}")
+        sock.sendall(b'{"execute":"qmp_capabilities"}\n')
+        while "return" not in receive_reply():
+            pass
+        events = [
+            {"type": "rel", "data": {"axis": "x", "value": int(dx)}},
+            {"type": "rel", "data": {"axis": "y", "value": int(dy)}},
+        ]
+        if button != "none":
+            if button.endswith("-down"):
+                button_name, down = button[:-5], True
+                button_events = [{"type": "btn", "data": {"button": button_name, "down": down}}]
+            elif button.endswith("-up"):
+                button_name, down = button[:-3], False
+                button_events = [{"type": "btn", "data": {"button": button_name, "down": down}}]
+            else:
+                button_events = [
+                    {"type": "btn", "data": {"button": button, "down": True}},
+                    {"type": "btn", "data": {"button": button, "down": False}},
+                ]
+            events.extend(button_events)
+        sock.sendall((json.dumps({"execute": "input-send-event", "arguments": {"events": events}}) + "\n").encode())
+        while True:
+            reply = receive_reply()
+            if "error" in reply:
+                raise RuntimeError(f"QMP mouse input failed: {reply['error']}")
+            if "return" in reply:
+                return
+    finally:
+        sock.close()
 
 
 def check_disk(image, files=None):
@@ -880,15 +1284,44 @@ def run_case(case, timeout):
         if os.path.exists(os.path.join(ROOT, p)):
             os.remove(os.path.join(ROOT, p))
 
-    # Unix sockets do not work on some host-mounted filesystems (WSL drvfs), so use /tmp.
-    tmp = tempfile.mkdtemp(prefix="hz-smoke-")
-    mon = os.path.join(tmp, "monitor.sock")
+    # Keep QEMU's Unix monitor socket on a native filesystem. WSL's mounted
+    # Windows drives do not support Unix socket binding reliably.
+    temp_root = "/tmp" if os.path.isdir("/tmp") and os.path.exists("/proc/version") else os.path.join(ROOT, TEST_DIR)
+    tmp = tempfile.mkdtemp(prefix="hz-smoke-", dir=temp_root)
+    if os.environ.get("SMOKE_MONITOR_TCP") == "1":
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(("127.0.0.1", 0))
+        mon = probe.getsockname()
+        probe.close()
+        monitor = f"tcp:{mon[0]}:{mon[1]},server,nowait"
+    else:
+        mon = os.path.join(tmp, "monitor.sock")
+        monitor = f"unix:{mon},server,nowait"
     ppm = os.path.join(tmp, "screen.ppm")
     vars_copy = os.path.join(tmp, "vars.fd")
+    qmp_socket = os.path.join(tmp, "qmp.sock")
 
     env = dict(os.environ, QEMU_DISPLAY="none", QEMU_SERIAL=f"file:{serial_log}", QEMU_VARS=vars_copy)
+    if spec.get("machine"):
+        env["QEMU_MACHINE"] = spec["machine"]
+    if spec.get("disk_interface"):
+        env["QEMU_DISK_INTERFACE"] = spec["disk_interface"]
     disk = spec.get("disk", True)
     disk_copy = os.path.join(tmp, "disk.img")  # each case starts from a copy
+    usb_copy = None
+    virtio_copy = None
+    qemu_args = list(spec.get("qemu_args", []))
+    if spec.get("animevault_payload"):
+        installer = os.path.join(ROOT, TEST_DIR, "AnimeVault-Windows-x64.exe")
+        output = os.path.join(ROOT, TEST_DIR, "animevault-app-disk.img")
+        prepared = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "scripts", "prepare-animevault-disk.py"), installer, output],
+            cwd=ROOT,
+        )
+        if prepared.returncode != 0:
+            shutil.rmtree(tmp, ignore_errors=True)
+            log(f"{case}: FAIL (could not prepare the complete AnimeVault payload disk)")
+            return False
     if disk is True:
         shutil.copyfile(os.path.join(ROOT, TEST_DISK), disk_copy)
         env["QEMU_DISK"] = disk_copy
@@ -898,21 +1331,57 @@ def run_case(case, timeout):
         env["QEMU_DISK"] = disk_copy
     elif isinstance(disk, str) and disk.startswith("from:"):
         source = os.path.join(ROOT, disk[5:])
+        if spec.get("ntfs_fixture"):
+            fixture = os.path.join(ROOT, "tests", "fixtures", "ntfs-test-volume.img.gz")
+            volume = os.path.join(tmp, "ntfs-test-volume.img")
+            os.makedirs(os.path.dirname(source), exist_ok=True)
+            with gzip.open(fixture, "rb") as compressed, open(volume, "wb") as output:
+                shutil.copyfileobj(compressed, output, 1024 * 1024)
+            subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "package-ntfs-test-disk.py"),
+                            volume, source], cwd=ROOT, check=True)
         if not os.path.exists(source):
             shutil.rmtree(tmp, ignore_errors=True)
             log(f"{case}: FAIL ({disk[5:]} is missing: run the case that makes it first)")
             return False
         shutil.copyfile(source, disk_copy)
         env["QEMU_DISK"] = disk_copy
+    if spec.get("usb_disk"):
+        usb_copy = os.path.join(tmp, "usb-disk.img")
+        shutil.copyfile(os.path.join(ROOT, TEST_DISK), usb_copy)
+        qemu_args.extend(["-drive", f"file={usb_copy},if=none,id=usbtest,format=raw"])
+        if spec.get("usb_disk_count", 1) > 1:
+            usb_copy2 = os.path.join(tmp, "usb-disk-2.img")
+            shutil.copyfile(os.path.join(ROOT, TEST_DISK), usb_copy2)
+            qemu_args.extend(["-drive", f"file={usb_copy2},if=none,id=usbtest2,format=raw"])
+    if spec.get("virtio_disk"):
+        virtio_copy = os.path.join(tmp, "virtio-disk.img")
+        shutil.copyfile(os.path.join(ROOT, TEST_DISK), virtio_copy)
+        qemu_args.extend(["-drive", f"file={virtio_copy},if=none,id=vblk,format=raw"])
     if spec.get("iso", True) is False:
         iso = "none"
     if spec.get("processors"):
         env["QEMU_SMP"] = str(spec["processors"])
-    pending_actions = list(spec.get("actions", []))
+    host_http_server = None
+    host_http_thread = None
+    host_http_port = ""
+    if spec.get("host_http_fixture"):
+        try:
+            host_http_server, host_http_thread = start_host_http_fixture()
+            host_http_port = str(host_http_server.server_address[1])
+        except OSError as error:
+            shutil.rmtree(tmp, ignore_errors=True)
+            log(f"{case}: FAIL (could not start host HTTP fixture: {error})")
+            return False
+    pending_actions = [
+        (marker.replace("{host_http_port}", host_http_port),
+         [command.replace("{host_http_port}", host_http_port) for command in commands])
+        for marker, commands in spec.get("actions", [])
+    ]
     log(f"{case}: booting {iso}")
     qemu = subprocess.Popen(
-        [os.path.join("scripts", "run-qemu.sh"), iso, "-monitor", f"unix:{mon},server,nowait",
-         *spec.get("qemu_args", [])],
+        [os.path.join("scripts", "run-qemu.sh"), iso, "-monitor", monitor,
+         "-qmp", f"unix:{qmp_socket},server,nowait",
+         *qemu_args],
         cwd=ROOT, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
     ok = False
@@ -920,7 +1389,9 @@ def run_case(case, timeout):
     deferred_failure = ""
     started = time.time()
     text = ""
-    expected = list(spec["expect"])
+    expected = [marker.replace("{host_http_port}", host_http_port) for marker in spec["expect"]]
+    expected_any = [marker.replace("{host_http_port}", host_http_port)
+                    for marker in spec.get("expect_any", [])]
     try:
         while time.time() - started < spec.get("timeout", timeout):
             exited = qemu.poll() is not None
@@ -946,12 +1417,17 @@ def run_case(case, timeout):
                         name = command[len("screenshot:"):]
                         if os.path.basename(name) != name or not name.endswith(".png"):
                             raise ValueError(f"invalid screenshot name: {name!r}")
-                        monitor_command(mon, f"screendump {ppm}")
+                        monitor_command(mon, f'screendump "{ppm}"')
                         ppm_to_png(ppm, os.path.join(ROOT, TEST_DIR, name))
                     elif command.startswith("type:"):
                         for ch in command[5:]:
                             name = KEY_NAMES.get(ch, ("shift-" + ch.lower()) if ch.isupper() else ch)
                             monitor_command(mon, f"sendkey {name}")
+                    elif command.startswith("qmpkey:"):
+                        qmp_send_key(qmp_socket, command[len("qmpkey:"):])
+                    elif command.startswith("qmpmouse:"):
+                        values = command[len("qmpmouse:"):].split(":")
+                        qmp_send_mouse(qmp_socket, values[0], values[1], values[2] if len(values) > 2 else "left")
                     else:
                         monitor_command(mon, command)
             deferred = [m for m in spec.get("defer_fail", []) if m in text]
@@ -966,7 +1442,8 @@ def run_case(case, timeout):
                     deferred_failure = deferred[0]
                     ok = True
                     break
-            if all(m in text for m in expected) and counts_met and not spec.get("exit_ok"):
+            any_met = not expected_any or any(m in text for m in expected_any)
+            if all(m in text for m in expected) and any_met and counts_met and not spec.get("exit_ok"):
                 ok = True
                 break
             time.sleep(0.5)
@@ -974,7 +1451,7 @@ def run_case(case, timeout):
         if qemu.poll() is None:
             time.sleep(1.5)  # let the last frame reach the framebuffer
             try:
-                monitor_command(mon, f"screendump {ppm}")
+                monitor_command(mon, f'screendump "{ppm}"')
                 if os.path.exists(ppm):
                     ppm_to_png(ppm, os.path.join(ROOT, png))
             except OSError as e:
@@ -993,6 +1470,11 @@ def run_case(case, timeout):
             if problem:
                 ok = False
                 reason = problem
+        if ok and spec.get("check_usb_disk") and usb_copy:
+            problem = check_disk(usb_copy)
+            if problem:
+                ok = False
+                reason = f"USB disk write/readback check failed: {problem}"
         if ok and spec.get("install_checks") and "QEMU_DISK" in env:
             problem = check_install(env["QEMU_DISK"], spec["install_checks"])
             if problem:
@@ -1003,11 +1485,18 @@ def run_case(case, timeout):
         if ok and deferred_failure:
             ok = False
             reason = f"unexpected serial output: {deferred_failure!r}"
+        if host_http_server:
+            host_http_server.shutdown()
+            host_http_server.server_close()
+            host_http_thread.join(timeout=5)
         shutil.rmtree(tmp, ignore_errors=True)
 
     elapsed = time.time() - started
     if ok:
         log(f"{case}: PASS in {elapsed:.1f}s (serial: {serial_log}, screenshot: {png})")
+        for marker in spec.get("warn_markers", []):
+            if marker in text:
+                print(f"    ! system warning observed: {marker}")
         for line in text.splitlines():
             if "WARNING:" in line:
                 print(f"    ! {line.strip()}")

@@ -6,6 +6,7 @@
  */
 #include "hzmath.h"
 #include "hzui.h"
+#include "hzfile.h"
 
 namespace hzui {
 
@@ -82,7 +83,7 @@ constexpr Palette kDark = {
     .FocusStroke = 0xFFFFFFFF,
     .FocusStrokeInner = 0xB3000000,
     .KnobFill = 0xFFFFFFFF,
-    .Glass = 0x523D424F,
+    .Glass = 0xFF30343B,
     .FlyoutBackground = 0xB02B2E37,
     .HoverRow = 0x1CFFFFFF,
     .FooterBand = 0x26000000,
@@ -119,7 +120,7 @@ constexpr Palette kLight = {
     .FocusStroke = 0xFF000000,
     .FocusStrokeInner = 0xB3FFFFFF,
     .KnobFill = 0xFFFFFFFF,
-    .Glass = 0xA6EFEFF4,
+    .Glass = 0xFFF2F4F7,
     .FlyoutBackground = 0xF2FAFAFC,
     .HoverRow = 0x14000000,
     .FooterBand = 0x12000000,
@@ -176,6 +177,29 @@ void ApplyScheme(Scheme S)
 
 Scheme Current()
 {
+    return g_Scheme;
+}
+
+Color Recolor(Color Value, Scheme From, Scheme To)
+{
+    if (From == To)
+        return Value;
+    const Palette &Old = From == Scheme::Light ? kLight : kDark;
+    const Palette &New = To == Scheme::Light ? kLight : kDark;
+    static_assert(sizeof(Palette) % sizeof(Color) == 0, "palette entries must be packed colors");
+    const Color *OldColors = reinterpret_cast<const Color *>(&Old);
+    const Color *NewColors = reinterpret_cast<const Color *>(&New);
+    for (size_t Index = 0; Index < sizeof(Palette) / sizeof(Color); Index++)
+        if (Value == OldColors[Index])
+            return NewColors[Index];
+    return Value;
+}
+
+Scheme RefreshFromSettings()
+{
+    hz::fs::Settings Config;
+    if (HZ_SUCCESS(Config.Load(hz::fs::SettingsPath("shell"))))
+        ApplyScheme(Config.GetInt("Theme", 0) != 0 ? Scheme::Light : Scheme::Dark);
     return g_Scheme;
 }
 
@@ -330,7 +354,7 @@ void Painter::DrawBitmap(const Rect &Destination, const uint32_t *Pixels, int32_
         const uint32_t *Source = Pixels + (size_t)SourceY * Width;
         for (int32_t X = Area.X; X < Area.Right(); X++) {
             int32_t SourceX = (int64_t)(X - Destination.X) * Width / Destination.Width;
-            Row[X] = Source[SourceX] | 0xFF000000u;
+            Blend(&Row[X], Source[SourceX], 255);
         }
     }
 }

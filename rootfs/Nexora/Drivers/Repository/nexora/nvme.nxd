@@ -1,0 +1,11 @@
+format = nexora-driver-package-v1
+name = Nexora NVMe Storage
+provider = Nexora
+architecture = x86_64
+bus = PCIe
+hardware-ids = class:01:08:02
+source = kernel:drivers/nvme/nvme.c
+status = qemu-tested
+physical-test = not-recorded
+capabilities = identify, namespace0, read, write, gpt, setup
+firmware = none

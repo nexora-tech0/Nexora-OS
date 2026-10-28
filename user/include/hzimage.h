@@ -43,6 +43,8 @@ bool IsSupported(Format Value);
 STATUS Decode(const String &Path, Bitmap *Out);
 /* The same, from bytes already in memory. */
 STATUS DecodeMemory(const uint8_t *Data, size_t Size, Bitmap *Out);
+/* The same with a caller-selected decoded-pixel budget, checked before allocating pixel storage. */
+STATUS DecodeMemoryBounded(const uint8_t *Data, size_t Size, uint64_t MaximumPixels, Bitmap *Out);
 
 /* Why the last Decode call failed, in the decoder's own words. Never null. */
 const char *LastError();

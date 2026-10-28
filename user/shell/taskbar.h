@@ -10,13 +10,15 @@
 
 namespace shell {
 
+void ShowNotification(const char *Title, const char *Message, Icon Glyph = Icon::Info);
+
 class Taskbar final : public Window {
 public:
     explicit Taskbar(int32_t ScreenWidth);
     int64_t HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam) override;
     void Rebuild(); /* window buttons from g_Shell.Windows */
     void Refresh(); /* active indicators */
-    void ApplyTheme(); /* re-fills the tray pill after a colour-scheme switch */
+    void ApplyTheme(); /* refreshes the solid dock surface after a colour-scheme switch */
     void Reveal(); /* slide up from the bottom */
 
 protected:
@@ -24,18 +26,18 @@ protected:
     void OnPaint(Painter &P) override;
 
 private:
+    Grid *Surface_ = nullptr;
+    Element *Start_ = nullptr;
     StackPanel *Apps_;
-    StackPanel *Tray_ = nullptr;
-    Element *Clock_;
-    uint64_t ClockTimer_ = 0;
     uint64_t RevealTimer_ = 0;
+    int32_t ScreenWidth_;
     Transition Reveal_;
 };
 
 class TopDock final : public Window {
 public:
     explicit TopDock(int32_t ScreenWidth);
-    void ApplyTheme(); /* re-fills the status pill and the tray after a colour-scheme switch */
+    void ApplyTheme(); /* refreshes the opaque dock surface and tray after a colour-scheme switch */
     void Reveal(); /* slide down from the top */
 
 protected:
@@ -43,7 +45,6 @@ protected:
 
 private:
     Grid *Surface_ = nullptr;
-    Element *Status_ = nullptr;
     StackPanel *Brand_ = nullptr;
     StackPanel *Tray_ = nullptr;
     TextBlock *Name_ = nullptr;

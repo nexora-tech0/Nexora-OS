@@ -6,6 +6,7 @@
 #include "hal.h"
 #include "mm.h"
 #include "netif.h"
+#include "pci.h"
 #include "ps.h"
 #include "rtl.h"
 
@@ -149,6 +150,51 @@ STATUS NtQuerySystemInformation(const uint64_t *Args)
         Returned = Count * sizeof(Entries[0]);
         Status = MmCopyToUser(Buffer, Entries, HZ_MIN(Fit, Count) * sizeof(Entries[0]));
         if (HZ_SUCCESS(Status) && Fit < Count)
+            Status = STATUS_BUFFER_TOO_SMALL;
+    } else if (Class == HZ_SYSTEM_PCI_DEVICE_INFORMATION_CLASS) {
+        HZ_SYSTEM_PCI_DEVICE_INFORMATION Entries[HZ_MAX_PCI_DEVICES];
+        uint32_t Count = 0;
+        bool InventoryTruncated = false;
+        PCI_DEVICE *Device = PciGetDeviceList();
+        for (; Device && Count < HZ_ARRAYSIZE(Entries); Device = Device->Next) {
+            HZ_SYSTEM_PCI_DEVICE_INFORMATION *Entry = &Entries[Count++];
+            memset(Entry, 0, sizeof(*Entry));
+            Entry->VendorId = Device->VendorId;
+            Entry->DeviceId = Device->DeviceId;
+            Entry->Bus = Device->Bus;
+            Entry->Device = Device->Device;
+            Entry->Function = Device->Function;
+            Entry->Class = Device->Class;
+            Entry->Subclass = Device->Subclass;
+            Entry->ProgIf = Device->ProgIf;
+            Entry->Revision = Device->Revision;
+            if (Device->DriverState == PciDriverStarted) {
+                Entry->DriverState = HZ_PCI_DRIVER_STARTED;
+                RtlStringCopy(Entry->DriverName, sizeof(Entry->DriverName), Device->DriverName);
+            } else if (Device->DriverState == PciDriverStartFailed) {
+                Entry->DriverState = HZ_PCI_DRIVER_START_FAILED;
+                RtlStringCopy(Entry->DriverName, sizeof(Entry->DriverName), Device->DriverName);
+            } else if (Device->DriverState == PciDriverIdentityOnly) {
+                Entry->DriverState = HZ_PCI_DRIVER_IDENTITY_ONLY;
+                RtlStringCopy(Entry->DriverName, sizeof(Entry->DriverName), Device->DriverName);
+            } else if (Device->Class == 0x01 && Device->Subclass == 0x06 && Device->ProgIf == 0x01) {
+                Entry->DriverState = HZ_PCI_DRIVER_MATCH_CANDIDATE;
+                RtlStringCopy(Entry->DriverName, sizeof(Entry->DriverName), "AHCI storage");
+            } else if (Device->VendorId == 0x8086 && Device->DeviceId == 0x100E) {
+                Entry->DriverState = HZ_PCI_DRIVER_MATCH_CANDIDATE;
+                RtlStringCopy(Entry->DriverName, sizeof(Entry->DriverName), "Intel 82540EM Ethernet");
+            } else if (Device->VendorId == 0x8086 && Device->DeviceId == 0x1502) {
+                Entry->DriverState = HZ_PCI_DRIVER_IDENTITY_ONLY;
+                RtlStringCopy(Entry->DriverName, sizeof(Entry->DriverName), "Intel 82579LM (not operational)");
+            } else {
+                RtlStringCopy(Entry->DriverName, sizeof(Entry->DriverName), "No matching Nexora driver");
+            }
+        }
+        InventoryTruncated = Device != NULL;
+        uint32_t Fit = Length / sizeof(Entries[0]);
+        Returned = Count * sizeof(Entries[0]);
+        Status = MmCopyToUser(Buffer, Entries, HZ_MIN(Fit, Count) * sizeof(Entries[0]));
+        if (HZ_SUCCESS(Status) && (Fit < Count || InventoryTruncated))
             Status = STATUS_BUFFER_TOO_SMALL;
     } else {
         return STATUS_INVALID_INFO_CLASS;

@@ -38,7 +38,7 @@ ConsoleView::ConsoleView()
 {
     Focusable = true;
     ClipChildren = true;
-    Background = 0xF20C0C0E;
+    Background = Theme::SolidBackground;
     Padding = Thickness(12, 8, 4, 8);
     Bar_ = Add<ScrollBar>();
     Bar_->OnScroll = [this](int32_t Offset) {
@@ -287,7 +287,7 @@ void ConsoleView::Paint(Painter &P)
         if ((int32_t)(Row + Rows) > FirstVisible && (int32_t)Row <= LastVisible && !L.Empty()) {
             const char *Texts[1] = {L.CStr()};
             size_t Lengths[1] = {L.Length()};
-            Color Colors[1] = {0xFFD8DCE3};
+            Color Colors[1] = {Theme::TextPrimary};
             DrawLine(Row, Texts, Lengths, Colors, 1);
         }
         Row += Rows;
@@ -295,7 +295,7 @@ void ConsoleView::Paint(Painter &P)
     if (InputEnabled_ || !Partial_.Empty()) {
         const char *Texts[3] = {Partial_.CStr(), Prompt_.CStr(), Input_.CStr()};
         size_t Lengths[3] = {Partial_.Length(), InputEnabled_ ? Prompt_.Length() : 0, InputEnabled_ ? Input_.Length() : 0};
-        Color Colors[3] = {0xFFD8DCE3, Theme::Accent, Theme::TextPrimary};
+        Color Colors[3] = {Theme::TextPrimary, Theme::Accent, Theme::TextPrimary};
         DrawLine(Row, Texts, Lengths, Colors, 3);
     }
     bool Focused = IsFocused() && GetWindow() && GetWindow()->IsActive();

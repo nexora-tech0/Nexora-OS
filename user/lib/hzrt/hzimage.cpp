@@ -150,7 +150,12 @@ const char *LastError()
 
 STATUS DecodeMemory(const uint8_t *Data, size_t Size, Bitmap *Out)
 {
-    if (!Data || !Out || Size == 0)
+    return DecodeMemoryBounded(Data, Size, kMaxPixels, Out);
+}
+
+STATUS DecodeMemoryBounded(const uint8_t *Data, size_t Size, uint64_t MaximumPixels, Bitmap *Out)
+{
+    if (!Data || !Out || Size == 0 || MaximumPixels == 0 || MaximumPixels > kMaxPixels)
         return STATUS_INVALID_PARAMETER;
     Out->Release();
     if (Size > (size_t)kMaxFileBytes)
@@ -159,12 +164,18 @@ STATUS DecodeMemory(const uint8_t *Data, size_t Size, Bitmap *Out)
         return STATUS_INVALID_PARAMETER;
 
     int Width = 0, Height = 0, SourceChannels = 0;
+    if (!stbi_info_from_memory(Data, (int)Size, &Width, &Height, &SourceChannels) ||
+        Width <= 0 || Height <= 0)
+        return STATUS_UNSUCCESSFUL;
+    if ((uint64_t)Width * (uint64_t)Height > MaximumPixels)
+        return STATUS_FILE_TOO_LARGE;
+
     stbi_uc *Rgba = stbi_load_from_memory(Data, (int)Size, &Width, &Height, &SourceChannels, 4);
     if (!Rgba)
         return STATUS_UNSUCCESSFUL;
-    if (Width <= 0 || Height <= 0 || (uint64_t)Width * (uint64_t)Height > kMaxPixels) {
+    if (Width <= 0 || Height <= 0 || (uint64_t)Width * (uint64_t)Height > MaximumPixels) {
         stbi_image_free(Rgba);
-        return Width <= 0 || Height <= 0 ? STATUS_UNSUCCESSFUL : STATUS_INVALID_PARAMETER;
+        return Width <= 0 || Height <= 0 ? STATUS_UNSUCCESSFUL : STATUS_FILE_TOO_LARGE;
     }
 
     uint32_t *Pixels = (uint32_t *)malloc((size_t)Width * (size_t)Height * sizeof(uint32_t));

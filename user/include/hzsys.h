@@ -63,10 +63,62 @@ STATUS NtCreateProcessEx(const char *ImagePath, const char *CommandLine, const H
 STATUS NtOpenProcess(HANDLE *Process, ACCESS_MASK Access, uint32_t ProcessId);
 /* Synchronous IPv4 A-record lookup using the configured DNS server. */
 STATUS NtResolveHostA(const char *HostName, uint8_t Ipv4Address[4]);
+STATUS NtTcpConnect(uint32_t IPv4Address, uint16_t Port, HZ_TCP_HANDLE *Connection);
+STATUS NtTcpSend(HZ_TCP_HANDLE Connection, const void *Buffer, uint32_t Length, uint32_t *BytesSent);
+STATUS NtTcpReceive(HZ_TCP_HANDLE Connection, void *Buffer, uint32_t Capacity, uint64_t TimeoutUs,
+                    uint32_t *BytesReceived);
+STATUS NtTcpClose(HZ_TCP_HANDLE Connection);
+/* Fills 1..HZ_RANDOM_MAX_BYTES using CPU RDRAND only; returns STATUS_NOT_SUPPORTED if absent. */
+STATUS NtGenerateRandomBytes(void *Buffer, uint32_t Length);
+/* Returns a bounded, human-readable compatibility report for an image path. */
+STATUS NtQueryWinCompatReport(const char *ImagePath, char *Buffer, uint32_t Capacity);
+
+/* Kernel-backed cryptographic random bytes. No time, TSC, process, or software fallback is used.
+   Requests are bounded to HZ_RANDOM_MAX_BYTES. Unsupported RDRAND returns STATUS_NOT_SUPPORTED;
+   if the instruction exhausts its bounded retries, STATUS_UNSUCCESSFUL is returned. */
+static inline STATUS HzGenerateRandomBytes(void *Buffer, uint32_t Length)
+{
+    return NtGenerateRandomBytes(Buffer, Length);
+}
 
 static inline STATUS HzResolveHostA(const char *HostName, uint8_t Ipv4Address[4])
 {
     return NtResolveHostA(HostName, Ipv4Address);
+}
+
+/* Minimal IPv4 TCP client API. IPv4Address is written in network-order notation
+   (for example 0xC0000201 for 192.0.2.1). Connect returns a positive socket token on success or
+   a negative STATUS on failure. Receive timeout is in milliseconds; zero waits indefinitely.
+   Receive returns STATUS_SUCCESS and zero BytesReceived after the peer closes its write side.
+   Send/receive calls transfer no more than 4096 bytes per call. Sockets are process-owned opaque
+   tokens, not pointers; connect and send use a six-second timeout, and close invalidates the
+   token even if graceful shutdown times out (up to eight seconds). */
+#define HZ_TCP_DEFAULT_TIMEOUT_US 6000000ull
+#define HZ_TCP_MAX_TRANSFER 4096u
+
+static inline HZ_TCP_HANDLE HzTcpConnect(uint32_t IPv4Address, uint16_t Port)
+{
+    HZ_TCP_HANDLE Connection = HZ_TCP_INVALID_HANDLE;
+    STATUS Status = NtTcpConnect(IPv4Address, Port, &Connection);
+    return HZ_SUCCESS(Status) ? Connection : (HZ_TCP_HANDLE)Status;
+}
+
+static inline STATUS HzTcpSend(HZ_TCP_HANDLE Connection, const void *Buffer, uint32_t Length,
+                               uint32_t *BytesSent)
+{
+    return NtTcpSend(Connection, Buffer, Length, BytesSent);
+}
+
+static inline STATUS HzTcpReceive(HZ_TCP_HANDLE Connection, void *Buffer, uint32_t Capacity,
+                                  uint32_t TimeoutMs, uint32_t *BytesReceived)
+{
+    uint64_t TimeoutUs = (uint64_t)TimeoutMs * 1000ull;
+    return NtTcpReceive(Connection, Buffer, Capacity, TimeoutUs, BytesReceived);
+}
+
+static inline STATUS HzTcpClose(HZ_TCP_HANDLE Connection)
+{
+    return NtTcpClose(Connection);
 }
 
 /* ---- Runtime (user/lib/hzrt) ------------------------------------------------------------------- */

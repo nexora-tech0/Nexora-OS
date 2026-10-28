@@ -817,19 +817,12 @@ uint32_t InstallThread(void *Parameter)
 
 class Wizard;
 
-/* Windows 11 Setup paints its pages on a bloom of light over a deep, even background; this is the
-   same backdrop in the current colour scheme, and it covers the whole window as the first child. */
+/* Opaque, quiet setup canvas; the live wallpaper never shows through installer pages. */
 class SetupBackdrop final : public Element {
 public:
     void Paint(Painter &P) override
     {
-        const Rect &B = Bounds();
-        bool Light = Theme::Current() == Theme::Scheme::Light;
-        P.FillVerticalGradient(B, 0.0f, Light ? 0xFFF7F8FB : 0xFF191C26, Light ? 0xFFE2E6EF : 0xFF0B0D13);
-        /* The bloom: wide, very soft rings of the accent colour, brightest near the wordmark. */
-        float Cx = B.X + B.Width * 0.78f, Cy = B.Y + B.Height * 0.10f;
-        for (int32_t i = 7; i >= 1; i--)
-            P.FillCircle(Cx, Cy, 34.0f + 26.0f * i, ScaleAlpha(Theme::Accent, Light ? 0.020f : 0.030f));
+        P.FillRect(Bounds(), Theme::SolidBackground);
     }
 };
 
@@ -853,9 +846,9 @@ public:
 
 class WizardWindow final : public Window {
 public:
-    /* Borderless and large, like the Windows 11 setup experience: the page is the window. */
-    WizardWindow(Wizard *Owner, const char *Title)
-        : Window(Title, 900, 620, HZ_WS_NOFRAME | HZ_WS_VISIBLE), Owner_(Owner)
+    /* A full-screen opaque canvas keeps the live desktop and its wallpaper out of the setup flow. */
+    WizardWindow(Wizard *Owner, const char *Title, int32_t Width, int32_t Height)
+        : Window(Title, Width, Height, HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOFRAME | HZ_WS_VISIBLE), Owner_(Owner)
     {
     }
     int64_t HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam) override;
@@ -886,11 +879,14 @@ protected:
     Window *Main_ = nullptr;
     TextBlock *Title_ = nullptr, *Step_ = nullptr;
     Grid *Pages_ = nullptr;
-    hz::Vector<StackPanel *> PageList_;
+    hz::Vector<ScrollViewer *> PageList_;
     size_t Page_ = 0;
     size_t StartPage_ = 0; /* where Create() opens the wizard; a first-boot wizard resumes here */
     Button *Back_ = nullptr, *Cancel_ = nullptr, *Primary_ = nullptr, *Secondary_ = nullptr;
+    StackPanel *Navigation_ = nullptr;
+    hz::Vector<TextBlock *> NavigationLabels_;
     hz::Vector<const char *> Titles_;
+    int32_t PageWidth_ = 640;
 };
 
 int64_t WizardWindow::HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam)
@@ -912,43 +908,67 @@ int64_t WizardWindow::HandleMessage(uint32_t Message, uint64_t WParam, uint64_t 
 
 bool Wizard::Create(const char *Title)
 {
-    Main_ = new WizardWindow(this, Title);
+    HZ_DISPLAY_INFO Display = {};
+    STATUS DisplayStatus = NtUserGetDisplayInfo(&Display);
+    int32_t Width = HZ_SUCCESS(DisplayStatus) && Display.Width >= 640 ? (int32_t)Display.Width : 900;
+    int32_t Height = HZ_SUCCESS(DisplayStatus) && Display.Height >= 480 ? (int32_t)Display.Height : 620;
+    /* Keep the navigation rail on wide displays; reclaim it on compact screens. */
+    int32_t RailWidth = Width >= 1120 ? 286 : Width >= 800 ? 220 : 0;
+    int32_t ContentInset = RailWidth ? 96 : 56;
+    PageWidth_ = hz::Min(760, hz::Max(280, Width - RailWidth - ContentInset));
+    Main_ = new WizardWindow(this, Title, Width, Height);
     Grid *Root = new Grid();
-    Root->Rows.Push(GridLength::AutoSize()); /* the product mark and the step */
-    Root->Rows.Push(GridLength::AutoSize()); /* the page title */
-    Root->Rows.Push(GridLength::Stars(1));   /* the page */
-    Root->Rows.Push(GridLength::AutoSize()); /* Back and the primary button */
+    Root->Columns.Push(GridLength::Pixels(RailWidth));
+    Root->Columns.Push(GridLength::Stars(1));
+    Root->Rows.Push(GridLength::Stars(1));
+    Root->Background = Theme::SolidBackground;
 
     SetupBackdrop *Backdrop = Root->Add<SetupBackdrop>();
-    Backdrop->GridRowSpan = 4;
+    Backdrop->GridColumnSpan = 2;
 
-    Grid *Masthead = Root->Add<Grid>();
-    Masthead->Padding = Thickness(56, 44, 56, 0);
+    StackPanel *Rail = Root->Add<StackPanel>(Orientation::Vertical, 16);
+    Rail->GridColumn = 0;
+    Rail->SetVisible(RailWidth != 0);
+    Rail->Background = Theme::CardBackground;
+    Rail->Padding = Thickness(28, 30);
+    Rail->Add<LogoMark>();
+    TextBlock *Brand = Rail->Add<TextBlock>("Nexora OS", FontRole::Subtitle);
+    Brand->Foreground = Theme::TextPrimary;
+    TextBlock *BrandCopy = Rail->Add<TextBlock>("A focused setup for your computer", FontRole::Caption);
+    BrandCopy->Foreground = Theme::TextSecondary;
+    Navigation_ = Rail->Add<StackPanel>(Orientation::Vertical, 10);
+
+    Grid *Content = Root->Add<Grid>();
+    Content->GridColumn = 1;
+    Content->Rows.Push(GridLength::AutoSize()); /* step */
+    Content->Rows.Push(GridLength::AutoSize()); /* title */
+    Content->Rows.Push(GridLength::Stars(1));   /* page */
+    Content->Rows.Push(GridLength::AutoSize()); /* actions */
+
+    Grid *Masthead = Content->Add<Grid>();
+    Masthead->Padding = Thickness(RailWidth ? 48 : 28, 40, RailWidth ? 48 : 28, 0);
     Masthead->Columns.Push(GridLength::AutoSize());
     Masthead->Columns.Push(GridLength::Stars(1));
     Masthead->Columns.Push(GridLength::AutoSize());
-    StackPanel *Brand = Masthead->Add<StackPanel>(Orientation::Horizontal, 10);
-    Brand->VerticalAlignment = Align::Center;
-    Brand->Add<LogoMark>();
-    TextBlock *Product = Brand->Add<TextBlock>("Nexora OS", FontRole::BodyStrong);
+    TextBlock *Product = Masthead->Add<TextBlock>("DEVICE SETUP", FontRole::Caption);
     Product->VerticalAlignment = Align::Center;
-    Product->Foreground = Theme::TextPrimary;
+    Product->Foreground = Theme::TextSecondary;
     Step_ = Masthead->Add<TextBlock>("", FontRole::Caption);
     Step_->GridColumn = 2;
     Step_->VerticalAlignment = Align::Center;
     Step_->Foreground = Theme::TextSecondary;
 
-    Title_ = Root->Add<TextBlock>("", FontRole::Display);
+    Title_ = Content->Add<TextBlock>("", FontRole::Display);
     Title_->GridRow = 1;
-    Title_->Margin = Thickness(56, 26, 56, 0);
+    Title_->Margin = Thickness(RailWidth ? 48 : 28, 26, RailWidth ? 48 : 28, 0);
 
-    Pages_ = Root->Add<Grid>();
+    Pages_ = Content->Add<Grid>();
     Pages_->GridRow = 2;
-    Pages_->Padding = Thickness(56, 18, 56, 18);
+    Pages_->Padding = Thickness(RailWidth ? 48 : 28, 18, RailWidth ? 48 : 28, 18);
 
-    Grid *Bar = Root->Add<Grid>();
+    Grid *Bar = Content->Add<Grid>();
     Bar->GridRow = 3;
-    Bar->Padding = Thickness(56, 0, 56, 44);
+    Bar->Padding = Thickness(RailWidth ? 48 : 28, 0, RailWidth ? 48 : 28, 34);
     Bar->Columns.Push(GridLength::Stars(1));
     Bar->Columns.Push(GridLength::AutoSize());
     Cancel_ = Bar->Add<Button>("Cancel setup", ButtonStyle::Subtle);
@@ -976,8 +996,17 @@ bool Wizard::Create(const char *Title)
         }
     };
     Build();
+    NavigationLabels_.Clear();
+    Navigation_->ClearChildren();
+    for (size_t I = 0; I < Titles_.Size(); I++) {
+        TextBlock *Label = Navigation_->Add<TextBlock>(hz::String::Format("%02zu   %s", I + 1, Titles_[I]).CStr(),
+                                                       FontRole::Body);
+        Label->Wrap = true;
+        Label->Foreground = Theme::TextTertiary;
+        NavigationLabels_.Push(Label);
+    }
     ShowPage(StartPage_ < PageList_.Size() ? StartPage_ : 0);
-    if (!Main_->Show())
+    if (!Main_->ShowAt(0, 0))
         return false;
     Main_->SetFocus(Primary_);
     return true;
@@ -985,13 +1014,19 @@ bool Wizard::Create(const char *Title)
 
 StackPanel *Wizard::AddPage()
 {
-    StackPanel *P = Pages_->Add<StackPanel>(Orientation::Vertical, 14);
-    /* Left-aligned in a column of a readable width, as Windows Setup lays its pages out. */
-    P->Width = 640;
+    ScrollViewer *Viewport = Pages_->Add<ScrollViewer>();
+    Viewport->Width = PageWidth_;
+    Viewport->HorizontalAlignment = Align::Start;
+    Viewport->VerticalAlignment = Align::Start;
+    Viewport->SetVisible(false);
+
+    StackPanel *P = new StackPanel(Orientation::Vertical, 14);
+    /* Left-align page content in a readable column. */
+    P->Width = PageWidth_;
     P->HorizontalAlignment = Align::Start;
     P->VerticalAlignment = Align::Start;
-    P->SetVisible(false);
-    PageList_.Push(P);
+    Viewport->SetContent(P);
+    PageList_.Push(Viewport);
     return P;
 }
 
@@ -1008,6 +1043,8 @@ void Wizard::ShowPage(size_t Index)
     for (size_t i = 0; i < PageList_.Size(); i++)
         PageList_[i]->SetVisible(i == Index);
     Page_ = Index;
+    for (size_t I = 0; I < NavigationLabels_.Size(); I++)
+        NavigationLabels_[I]->Foreground = I == Index ? Theme::Accent : Theme::TextTertiary;
     Title_->SetText(Index < Titles_.Size() ? Titles_[Index] : "");
     Step_->SetText(hz::String::Format("Step %zu of %zu", Index + 1, PageList_.Size()).CStr());
     Main_->InvalidateLayout();
@@ -1125,6 +1162,9 @@ protected:
         StackPanel *Choose = AddPage();
         Paragraph(Choose, "Select the disk to install Nexora OS on. Disks that are in use or too small cannot be "
                           "selected.");
+        Paragraph(Choose, "Setup lists storage devices detected by Nexora's built-in drivers. Windows driver "
+                          "packages cannot be installed by this setup; unsupported hardware will not appear here.",
+                  Theme::TextSecondary);
         List_ = Choose->Add<ListView>();
         List_->Height = 220;
         List_->ItemHeight = 56;
@@ -1150,6 +1190,55 @@ protected:
         Refresh->Glyph = Icon::Refresh;
         Refresh->HorizontalAlignment = Align::Start;
         Refresh->OnClick = [this]() { Scan(); };
+
+        TextBlock *Hardware = Paragraph(Choose, "Checking detected hardware…", Theme::TextSecondary);
+        Hardware->Font = FontRole::Caption;
+        HZ_SYSTEM_PCI_DEVICE_INFORMATION PciDevices[HZ_MAX_PCI_DEVICES];
+        uint32_t PciBytes = 0;
+        STATUS PciStatus = NtQuerySystemInformation(HZ_SYSTEM_PCI_DEVICE_INFORMATION_CLASS, PciDevices,
+                                                     sizeof(PciDevices), &PciBytes);
+        if (HZ_SUCCESS(PciStatus) || PciStatus == STATUS_BUFFER_TOO_SMALL) {
+            size_t PciCount = hz::Min((size_t)(PciBytes / sizeof(PciDevices[0])), HZ_ARRAYSIZE(PciDevices));
+            uint32_t Started = 0, Failed = 0, Unmatched = 0;
+            hz::String Summary = hz::String::Format("Hardware detected: %u PCI function(s).\n", (uint32_t)PciCount);
+            for (size_t I = 0; I < PciCount; I++) {
+                const HZ_SYSTEM_PCI_DEVICE_INFORMATION &D = PciDevices[I];
+                if (D.DriverState == HZ_PCI_DRIVER_STARTED) {
+                    Started++;
+                    Summary += hz::String::Format("%s — driver running (%02X:%02X.%u)\n", D.DriverName,
+                                                   (uint32_t)D.Bus, (uint32_t)D.Device, (uint32_t)D.Function);
+                } else if (D.DriverState == HZ_PCI_DRIVER_START_FAILED) {
+                    Failed++;
+                    Summary += hz::String::Format("%s — driver failed to start (%04X:%04X)\n", D.DriverName,
+                                                   (uint32_t)D.VendorId, (uint32_t)D.DeviceId);
+                } else if (D.DriverState == HZ_PCI_DRIVER_MATCH_CANDIDATE) {
+                    Summary += hz::String::Format("%s — built-in driver match (%04X:%04X)\n", D.DriverName,
+                                                   (uint32_t)D.VendorId, (uint32_t)D.DeviceId);
+                } else if (D.DriverState == HZ_PCI_DRIVER_IDENTITY_ONLY) {
+                    Summary += hz::String::Format("%s — detected, no operational driver (%04X:%04X)\n",
+                                                   D.DriverName, (uint32_t)D.VendorId, (uint32_t)D.DeviceId);
+                } else {
+                    Unmatched++;
+                    Summary += hz::String::Format("No Nexora driver for %04X:%04X (class %02X:%02X:%02X)\n",
+                                                   (uint32_t)D.VendorId, (uint32_t)D.DeviceId, (uint32_t)D.Class,
+                                                   (uint32_t)D.Subclass, (uint32_t)D.ProgIf);
+                }
+            }
+            if (PciCount == 0)
+                Summary += "No PCI functions were reported by firmware.\n";
+            if (PciStatus == STATUS_BUFFER_TOO_SMALL)
+                Summary += "Hardware list is truncated at the supported inventory limit.\n";
+            Summary += hz::String::Format("Drivers running: %u; failed: %u; unmatched: %u.\n",
+                                           Started, Failed, Unmatched);
+            Summary += "Only disks with a working built-in storage driver appear above.\n";
+            Hardware->SetText(Summary.CStr());
+            HzPrint("setup: hardware inventory %u device(s), %u driver(s) started, %u failed, %u unmatched",
+                    (uint32_t)PciCount, Started, Failed, Unmatched);
+        } else {
+            Hardware->SetText(hz::String::Format("Hardware inventory unavailable (0x%08X).",
+                                                 (uint32_t)PciStatus).CStr());
+            HzPrint("setup: PCI inventory query failed (0x%08X)", (uint32_t)PciStatus);
+        }
 
         StackPanel *Confirm = AddPage();
         Summary_ = Paragraph(Confirm, "", Theme::TextPrimary);
@@ -1938,6 +2027,21 @@ private:
         Shell.SetInt("ShortcutTerminal", 1);
         Shell.SetInt("ShortcutBrowser", 1);
         Shell.SetInt("ShortcutTrash", 1);
+        hz::String DesktopShortcuts;
+        for (size_t I = 0; I < AppNames_.Size(); I++) {
+            if (!AppBoxes_[I]->IsChecked())
+                continue;
+            const char *Id = AppNames_[I] == "Files" ? "files" :
+                             AppNames_[I] == "Terminal" ? "terminal" :
+                             AppNames_[I] == "Browser" ? "browser" : nullptr;
+            if (!Id)
+                continue;
+            if (!DesktopShortcuts.Empty())
+                DesktopShortcuts.Append(',');
+            DesktopShortcuts.Append(Id);
+        }
+        Shell.Set("DesktopShortcuts", DesktopShortcuts.CStr());
+        Shell.SetInt("DesktopShortcutsConfigured", 1);
         Shell.SetInt("SetupPage", 0); /* onboarding is finished; later boots must not resume it */
         bool Password = !Password_->Text().Empty();
         if (Password) {

@@ -13,9 +13,9 @@ namespace shell {
 using namespace hzui;
 
 enum class WidgetSize : uint8_t {
-    Small,  /* 155 x 155 */
-    Medium, /* 329 x 155 */
-    Large   /* 329 x 345 */
+    Small,  /* 164 x 156 */
+    Medium, /* 300 x 168 */
+    Large   /* 320 x 280 */
 };
 
 enum class WidgetSurface : uint8_t { Desktop, Lock };
@@ -102,7 +102,7 @@ class WidgetHost final : public Element {
 public:
     explicit WidgetHost(WidgetSurface Surface = WidgetSurface::Desktop);
     WidgetSurface Surface() const { return Surface_; }
-    void AddWidget(Widget *W);
+    void AddWidget(Widget *W, bool PlaceInFreeArea = false);
     void RemoveWidget(Widget *W);
     void RefreshPrefs();
 

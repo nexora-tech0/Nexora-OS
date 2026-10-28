@@ -116,6 +116,7 @@ typedef struct _HZ_MSG {
 #define HZ_WM_CAPTIONSTATE 0x0091  /* WParam = hot button | pressed button << 8 (HZ_CAPTION_BUTTON_*) */
 #define HZ_WM_SHELLNOTIFY 0x0092   /* to the shell window: WParam = HZ_SHELL_*, LParam = HWND or detail */
 #define HZ_WM_SHELLREQUEST 0x0093  /* from programs to the shell window (GetShellWindow): HZ_SHELL_REQUEST_* */
+#define HZ_WM_THEMECHANGED 0x031A /* WParam = new scheme (0 dark, 1 light), LParam = previous scheme */
 #define HZ_WM_KEYDOWN 0x0100       /* WParam = virtual key, LParam = HZ key data */
 #define HZ_WM_KEYUP 0x0101
 #define HZ_WM_CHAR 0x0102          /* WParam = character (US layout), LParam = HZ key data */
@@ -169,6 +170,10 @@ typedef struct _HZ_MSG {
 #define HZ_SHELL_REQUEST_LOCK 3u      /* M11: show the lock screen */
 #define HZ_SHELL_REQUEST_SHUTDOWN 4u  /* M11: close the programs, then LParam = HZ_SHUTDOWN_* */
 #define HZ_SHELL_REQUEST_LOCK_WALLPAPER 5u /* LParam = independent lock-screen wallpaper index */
+#define HZ_SHELL_REQUEST_NOTIFICATION 6u /* LParam = HZ_NOTIFICATION_* event id */
+#define HZ_NOTIFICATION_APP_INSTALLED 1u
+#define HZ_NOTIFICATION_FILE_COMPLETE 2u
+#define HZ_NOTIFICATION_ARCHIVE_COMPLETE 3u
 
 #define HZ_MAX_WALLPAPER 4u          /* The five bundled Nexora wallpaper images, indexed 0..4 */
 #define HZ_WALLPAPER_AUTO (HZ_MAX_WALLPAPER + 1u) /* automatic boot wallpaper; display info only */

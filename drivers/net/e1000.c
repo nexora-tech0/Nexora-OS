@@ -1,8 +1,8 @@
 /*
  * Nexora OS - drivers/net/e1000.c
- * Polled Intel 82540EM Ethernet controller (PCI 8086:100E), the adapter VirtualBox presents as
- * its Intel PRO/1000 MT Desktop device. The protocol stack owns polling and packet scheduling;
- * this driver only initializes the hardware and moves bounded Ethernet frames through DMA rings.
+ * Polled Intel 82540EM (PCI 8086:100E) and 82574L (PCI 8086:10D3) Ethernet controllers. The
+ * protocol stack owns polling and packet scheduling; this driver initializes hardware and moves
+ * bounded Ethernet frames through DMA rings.
  */
 #include "ex.h"
 #include "hal.h"
@@ -15,7 +15,12 @@
 
 #define E1000_TAG HZ_POOL_TAG('E', '1', 'K', ' ')
 #define E1000_VENDOR_ID 0x8086
-#define E1000_DEVICE_ID 0x100E
+#define E1000_DEVICE_ID_82540EM 0x100E
+#define E1000_DEVICE_ID_82574L 0x10D3
+#define E1000_DEVICE_ID_82579LM 0x1502
+#define E1000_82579_SUBVENDOR 0x1028
+#define E1000_82579_SUBDEVICE 0x052C
+#define E1000_82579_REVISION 0x04
 #define E1000_RING_COUNT 64
 #define E1000_BUFFER_SIZE 2048
 #define E1000_RING_PAGES 1
@@ -124,16 +129,44 @@ static bool E1000ReadEeprom(E1000_ADAPTER *Adapter, uint8_t Address, uint16_t *V
     return false;
 }
 
+static bool E1000ValidMac(const uint8_t Mac[6])
+{
+    return !(Mac[0] & 1) && (Mac[0] | Mac[1] | Mac[2] | Mac[3] | Mac[4] | Mac[5]) != 0;
+}
+
 static bool E1000ReadMac(E1000_ADAPTER *Adapter, uint8_t Mac[6])
 {
+    /* The 82574L exposes its NVM-loaded address in RAL/RAH after reset. Its EERD behavior is not
+       identical to the 82540EM, so consume that initialized address first for this MAC. */
+    if (Adapter->Pci->DeviceId == E1000_DEVICE_ID_82574L ||
+        Adapter->Pci->DeviceId == E1000_DEVICE_ID_82579LM) {
+        uint32_t Low = E1000Read(Adapter, E1000_REG_RAL);
+        uint32_t High = E1000Read(Adapter, E1000_REG_RAH);
+        Mac[0] = (uint8_t)Low;
+        Mac[1] = (uint8_t)(Low >> 8);
+        Mac[2] = (uint8_t)(Low >> 16);
+        Mac[3] = (uint8_t)(Low >> 24);
+        Mac[4] = (uint8_t)High;
+        Mac[5] = (uint8_t)(High >> 8);
+        if ((High & (1u << 31)) && E1000ValidMac(Mac))
+            return true;
+        DbgPrintEx(DPFLTR_WARNING_LEVEL, "E1000: %04x address registers invalid (RAL=%08x RAH=%08x), trying EEPROM\n",
+                   Adapter->Pci->DeviceId,
+                   Low, High);
+    }
+
     for (uint8_t i = 0; i < 3; i++) {
         uint16_t Word;
         if (!E1000ReadEeprom(Adapter, i, &Word))
+        {
+            DbgPrintEx(DPFLTR_WARNING_LEVEL, "E1000: EEPROM read timed out at word %u (EERD=%08x)\n", i,
+                       E1000Read(Adapter, E1000_REG_EERD));
             return false;
+        }
         Mac[i * 2] = (uint8_t)Word;
         Mac[i * 2 + 1] = (uint8_t)(Word >> 8);
     }
-    return !(Mac[0] & 1) && (Mac[0] | Mac[1] | Mac[2] | Mac[3] | Mac[4] | Mac[5]) != 0;
+    return E1000ValidMac(Mac);
 }
 
 static bool E1000LinkUp(NET_INTERFACE *Interface)
@@ -301,23 +334,43 @@ static void E1000Initialize(E1000_ADAPTER *Adapter)
 
 static STATUS E1000DriverEntry(DRIVER_OBJECT *Driver)
 {
+    (void)Driver;
     uint32_t Found = 0;
     for (PCI_DEVICE *Pci = PciGetDeviceList(); Pci; Pci = Pci->Next) {
-        if (Pci->VendorId != E1000_VENDOR_ID || Pci->DeviceId != E1000_DEVICE_ID)
+        bool Is82540Em = Pci->VendorId == E1000_VENDOR_ID && Pci->DeviceId == E1000_DEVICE_ID_82540EM;
+        bool Is82574L = Pci->VendorId == E1000_VENDOR_ID && Pci->DeviceId == E1000_DEVICE_ID_82574L;
+        bool Is82579Lm = Pci->VendorId == E1000_VENDOR_ID && Pci->DeviceId == E1000_DEVICE_ID_82579LM;
+        if (Is82579Lm) {
+            uint32_t Subsystem = PciReadConfig32(Pci, 0x2C);
+            Is82579Lm = Pci->Revision == E1000_82579_REVISION &&
+                        (uint16_t)Subsystem == E1000_82579_SUBVENDOR &&
+                        (uint16_t)(Subsystem >> 16) == E1000_82579_SUBDEVICE;
+        }
+        if (!Is82540Em && !Is82574L && !Is82579Lm) {
+            if (Pci->Class == 0x02 && Pci->VendorId == E1000_VENDOR_ID)
+                DbgPrintEx(DPFLTR_WARNING_LEVEL, "E1000: unsupported network controller %04x:%04x at %02x:%02x.%u\n",
+                           Pci->VendorId, Pci->DeviceId, Pci->Bus, Pci->Device, Pci->Function);
             continue;
+        }
+        const char *Model = Is82579Lm ? "Intel 82579LM Ethernet (experimental)" :
+                            Is82574L ? "Intel 82574L Ethernet" : "Intel 82540EM Ethernet";
         if (!Pci->Bar[0] || Pci->BarIsIo[0] || Pci->BarSize[0] < 0x6000) {
             DbgPrintEx(DPFLTR_WARNING_LEVEL, "E1000: %02x:%02x.%u has an unusable BAR0\n", Pci->Bus, Pci->Device,
                        Pci->Function);
+            PciSetDriverStatus(Pci, PciDriverStartFailed, Model);
             continue;
         }
         E1000_ADAPTER *Adapter = ExAllocatePoolZero(NonPagedPool, sizeof(*Adapter), E1000_TAG);
-        if (!Adapter)
+        if (!Adapter) {
+            PciSetDriverStatus(Pci, PciDriverStartFailed, Model);
             return Found ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
+        }
         Adapter->Pci = Pci;
         Adapter->RxDmaPfn = Adapter->TxDmaPfn = MM_INVALID_PFN;
         Adapter->Registers = MmMapIoSpace(Pci->Bar[0], 0x6000, MM_CACHE_UNCACHED);
         if (!Adapter->Registers) {
             ExFreePoolWithTag(Adapter, E1000_TAG);
+            PciSetDriverStatus(Pci, PciDriverStartFailed, Model);
             continue;
         }
         PciEnableDevice(Pci, PCI_COMMAND_MEMORY | PCI_COMMAND_BUS_MASTER);
@@ -331,6 +384,7 @@ static STATUS E1000DriverEntry(DRIVER_OBJECT *Driver)
         if (Adapter->RxDmaPfn == MM_INVALID_PFN || Adapter->TxDmaPfn == MM_INVALID_PFN) {
             E1000ReleaseDma(Adapter);
             ExFreePoolWithTag(Adapter, E1000_TAG);
+            PciSetDriverStatus(Pci, PciDriverStartFailed, Model);
             continue;
         }
         STATUS Status = NetRegisterInterface(&Adapter->Interface);
@@ -339,9 +393,12 @@ static STATUS E1000DriverEntry(DRIVER_OBJECT *Driver)
                        Adapter->Interface.Name, (uint32_t)Status);
             E1000ReleaseDma(Adapter);
             ExFreePoolWithTag(Adapter, E1000_TAG);
+            PciSetDriverStatus(Pci, PciDriverStartFailed, Model);
             continue;
         }
-        DbgPrint("E1000: %02x:%02x.%u 8086:100E, %s link\n", Pci->Bus, Pci->Device, Pci->Function,
+        PciSetDriverStatus(Pci, PciDriverStarted, Model);
+        DbgPrint("E1000: %02x:%02x.%u 8086:%04X (%s), %s link\n", Pci->Bus, Pci->Device, Pci->Function,
+                 Pci->DeviceId, Model,
                  E1000LinkUp(&Adapter->Interface) ? "up" : "down");
         Found++;
     }

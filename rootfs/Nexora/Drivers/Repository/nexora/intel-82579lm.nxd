@@ -1,0 +1,13 @@
+format = nexora-driver-package-v1
+name = Nexora Intel 82579LM Ethernet (Experimental)
+provider = Nexora
+architecture = x86_64
+bus = PCI
+hardware-ids = 8086:1502
+source = kernel:drivers/net/e1000.c
+status = experimental
+physical-test = not-tested
+match-policy = subsystem-1028:052C-revision-04
+capabilities = ethernet-registers, dma-rings, transmit, receive
+known-limitations = no-82579lm-hardware-test; e1000e-phy-workarounds-not-implemented
+firmware = none

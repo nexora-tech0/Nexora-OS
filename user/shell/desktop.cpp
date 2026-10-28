@@ -527,11 +527,9 @@ void Desktop::RebuildView()
 void Desktop::Reload()
 {
     View_->Shortcuts.Clear();
-    /* Every pinned application (Start's pinned grid, from the manifests), in Order, then Trash:
-       the desktop keeps step with the installed apps, and an app added later gets an icon here.
-       The installer is not a desktop icon: installing is a system action, not a shortcut. */
+    /* Desktop links are independently persisted; old installs fall back to manifest pins. */
     for (const hz::apps::App &Program : g_Shell.Apps) {
-        if (!Program.Pinned || Program.Id == "setup")
+        if (!g_Shell.IsDesktopShortcut(Program) || Program.Id == "setup")
             continue;
         DesktopItem Item;
         Item.Name = Program.Name;
@@ -602,9 +600,15 @@ void Desktop::Open(size_t Index)
                                : hz::String::Format("No program opens %s files yet.", Ext.CStr()).CStr(),
                    nullptr, nullptr);
     } else {
-        MessageBox(this, "Desktop",
-                   hz::String::Format("%s cannot be opened (0x%08X).", Item.Name.CStr(), (uint32_t)Status).CStr(),
-                   nullptr, nullptr);
+        hz::String Report;
+        if ((Status == STATUS_DLL_NOT_FOUND || Status == STATUS_NOT_SUPPORTED ||
+             Status == STATUS_INVALID_IMAGE_NOT_MZ || Status == STATUS_INVALID_IMAGE_FORMAT) &&
+            HZ_SUCCESS(hz::apps::QueryCompatibilityReport(Item.Path, Report)))
+            MessageBox(this, "Windows compatibility report", Report.CStr(), nullptr, nullptr);
+        else
+            MessageBox(this, "Desktop",
+                       hz::String::Format("%s cannot be opened (0x%08X).", Item.Name.CStr(), (uint32_t)Status).CStr(),
+                       nullptr, nullptr);
     }
 }
 
@@ -646,6 +650,9 @@ void Desktop::ShowItemMenu(size_t Index, Point Screen)
     }
     if (Item.Kind == ItemKind::App) {
         Items.Push(MenuItem::MakeSeparator());
+        hz::apps::App Program = *Item.App;
+        Items.Push(MenuItem::Make(g_Shell.IsDesktopShortcut(Program) ? "Remove from desktop" : "Add to desktop",
+                                  [Program]() { g_Shell.ToggleDesktopShortcut(Program); }));
         Items.Push(MenuItem::Make("Properties", [this, Index]() { ShowProperties(Index); }));
         ShowMenu(this, Screen, hz::Move(Items));
         return;

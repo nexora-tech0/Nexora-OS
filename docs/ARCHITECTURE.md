@@ -275,10 +275,29 @@ the `.hzdrivers` section. `IoInitializeDrivers` (Phase 1) calls the entries in O
 - `IO_ORDER_BUS` (PCI);
 - `IO_ORDER_FILE_SYSTEM` (UstarFs, FAT32 register themselves);
 - `IO_ORDER_CLASS` (disk);
-- `IO_ORDER_DEVICE` (AHCI, i8042, ramdisk).
+- `IO_ORDER_DEVICE` (AHCI, NVMe, xHCI bring-up, Ethernet, i8042, ramdisk).
+
+The built-in NVMe driver supports PCI class 01:08:02. It creates admin and I/O queues, identifies
+the first active namespace, and submits sector transfers through PRP-based DMA and a bounded
+contiguous bounce buffer. MSI is not required for boot storage. The installer and installed OS
+share this driver; the `install-nvme` smoke case checks setup discovery, partition creation,
+installation, and readback. Multiple namespaces, USB storage, RAID, and physical-machine
+validation remain outstanding.
 
 Each entry creates its device objects and fills its IRP dispatch table (§22). Loadable PE
-drivers can be added later without changing the driver model.
+drivers can be added later without changing the driver model. The PCI inventory is exposed to
+Settings through `HZ_SYSTEM_PCI_DEVICE_INFORMATION_CLASS`; it reports the actual initialization
+state for known drivers. Operational storage support currently includes AHCI/SATA and NVMe; Intel
+82540EM and QEMU-tested 82574L Ethernet controller paths are supported; Intel 82579LM is identified
+but has no operational driver. The xHCI driver performs firmware handoff, runs polled command/event
+rings, and supports up to eight device slots with EP0 enumeration and boot-HID interrupt endpoint
+configuration. A QEMU test enumerates a USB keyboard and tablet on separate ports and verifies a
+keyboard event reaches the shared input path. USB MSC BOT now provides 512-byte SCSI READ(10) and
+WRITE(10) through the block-device layer; `xhci-storage` verifies FAT32 writes and host-side readback
+on a QEMU USB 2 disk. USB mouse event handling is implemented but untested. UASP, USB 3.x,
+hubs/hotplug, generic HID, Setup integration, and physical hardware coverage remain outstanding.
+Windows `.sys` binaries are not loadable: they require the Windows kernel ABI, driver framework,
+interrupt, DMA, and security contracts, none of which this I/O manager implements.
 
 ## 11. Multiprocessor (designed in from M1, enabled in M11)
 
@@ -289,12 +308,15 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
 
 ## 12. User mode (M4+)
 
-- PE32+ images built with `clang --target=x86_64-pc-windows-msvc` (Microsoft x64 ABI) and
+- Nexora PE32+ applications are built with `clang --target=x86_64-pc-windows-msvc` (Microsoft x64 ABI) and
   `lld-link /nodefaultlib /dynamicbase /nxcompat /entry:HzProcessStartup`, default image base
   `0x140000000`. The loader relocates them when that range is taken (or when forced, which the
   self-test does). No stack probes (`-mno-stack-arg-probe`): stacks are fully reserved up front.
-- Libraries are linked statically (no DLLs yet; an image with an import directory is rejected
-  with `STATUS_DLL_NOT_FOUND`):
+- A foreign Windows image, when its imports/features are supported, starts at its PE entry point
+  with Nexora's custom `HZ_PEB` pointer in `rcx`; this is not a Windows PEB/process-parameter ABI
+  and does not satisfy the standard CRT startup contract.
+- Nexora's own libraries are linked statically. Foreign Windows images use a small built-in
+  import-thunk surface; imported Windows DLLs are not loaded or searched from disk:
   - `hzsys`: one NASM stub per system service (`mov r10, rcx; mov eax, n; syscall; ret`), numbered
     by position in the same order as `enum HZ_SYSTEM_SERVICE`; NASM and a C++ `static_assert`
     check the count.
@@ -312,6 +334,18 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
     (`build/user/hzuser.lib`) so programs without windows do not carry stb_truetype; `hzui`
     (M7, §31) is the toolkit archive over it. The window API is our own, not
     Win32-binary-compatible.
+- The current Windows import surface is limited to `kernel32.dll`/`kernelbase.dll`:
+  `GetStdHandle`, synchronous `WriteFile`, `ExitProcess`, `GetLastError`, `SetLastError`,
+  `CloseHandle`, `GetCurrentProcess`, `GetCurrentThread`, `GetCurrentProcessId`,
+  `GetCurrentThreadId`, `QueryPerformanceCounter`,
+  `GetSystemTimeAsFileTime`, `InitializeSListHead`, `GetModuleHandleA/W` (current image only),
+  `GetTickCount`, `GetTickCount64`, `GetCommandLineA`, `GetProcessHeap`,
+  `HeapAlloc`, and `HeapFree`. QPC is reported in microseconds (1 MHz); `GetCommandLineA` returns
+  the command line in Nexora's custom PEB. The heap shim tracks whole page-backed allocations up
+  to 64 MiB; it is not a compatible implementation of the Windows heap manager.
+  Unsupported DLLs/APIs fail closed and the terminal/desktop can query a bounded compatibility
+  report. This does not provide CRT startup, DLL loading, Windows exception/unwind support, or
+  `user32`/`gdi32` compatibility.
 - User code may use SSE/x87 (the kernel saves user FPU state with XSAVE/FXSAVE on context
   switch); `user/include/hzmath.h` provides the few math functions there is no libm for.
 - The user/kernel ABI is `include/uapi/hzapi.h` (service numbers and argument contracts, access
@@ -709,15 +743,18 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
   bounds, TLS slots. PEB = image base and size, PID, parent PID, image name, command line.
   Filled through the copy routines while attached to the process.
 - **PE32+ loader** (`ps/peimage.c` validates, `ps/peload.c` maps):
-  - Validation: AMD64 PE32+ executable; every header offset, section and data directory is
-    bounds-checked against the file and `SizeOfImage` (≤ 256 MiB); sections must be page-aligned.
+  - Validation: AMD64 PE32+ executable; header, section and directory ranges are checked, with the
+    certificate/security directory treated as a file offset; image size is capped at 256 MiB and
+    sections must be page-aligned.
   - The image is assembled in a pool buffer: headers, then sections (raw data, zero fill). It is
     reserved as `MEM_IMAGE` at the preferred base, or anywhere if that fails or
     `PS_CREATE_FORCE_RELOCATION` is set. `IMAGE_REL_BASED_DIR64` relocations are applied if it
     moved (anything else is rejected).
   - The buffer is copied in with one `MmCopyToUser`. Headers become read-only and each section
-    gets R/W/X from its characteristics; W+X is allowed but logged.
-  - Imports and TLS directories are rejected.
+    gets its declared protection; writable-executable sections and entry points outside executable
+    sections are rejected. The generated import-thunk page is changed from RW to RX after setup.
+  - Only the built-in console imports listed in §12 are resolved. Other DLLs/APIs fail closed.
+    TLS directories, delay imports, and non-console Windows subsystems are unsupported.
 - **Process creation:** `PsCreateProcess(object path, command line, flags)`: open the file
   (`\??\C:\...`) → `EPROCESS` + address space + handle table + PID → map the image → PEB →
   initial thread at the entry point with rcx = PEB. `NtCreateProcess` accepts `C:\...` paths and
@@ -976,8 +1013,10 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
 - **Messages** (`win32k/queue.cpp`): one FIFO per thread (at most 4096 messages; consecutive
   mouse moves for the same window are coalesced). `GetMessage` returns posted messages first,
   then `WM_QUIT`, then a generated `WM_PAINT` (while a visible window's update region is not
-  empty; `BeginPaint` validates it), then due `WM_TIMER`s. It waits alertably on the thread's
-  event with the earliest timer as the timeout, so a blocked thread can still be terminated.
+  empty; `BeginPaint` validates it). Revealing a window with pending damage wakes its owner so a
+  thread blocked in `GetMessage` can observe the generated paint. The queue waits alertably on
+  the thread's event with the earliest timer as the timeout, so a blocked thread can still be
+  terminated.
   `WM_CREATE`/`WM_DESTROY` are sent by hzuser, not by the kernel.
 - **Painting:** `BeginPaint` returns the update region's bounds and the surface; the application
   draws, and `EndPaint` queues the painted rectangle for composition.
@@ -989,8 +1028,10 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
     out, snapshots the visible windows under WmLock (taking a reference on each surface), and
     redraws each dirty rectangle with the painter's algorithm: wallpaper, then per window its
     shadow, its body and its rounded corners, then the software cursor (12x19 sprite). It
-    starts at the topmost window whose opaque area covers the rectangle. Frames are paced to at
-    most one per 16 ms, and dirty rectangles are copied to the framebuffer, which is never read.
+    starts at the topmost window whose opaque area covers the rectangle. A compositor/paint mutex
+    is held while surfaces are read and from `BeginPaint` through `EndPaint` while their owners
+    write, preventing mixed frames without per-window double buffers. Frames are paced to at most
+    one per 16 ms, and dirty rectangles are copied to the framebuffer, which is never read.
   - Integer math only: an 8x8 corner coverage table (4x4 supersampled quarter circle), a
     separable shadow falloff table (24 px, 8 px down; popups 10 px), and a 1 px translucent
     border. The shadow is skipped only under fully opaque body pixels, so it continues under the
@@ -1534,4 +1575,3 @@ Limine reports (up to `KI_MAX_PROCESSORS` = 8) runs threads. Details in §36.
 processor, a mouse-locked first-person camera and a 4 MB world saved to FAT32), was removed with
 the beta apps in the item 19 cleanup. The M12 mouse-lock window attribute it was built on
 (`HZ_WA_MOUSE_LOCK`) remains a win32k feature; nothing in the tree uses it now.
-

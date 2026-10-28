@@ -46,6 +46,7 @@ struct CMP_LAYER {
     bool Square;      /* maximized, frameless or transparent: no corners, no border */
     bool Transparent; /* per-pixel alpha over what is below */
     bool NoShadow;
+    bool Scaled;      /* short compositor-only snap/maximize transition */
     const uint32_t *Pixels;
     uint32_t Width, Height;
     MM_SECTION *Surface;
@@ -63,12 +64,14 @@ struct {
     uint32_t *Mica;
     KSPIN_LOCK DirtyLock;
     KMUTEX ComposeLock;  /* held while composing; wallpaper swaps take it */
+    KMUTEX PaintLock;   /* serializes owner writes to surfaces with compositor reads */
     uint32_t WallpaperIndex;
     uint32_t BootWallpaperSeed;
     RGN *Dirty;
     RGN *Working;
     KEVENT Wake;
     volatile bool Composing;
+    bool MotionActive;
     volatile uint64_t Frames;
     uint8_t Corner[HZ_WINDOW_RADIUS][HZ_WINDOW_RADIUS]; /* coverage of the top-left corner, 0..255 */
     uint8_t Shadow[CMP_SHADOW_EXTENT + 1];             /* alpha falloff with distance */
@@ -531,12 +534,14 @@ void DrawBody(const CMP_LAYER &L, const HZ_RECT &R)
     const int32_t Rad = HZ_WINDOW_RADIUS;
     int32_t W = L.Rect.Right - L.Rect.Left, H = L.Rect.Bottom - L.Rect.Top;
     bool Mica = (L.Style & HZ_WS_MICA) != 0;
+    int32_t SourceW = HZ_MAX((int32_t)L.Width, 1), SourceH = HZ_MAX((int32_t)L.Height, 1);
     for (int32_t y = Area.Top; y < Area.Bottom; y++) {
         int32_t wy = y - L.Rect.Top;
+        int32_t sy = L.Scaled ? (int32_t)((int64_t)wy * SourceH / H) : wy;
         uint32_t *Row = BackRow(y);
         bool CornerRow = wy < Rad || wy >= H - Rad;
         bool EdgeRow = wy == 0 || wy == H - 1;
-        if (!Mica && !L.Transparent && !CornerRow && !EdgeRow && (uint32_t)wy < L.Height) {
+        if (!L.Scaled && !Mica && !L.Transparent && !CornerRow && !EdgeRow && (uint32_t)wy < L.Height) {
             /* Fast path: an opaque row segment straight from the surface. */
             int32_t From = Area.Left - L.Rect.Left, To = Area.Right - L.Rect.Left;
             int32_t Copy = HZ_MIN(To, (int32_t)L.Width) - From;
@@ -555,15 +560,16 @@ void DrawBody(const CMP_LAYER &L, const HZ_RECT &R)
         }
         for (int32_t x = Area.Left; x < Area.Right; x++) {
             int32_t wx = x - L.Rect.Left;
+            int32_t sx = L.Scaled ? (int32_t)((int64_t)wx * SourceW / W) : wx;
             uint32_t Coverage = ShapeCoverage(L, wx, wy);
             if (!Coverage)
                 continue;
             uint32_t Color;
             if (L.Transparent) {
-                uint32_t Src = SurfacePixel(L, wx, wy);
+                uint32_t Src = SurfacePixel(L, sx, sy);
                 Color = Blend(Row[x], Src, Src >> 24);
             } else {
-                Color = BodyColor(L, wx, wy, x, y);
+                Color = BodyColor(L, sx, sy, x, y);
             }
             bool Edge = !L.Square && (wx == 0 || wx == W - 1 || EdgeRow || Coverage < 255);
             if (Edge)
@@ -657,12 +663,31 @@ void FlushRect(const HZ_RECT &R, uint32_t FadeAlpha)
 int SnapshotLayers()
 {
     int Count = 0;
+    Cmp.MotionActive = false;
     WmAcquire();
     for (WINDOW *W = WmBottom; W && Count < CMP_MAX_LAYERS; W = W->Above) {
         if (!W->Visible)
             continue;
         CMP_LAYER &L = Cmp.Layers[Count++];
         L.Rect = W->Rect;
+        if (W->MotionActive) {
+            constexpr uint64_t DurationUs = 180000;
+            uint64_t Elapsed = KeQueryUptimeMicroseconds() - W->MotionStartUs;
+            if (Elapsed >= DurationUs) {
+                W->MotionActive = false;
+            } else {
+                uint64_t T = Elapsed * 65535 / DurationUs;
+                uint64_t Ease = T * T * (3 * 65535 - 2 * T) / (65535ull * 65535ull);
+                auto Interpolate = [Ease](int32_t From, int32_t To) {
+                    return From + (int32_t)((int64_t)(To - From) * (int64_t)Ease / 65535);
+                };
+                L.Rect = HZ_RECT{Interpolate(W->MotionFrom.Left, W->MotionTo.Left),
+                                 Interpolate(W->MotionFrom.Top, W->MotionTo.Top),
+                                 Interpolate(W->MotionFrom.Right, W->MotionTo.Right),
+                                 Interpolate(W->MotionFrom.Bottom, W->MotionTo.Bottom)};
+                Cmp.MotionActive = true;
+            }
+        }
         L.Style = W->Style;
         L.Active = W == WmActive;
         L.Transparent = (W->Style & HZ_WS_TRANSPARENT) != 0;
@@ -671,6 +696,8 @@ int SnapshotLayers()
         L.Pixels = W->Pixels;
         L.Width = W->SurfaceWidth;
         L.Height = W->SurfaceHeight;
+        L.Scaled = (uint32_t)(L.Rect.Right - L.Rect.Left) != L.Width ||
+                   (uint32_t)(L.Rect.Bottom - L.Rect.Top) != L.Height;
         L.Surface = W->Surface;
         ObReferenceObject(L.Surface);
     }
@@ -701,6 +728,7 @@ void CompositorThread(void *Context)
         RGN_RECT Screen = {0, 0, Cmp.Width, Cmp.Height};
         RgnCombineRect(Cmp.Working, &Screen, RGN_OP_INTERSECT);
         if (!RgnIsEmpty(Cmp.Working)) {
+            KeWaitForSingleObject(&Cmp.PaintLock, NULL);
             int Count = SnapshotLayers();
             KeWaitForSingleObject(&Cmp.ComposeLock, NULL);
             uint64_t FadeElapsed = KeQueryUptimeMicroseconds() - Cmp.DesktopFadeStartUs;
@@ -722,10 +750,15 @@ void CompositorThread(void *Context)
             for (int i = 0; i < Count; i++)
                 ObDereferenceObject(Cmp.Layers[i].Surface);
             Cmp.Frames = Cmp.Frames + 1;
+            KeReleaseMutex(&Cmp.PaintLock);
         }
         Cmp.Composing = false;
         LastFrame = KeQueryUptimeMicroseconds();
         if (Cmp.DesktopShown && Cmp.DesktopFadeStartUs != 0 && LastFrame - Cmp.DesktopFadeStartUs < 240000) {
+            HZ_RECT FullScreen = {0, 0, Cmp.Width, Cmp.Height};
+            CmpInvalidateRect(&FullScreen);
+        }
+        if (Cmp.DesktopShown && Cmp.MotionActive) {
             HZ_RECT FullScreen = {0, 0, Cmp.Width, Cmp.Height};
             CmpInvalidateRect(&FullScreen);
         }
@@ -740,6 +773,7 @@ bool CmpInitialize()
 {
     KeInitializeSpinLock(&Cmp.DirtyLock);
     KeInitializeMutex(&Cmp.ComposeLock);
+    KeInitializeMutex(&Cmp.PaintLock);
     KeInitializeEvent(&Cmp.Wake, SynchronizationEvent, false);
     Cmp.Dirty = RgnCreate();
     Cmp.Working = RgnCreate();
@@ -833,6 +867,17 @@ uint32_t CmpGetWallpaper()
 bool CmpIsAvailable()
 {
     return Cmp.Available;
+}
+
+void CmpBeginPaint()
+{
+    KeWaitForSingleObject(&Cmp.PaintLock, NULL);
+}
+
+void CmpEndPaint()
+{
+    if (Cmp.PaintLock.OwnerThread == KeGetCurrentThread())
+        KeReleaseMutex(&Cmp.PaintLock);
 }
 
 int32_t CmpScreenWidth()

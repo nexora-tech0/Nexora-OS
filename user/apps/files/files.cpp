@@ -30,9 +30,16 @@ using namespace hzui;
 
 namespace {
 
+void NotifyShell(uint32_t Event)
+{
+    HWND ShellWindow = 0;
+    if (HZ_SUCCESS(NtUserGetShellWindow(&ShellWindow)))
+        NtUserPostMessage(ShellWindow, HZ_WM_SHELLREQUEST, HZ_SHELL_REQUEST_NOTIFICATION, Event);
+}
+
 /* ---- Views, sorting and the Details columns -------------------------------------------------- */
 
-enum class FileView : uint8_t { Details, List, Tiles };
+enum class FileView : uint8_t { Details, List, Tiles, Grid };
 
 enum SortKey : uint8_t { SortName = 0, SortDate, SortType, SortSize, SortKeyCount };
 
@@ -51,7 +58,8 @@ const char *ViewName(FileView V)
     switch (V) {
     case FileView::Details: return "Details";
     case FileView::List: return "List";
-    default: return "Tiles";
+    case FileView::Tiles: return "Tiles";
+    default: return "Grid";
     }
 }
 
@@ -147,6 +155,130 @@ Color IconColorFor(const hz::fs::Entry &E)
     if (Ext == "png" || Ext == "jpg" || Ext == "jpeg" || Ext == "bmp" || Ext == "gif")
         return 0xFF8FE0C0;
     return Theme::TextSecondary;
+}
+
+struct ZipMember {
+    hz::String Name, Data;
+    uint32_t Crc = 0, Offset = 0;
+    bool Directory = false;
+};
+
+uint32_t ZipCrc32(const char *Data, size_t Length)
+{
+    uint32_t Crc = 0xFFFFFFFFu;
+    for (size_t I = 0; I < Length; I++) {
+        Crc ^= (uint8_t)Data[I];
+        for (int Bit = 0; Bit < 8; Bit++)
+            Crc = (Crc >> 1) ^ (0xEDB88320u & (0u - (Crc & 1u)));
+    }
+    return Crc ^ 0xFFFFFFFFu;
+}
+
+void ZipU16(hz::String &Out, uint16_t Value)
+{
+    Out.Append((char)(Value & 0xFF));
+    Out.Append((char)(Value >> 8));
+}
+
+void ZipU32(hz::String &Out, uint32_t Value)
+{
+    ZipU16(Out, (uint16_t)Value);
+    ZipU16(Out, (uint16_t)(Value >> 16));
+}
+
+STATUS CollectZipFiles(const hz::String &Path, const hz::String &Relative, hz::Vector<ZipMember> &Files,
+                       uint64_t &TotalBytes, unsigned Depth)
+{
+    if (Depth > 32 || Files.Size() > 4096)
+        return STATUS_NOT_SUPPORTED;
+    hz::Vector<hz::fs::Entry> Entries;
+    STATUS Status = hz::fs::List(Path, Entries);
+    if (!HZ_SUCCESS(Status))
+        return Status;
+    for (const hz::fs::Entry &Entry : Entries) {
+        ZipMember Member;
+        hz::String Joined = Relative.Empty() ? Entry.Name
+                                             : hz::String::Format("%s/%s", Relative.CStr(), Entry.Name.CStr());
+        for (size_t I = 0; I < Joined.Length(); I++)
+            Member.Name.Append(Joined[I] == '\\' ? '/' : Joined[I]);
+        Member.Directory = Entry.Directory;
+        if (Entry.Directory) {
+            Member.Name.Append('/');
+            Files.Push(hz::Move(Member));
+            Status = CollectZipFiles(hz::fs::Join(Path, Entry.Name.CStr()),
+                                     Files[Files.Size() - 1].Name.Substring(0, Files[Files.Size() - 1].Name.Length() - 1),
+                                     Files, TotalBytes, Depth + 1);
+            if (!HZ_SUCCESS(Status))
+                return Status;
+            continue;
+        }
+        if (Entry.Size > 64u * 1024u * 1024u || TotalBytes + Entry.Size > 64u * 1024u * 1024u)
+            return STATUS_NOT_SUPPORTED;
+        Status = hz::fs::ReadAll(hz::fs::Join(Path, Entry.Name.CStr()), Member.Data, 64u * 1024u * 1024u);
+        if (!HZ_SUCCESS(Status))
+            return Status;
+        TotalBytes += Member.Data.Length();
+        Member.Crc = ZipCrc32(Member.Data.CStr(), Member.Data.Length());
+        Files.Push(hz::Move(Member));
+    }
+    return STATUS_SUCCESS;
+}
+
+STATUS CreateZipArchive(const hz::String &Source, const hz::String &Target)
+{
+    bool Directory = false;
+    if (!hz::fs::Exists(Source, &Directory))
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    hz::Vector<ZipMember> Files;
+    uint64_t TotalBytes = 0;
+    STATUS Status;
+    if (Directory) {
+        Status = CollectZipFiles(Source, hz::fs::FileName(Source), Files, TotalBytes, 0);
+    } else {
+        ZipMember Member;
+        Member.Name = hz::fs::FileName(Source);
+        Status = hz::fs::ReadAll(Source, Member.Data, 64u * 1024u * 1024u);
+        if (HZ_SUCCESS(Status)) {
+            Member.Crc = ZipCrc32(Member.Data.CStr(), Member.Data.Length());
+            TotalBytes = Member.Data.Length();
+            Files.Push(hz::Move(Member));
+        }
+    }
+    if (!HZ_SUCCESS(Status) || Files.Size() > 4096)
+        return HZ_SUCCESS(Status) ? STATUS_NOT_SUPPORTED : Status;
+
+    hz::String Archive;
+    for (ZipMember &Member : Files) {
+        if (Member.Name.Length() > 65535 || Member.Data.Length() > UINT32_MAX || Archive.Length() > UINT32_MAX)
+            return STATUS_NOT_SUPPORTED;
+        Member.Offset = (uint32_t)Archive.Length();
+        ZipU32(Archive, 0x04034B50);
+        ZipU16(Archive, 20); ZipU16(Archive, 0); ZipU16(Archive, 0);
+        ZipU16(Archive, 0); ZipU16(Archive, 0);
+        ZipU32(Archive, Member.Crc);
+        ZipU32(Archive, (uint32_t)Member.Data.Length()); ZipU32(Archive, (uint32_t)Member.Data.Length());
+        ZipU16(Archive, (uint16_t)Member.Name.Length()); ZipU16(Archive, 0);
+        Archive.Append(Member.Name.CStr(), Member.Name.Length());
+        Archive.Append(Member.Data.CStr(), Member.Data.Length());
+    }
+    uint32_t DirectoryOffset = (uint32_t)Archive.Length();
+    for (const ZipMember &Member : Files) {
+        ZipU32(Archive, 0x02014B50);
+        ZipU16(Archive, 20); ZipU16(Archive, 20); ZipU16(Archive, 0); ZipU16(Archive, 0);
+        ZipU16(Archive, 0); ZipU16(Archive, 0);
+        ZipU32(Archive, Member.Crc);
+        ZipU32(Archive, (uint32_t)Member.Data.Length()); ZipU32(Archive, (uint32_t)Member.Data.Length());
+        ZipU16(Archive, (uint16_t)Member.Name.Length()); ZipU16(Archive, 0); ZipU16(Archive, 0);
+        ZipU16(Archive, 0); ZipU16(Archive, 0); ZipU32(Archive, Member.Directory ? 0x10 : 0);
+        ZipU32(Archive, Member.Offset);
+        Archive.Append(Member.Name.CStr(), Member.Name.Length());
+    }
+    uint32_t DirectorySize = (uint32_t)Archive.Length() - DirectoryOffset;
+    ZipU32(Archive, 0x06054B50);
+    ZipU16(Archive, 0); ZipU16(Archive, 0); ZipU16(Archive, (uint16_t)Files.Size());
+    ZipU16(Archive, (uint16_t)Files.Size()); ZipU32(Archive, DirectorySize); ZipU32(Archive, DirectoryOffset);
+    ZipU16(Archive, 0);
+    return hz::fs::WriteAll(Target, Archive.CStr(), Archive.Length());
 }
 
 /* ASCII lower case of one character, as the file systems compare names. */
@@ -286,6 +418,108 @@ public:
 private:
     hz::String Typed_;
     uint64_t LastTypeUs_ = 0;
+};
+
+class FileGridTile final : public Element {
+public:
+    FileGridTile() { Focusable = true; }
+    hz::fs::Entry Entry;
+    hz::String Label;
+    size_t Index = 0;
+    bool Selected = false;
+    hz::Function<void(size_t)> OnSelect;
+    hz::Function<void(size_t)> OnOpen;
+    hz::Function<void(size_t, Point)> OnContext;
+
+    void Paint(Painter &P) override
+    {
+        const Rect &R = Bounds();
+        Color Fill = Selected ? Theme::ControlFill : Theme::CardBackground;
+        Color Stroke = Selected ? Theme::Accent : Theme::CardStroke;
+        P.FillRoundRect(R, 18, Fill);
+        P.StrokeRoundRect(R, 18, Selected ? 1.5f : 1.0f, Stroke);
+        Rect IconBox{R.X + (R.Width - 52) / 2, R.Y + 16, 52, 52};
+        P.DrawIcon(IconFor(Entry), IconBox, IconColorFor(Entry), 1.8f);
+        P.TextLine(GetFont(FontRole::BodyStrong), Rect{R.X + 10, R.Y + 78, R.Width - 20, 24}, Label.CStr(),
+                   Theme::TextPrimary, Align::Center);
+        const char *Detail = Entry.Directory ? "Folder" :
+                             hz::archive::IsArchive(Entry.Name) ? "Compressed archive" : TypeName(Entry);
+        P.TextLine(GetFont(FontRole::Caption), Rect{R.X + 8, R.Y + 101, R.Width - 16, 18}, Detail,
+                   Theme::TextTertiary, Align::Center);
+    }
+
+    void OnPointerUp(PointerEvent &E) override
+    {
+        if (E.Button == HZ_MOUSE_RIGHT) {
+            if (OnSelect) OnSelect(Index);
+            if (OnContext) OnContext(Index, E.ScreenPosition);
+            E.Handled = true;
+        } else if (E.Button == HZ_MOUSE_LEFT) {
+            if (E.ClickCount >= 2) {
+                if (OnOpen) OnOpen(Index);
+            } else if (OnSelect) {
+                OnSelect(Index);
+            }
+            E.Handled = true;
+        }
+    }
+};
+
+constexpr uint32_t kFileOperationFinished = HZ_WM_USER + 92;
+enum class FileOperationKind : uint8_t { Copy, Move, Extract, Delete, DeleteTrash, Compress };
+struct FileOperation {
+    FileOperationKind Kind;
+    HWND Window;
+    hz::String Source, Target, Name;
+    STATUS Result = STATUS_UNSUCCESSFUL;
+    hz::archive::Result Extracted;
+};
+
+uint32_t RunFileOperation(void *Parameter)
+{
+    FileOperation *Operation = static_cast<FileOperation *>(Parameter);
+    switch (Operation->Kind) {
+    case FileOperationKind::Copy:
+        Operation->Result = hz::fs::CopyTree(Operation->Source, Operation->Target);
+        break;
+    case FileOperationKind::Move:
+        Operation->Result = hz::fs::MoveTree(Operation->Source, Operation->Target);
+        break;
+    case FileOperationKind::Extract:
+        Operation->Result = hz::archive::Extract(Operation->Source, Operation->Target, &Operation->Extracted);
+        break;
+    case FileOperationKind::Delete:
+        Operation->Result = hz::fs::DeleteTree(Operation->Source);
+        break;
+    case FileOperationKind::DeleteTrash:
+        Operation->Result = hz::fs::TrashDelete(Operation->Source);
+        break;
+    case FileOperationKind::Compress:
+        Operation->Result = CreateZipArchive(Operation->Source, Operation->Target);
+        break;
+    }
+    if (!HZ_SUCCESS(Operation->Result) && Operation->Kind == FileOperationKind::Copy &&
+        hz::fs::Exists(Operation->Target))
+        hz::fs::DeleteTree(Operation->Target);
+    if (!HZ_SUCCESS(NtUserPostMessage(Operation->Window, kFileOperationFinished,
+                                      (uint32_t)Operation->Result, (uint64_t)Operation)))
+        delete Operation;
+    return 0;
+}
+
+class FilesWindow final : public Window {
+public:
+    FilesWindow() : Window("Files", 960, 600) {}
+    hz::Function<void(FileOperation *)> OnOperationFinished;
+    int64_t HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam) override
+    {
+        if (Message == kFileOperationFinished) {
+            if (OnOperationFinished)
+                OnOperationFinished(reinterpret_cast<FileOperation *>(LParam));
+            return 0;
+        }
+        return Window::HandleMessage(Message, WParam, LParam);
+    }
 };
 
 class FilesCommandBar final : public StackPanel {
@@ -464,6 +698,7 @@ private:
     void NavigateTrash(bool Record = true, const hz::String &SelectName = hz::String());
     void Relist();
     void ApplyView();
+    void BuildGrid();
     void SortTrashEntries();
     hz::String DisplayName(const hz::fs::Entry &E) const;
     void Refresh();
@@ -472,6 +707,7 @@ private:
     void UpdateCommands();
     void UpdateStatus();
     void UpdateViewControls();
+    void SetGridSelection(size_t Index);
     void RebuildPlaces();
     void Open(size_t Index);
     void Back();
@@ -486,6 +722,10 @@ private:
     void ClipSelected(bool Cut);
     void Paste();
     void ExtractSelected();
+    void CompressSelected();
+    bool StartFileOperation(FileOperationKind Kind, const hz::String &Source, const hz::String &Target,
+                            const hz::String &Name, const char *Label);
+    void FinishFileOperation(FileOperation *Operation);
     void ShowProperties();
     void ShowItemContextMenu(size_t Index, Point Screen);
     void ShowBackgroundContextMenu(Point Screen);
@@ -509,6 +749,11 @@ private:
     ListView *Places_ = nullptr;
     FileList *List_ = nullptr;
     ColumnBar *Columns_ = nullptr;
+    ScrollViewer *GridScroll_ = nullptr;
+    Grid *GridItems_ = nullptr;
+    StackPanel *ProgressPanel_ = nullptr;
+    TextBlock *ProgressLabel_ = nullptr;
+    ProgressBar *Progress_ = nullptr;
     TextBlock *Status_ = nullptr, *Free_ = nullptr;
     Button *BackButton_ = nullptr, *ForwardButton_ = nullptr, *UpButton_ = nullptr, *NewButton_ = nullptr,
            *RenameButton_ = nullptr, *DeleteButton_ = nullptr, *CutButton_ = nullptr, *CopyButton_ = nullptr,
@@ -527,10 +772,12 @@ private:
     int SortKey_ = SortName;
     bool SortDescending_ = false;
     FileView View_ = FileView::Details;
+    size_t GridSelected_ = hz::NotFound;
     bool AddressEditing_ = false;
     bool TrashMode_ = false;
     bool ShowHidden_ = false;
     bool ShowExtensions_ = true;
+    bool OperationActive_ = false;
 };
 
 /* ---- Window ---------------------------------------------------------------------------------- */
@@ -538,7 +785,9 @@ private:
 bool FilesApp::Create(const char *Start)
 {
     LoadSettings();
-    Main_ = new Window("Files", 960, 600);
+    FilesWindow *FileWindow = new FilesWindow();
+    Main_ = FileWindow;
+    FileWindow->OnOperationFinished = [this](FileOperation *Operation) { FinishFileOperation(Operation); };
     Main_->SetMinimumSize(560, 320);
     Build();
     Main_->OnClosed = []() { NtUserPostQuitMessage(0); };
@@ -752,6 +1001,7 @@ void FilesApp::Build()
     Right->CornerRadius = Theme::OverlayRadius;
     Right->Rows.Push(GridLength::AutoSize());
     Right->Rows.Push(GridLength::Stars(1));
+    Right->Rows.Push(GridLength::AutoSize());
     Columns_ = Right->Add<ColumnBar>();
     Columns_->Height = 30;
     Columns_->OnSort = [this](int Key) { SortByColumn(Key); };
@@ -799,6 +1049,8 @@ void FilesApp::Build()
     List_->OnRightClick = [this](size_t I, Point Screen) { ShowItemContextMenu(I, Screen); };
     List_->OnBackgroundRightClick = [this](Point Screen) { ShowBackgroundContextMenu(Screen); };
     List_->OnSelectionChanged = [this](size_t) {
+        if (View_ != FileView::Grid)
+            GridSelected_ = List_->SelectedIndex();
         UpdateCommands();
         UpdateStatus();
     };
@@ -812,6 +1064,10 @@ void FilesApp::Build()
         return hz::NotFound;
     };
     List_->OnKey = [this](KeyEvent &E) {
+        if (OperationActive_) {
+            E.Handled = true;
+            return;
+        }
         if (E.Key == HZ_VK_DELETE) {
             E.Handled = true;
             DeleteSelected(E.Shift());
@@ -835,6 +1091,30 @@ void FilesApp::Build()
             Paste();
         }
     };
+
+    GridScroll_ = Right->Add<ScrollViewer>();
+    GridScroll_->GridRow = 1;
+    GridScroll_->Margin = Thickness(8);
+    GridItems_ = new Grid();
+    for (int I = 0; I < 4; I++)
+        GridItems_->Columns.Push(GridLength::Stars(1));
+    GridItems_->ColumnSpacing = 12;
+    GridItems_->RowSpacing = 12;
+    GridScroll_->SetContent(GridItems_);
+    GridScroll_->SetVisible(false);
+
+    ProgressPanel_ = Right->Add<StackPanel>(Orientation::Vertical, 7);
+    ProgressPanel_->GridRow = 2;
+    ProgressPanel_->Margin = Thickness(10, 0, 10, 10);
+    ProgressPanel_->Padding = Thickness(14, 12, 14, 12);
+    ProgressPanel_->Background = Theme::CardBackground;
+    ProgressPanel_->BorderColor = Theme::CardStroke;
+    ProgressPanel_->CornerRadius = 16;
+    ProgressLabel_ = ProgressPanel_->Add<TextBlock>("", FontRole::Caption);
+    ProgressLabel_->Foreground = Theme::TextPrimary;
+    Progress_ = ProgressPanel_->Add<ProgressBar>();
+    Progress_->SetIndeterminate(false);
+    ProgressPanel_->SetVisible(false);
 
     /* ---- Status bar ---- */
     Grid *StatusBar = Root->Add<Grid>();
@@ -868,6 +1148,8 @@ void FilesApp::LoadSettings()
         View_ = FileView::List;
     else if (View == "Tiles")
         View_ = FileView::Tiles;
+    else if (View == "Grid")
+        View_ = FileView::Grid;
     else
         View_ = FileView::Details;
     SortKey_ = hz::Clamp(Settings.GetInt("Sort", SortName), (int)SortName, (int)SortSize);
@@ -1042,6 +1324,31 @@ void FilesApp::ApplyView()
     }
     List_->SetItemCount(Entries_.Size());
     List_->Invalidate();
+    BuildGrid();
+}
+
+void FilesApp::BuildGrid()
+{
+    if (!GridItems_)
+        return;
+    GridItems_->ClearChildren();
+    GridItems_->Rows.Clear();
+    for (size_t I = 0; I < Entries_.Size(); I++) {
+        if (I % 4 == 0)
+            GridItems_->Rows.Push(GridLength::AutoSize());
+        FileGridTile *Tile = GridItems_->Add<FileGridTile>();
+        Tile->Entry = Entries_[I];
+        Tile->Label = DisplayName(Entries_[I]);
+        Tile->Index = I;
+        Tile->Selected = I == GridSelected_;
+        Tile->Height = 132;
+        Tile->GridColumn = (uint8_t)(I % 4);
+        Tile->GridRow = (uint8_t)(I / 4);
+        Tile->OnSelect = [this](size_t Index) { SetGridSelection(Index); };
+        Tile->OnOpen = [this](size_t Index) { Open(Index); };
+        Tile->OnContext = [this](size_t Index, Point Screen) { ShowItemContextMenu(Index, Screen); };
+    }
+    GridItems_->InvalidateLayout();
 }
 
 hz::String FilesApp::DisplayName(const hz::fs::Entry &E) const
@@ -1245,6 +1552,7 @@ void FilesApp::Select(const hz::String &Name)
 {
     for (size_t i = 0; i < Entries_.Size(); i++) {
         if (hz::fs::EqualNames(Entries_[i].Name.CStr(), Name.CStr())) {
+            GridSelected_ = i;
             List_->SetSelectedIndex(i);
             List_->ScrollIntoView(i);
             return;
@@ -1259,8 +1567,23 @@ bool FilesApp::Writable() const
 
 const hz::fs::Entry *FilesApp::Selected() const
 {
-    size_t I = List_->SelectedIndex();
+    size_t I = View_ == FileView::Grid ? GridSelected_ : List_->SelectedIndex();
     return I < Entries_.Size() ? &Entries_[I] : nullptr;
+}
+
+void FilesApp::SetGridSelection(size_t Index)
+{
+    if (Index >= Entries_.Size())
+        return;
+    GridSelected_ = Index;
+    List_->SetSelectedIndex(Index, false);
+    for (size_t I = 0; I < GridItems_->ChildCount(); I++) {
+        FileGridTile *Tile = static_cast<FileGridTile *>(GridItems_->ChildAt(I));
+        Tile->Selected = Tile->Index == Index;
+        Tile->Invalidate();
+    }
+    UpdateCommands();
+    UpdateStatus();
 }
 
 Point FilesApp::Below(Element *E) const
@@ -1273,22 +1596,30 @@ Point FilesApp::Below(Element *E) const
 void FilesApp::UpdateCommands()
 {
     bool HasSelection = Selected() != nullptr;
-    BackButton_->SetEnabled(HistoryIndex_ > 0);
-    ForwardButton_->SetEnabled(HistoryIndex_ + 1 < History_.Size());
-    UpButton_->SetEnabled(!TrashMode_ && !hz::fs::IsRoot(Folder_));
-    NewButton_->SetEnabled(!TrashMode_ && Writable());
-    RenameButton_->SetEnabled(!TrashMode_ && Writable() && HasSelection);
-    DeleteButton_->SetEnabled(Writable() && HasSelection);
+    BackButton_->SetEnabled(!OperationActive_ && HistoryIndex_ > 0);
+    ForwardButton_->SetEnabled(!OperationActive_ && HistoryIndex_ + 1 < History_.Size());
+    UpButton_->SetEnabled(!OperationActive_ && !TrashMode_ && !hz::fs::IsRoot(Folder_));
+    NewButton_->SetEnabled(!OperationActive_ && !TrashMode_ && Writable());
+    RenameButton_->SetEnabled(!OperationActive_ && !TrashMode_ && Writable() && HasSelection);
+    DeleteButton_->SetEnabled(!OperationActive_ && Writable() && HasSelection);
     DeleteButton_->ToolTip = TrashMode_ ? "Permanently delete from Trash (Del)"
                                         : "Move to Trash (Del); permanently delete (Shift+Del)";
-    CutButton_->SetEnabled(!TrashMode_ && Writable() && HasSelection);
+    CutButton_->SetEnabled(!OperationActive_ && !TrashMode_ && Writable() && HasSelection);
     CopyButton_->SetEnabled(!TrashMode_ && HasSelection);
-    PasteButton_->SetEnabled(!TrashMode_ && Writable() && !ClipPath_.Empty());
+    PasteButton_->SetEnabled(!OperationActive_ && !TrashMode_ && Writable() && !ClipPath_.Empty());
+    Places_->SetEnabled(!OperationActive_);
+    Search_->SetEnabled(!OperationActive_);
+    Address_->SetEnabled(!OperationActive_);
+    SortButton_->SetEnabled(!OperationActive_);
+    ViewButton_->SetEnabled(!OperationActive_);
 }
 
 void FilesApp::UpdateViewControls()
 {
     Columns_->SetVisible(View_ == FileView::Details);
+    List_->SetVisible(View_ != FileView::Grid);
+    if (GridScroll_)
+        GridScroll_->SetVisible(View_ == FileView::Grid);
     Columns_->Key = SortKey_;
     Columns_->Descending = SortDescending_;
     Columns_->Invalidate();
@@ -1349,7 +1680,12 @@ void FilesApp::SortByColumn(int Key)
 
 void FilesApp::SetView(FileView View)
 {
+    if (View == FileView::Grid && View_ != FileView::Grid)
+        GridSelected_ = List_->SelectedIndex();
+    else if (View_ == FileView::Grid && View != FileView::Grid && GridSelected_ < Entries_.Size())
+        List_->SetSelectedIndex(GridSelected_, false);
     View_ = View;
+    BuildGrid();
     UpdateViewControls();
     List_->ScrollIntoView(List_->SelectedIndex() == hz::NotFound ? 0 : List_->SelectedIndex());
     SaveSettings();
@@ -1527,17 +1863,8 @@ void FilesApp::DeleteSelected(bool Permanent)
                    [this, Item](int Choice) {
                        if (Choice != 0)
                            return;
-                       STATUS Status = hz::fs::TrashDelete(Item.Name);
-                       if (!HZ_SUCCESS(Status)) {
-                           MessageBox(Main_, "Files",
-                                      hz::String::Format("\"%s\" cannot be permanently deleted: %s.",
-                                                         Item.OriginalName.CStr(), hz::fs::StatusText(Status))
-                                          .CStr(),
-                                      nullptr, nullptr);
-                           return;
-                       }
-                       HzPrint("files: permanently deleted Trash item %s", Item.OriginalName.CStr());
-                       Refresh();
+                       StartFileOperation(FileOperationKind::DeleteTrash, Item.Name, hz::String(),
+                                          Item.OriginalName, "Deleting item...");
                    });
         return;
     }
@@ -1589,9 +1916,9 @@ void FilesApp::DeleteSelected(bool Permanent)
         return;
     }
     MessageBox(Main_, "Delete permanently", Question.CStr(), "Delete permanently|Cancel",
-               [Path, Complete](int Choice) {
+               [this, Path, Name](int Choice) {
                    if (Choice == 0)
-                       Complete(hz::fs::DeleteTree(Path), true);
+                       StartFileOperation(FileOperationKind::Delete, Path, hz::String(), Name, "Deleting item...");
                });
 }
 
@@ -1691,6 +2018,97 @@ void FilesApp::ClipSelected(bool Cut)
     UpdateCommands();
 }
 
+bool FilesApp::StartFileOperation(FileOperationKind Kind, const hz::String &Source, const hz::String &Target,
+                                 const hz::String &Name, const char *Label)
+{
+    if (OperationActive_)
+        return false;
+    FileOperation *Operation = new FileOperation();
+    Operation->Kind = Kind;
+    Operation->Window = Main_->Handle();
+    Operation->Source = Source;
+    Operation->Target = Target;
+    Operation->Name = Name;
+    OperationActive_ = true;
+    ProgressLabel_->SetText(Label);
+    ProgressPanel_->SetVisible(true);
+    Progress_->SetIndeterminate(true);
+    UpdateCommands();
+    HANDLE Thread = 0;
+    STATUS Status = HzCreateThread(RunFileOperation, Operation, &Thread, nullptr);
+    if (!HZ_SUCCESS(Status)) {
+        OperationActive_ = false;
+        Progress_->SetIndeterminate(false);
+        ProgressPanel_->SetVisible(false);
+        delete Operation;
+        UpdateCommands();
+        MessageBox(Main_, "Files", "The file operation could not be started.", nullptr, nullptr);
+        return false;
+    }
+    if (Thread)
+        NtClose(Thread);
+    return true;
+}
+
+void FilesApp::FinishFileOperation(FileOperation *Operation)
+{
+    if (!Operation)
+        return;
+    OperationActive_ = false;
+    Progress_->SetIndeterminate(false);
+    ProgressPanel_->SetVisible(false);
+    UpdateCommands();
+    STATUS Status = Operation->Result;
+    if (!HZ_SUCCESS(Status)) {
+        const char *Action = Operation->Kind == FileOperationKind::Copy ? "copied" :
+                             Operation->Kind == FileOperationKind::Move ? "moved" :
+                             Operation->Kind == FileOperationKind::Extract ? "extracted" :
+                             Operation->Kind == FileOperationKind::Compress ? "compressed" : "deleted";
+        MessageBox(Main_, "Files", hz::String::Format("%s could not be %s: %s.", Operation->Name.CStr(), Action,
+                                                       hz::fs::StatusText(Status)).CStr(), nullptr, nullptr);
+        if (Operation->Kind == FileOperationKind::Copy || Operation->Kind == FileOperationKind::Extract ||
+            Operation->Kind == FileOperationKind::Compress)
+            hz::fs::DeleteTree(Operation->Target);
+        delete Operation;
+        Refresh();
+        return;
+    }
+
+    switch (Operation->Kind) {
+    case FileOperationKind::Copy:
+        HzPrint("files: copied %s to %s", Operation->Source.CStr(), Operation->Target.CStr());
+        break;
+    case FileOperationKind::Move:
+        ClipPath_ = hz::String();
+        HzPrint("files: moved %s to %s", Operation->Source.CStr(), Operation->Target.CStr());
+        break;
+    case FileOperationKind::Extract:
+        HzPrint("files: extracted %s to %s (%d files, %d folders)", Operation->Source.CStr(),
+                Operation->Target.CStr(), Operation->Extracted.Files, Operation->Extracted.Folders);
+        break;
+    case FileOperationKind::Delete:
+        if (hz::fs::EqualNames(ClipPath_.CStr(), Operation->Source.CStr()) ||
+            hz::fs::IsInside(ClipPath_, Operation->Source))
+            ClipPath_ = hz::String();
+        HzPrint("files: permanently deleted %s", Operation->Source.CStr());
+        break;
+    case FileOperationKind::DeleteTrash:
+        HzPrint("files: permanently deleted Trash item %s", Operation->Name.CStr());
+        break;
+    case FileOperationKind::Compress:
+        HzPrint("files: created ZIP archive %s", Operation->Target.CStr());
+        break;
+    }
+    NotifyShell(Operation->Kind == FileOperationKind::Extract || Operation->Kind == FileOperationKind::Compress
+                    ? HZ_NOTIFICATION_ARCHIVE_COMPLETE
+                    : HZ_NOTIFICATION_FILE_COMPLETE);
+    hz::String SelectName = hz::fs::FileName(Operation->Target.Empty() ? Operation->Source : Operation->Target);
+    delete Operation;
+    Refresh();
+    if (!SelectName.Empty())
+        Select(SelectName);
+}
+
 /* "notes.txt" -> "notes - Copy.txt", then "notes - Copy (2).txt", ...; folders have no extension. */
 hz::String FreeName(const hz::String &Folder, const hz::String &Name, bool Directory)
 {
@@ -1706,6 +2124,19 @@ hz::String FreeName(const hz::String &Folder, const hz::String &Name, bool Direc
     for (int i = 2; hz::fs::Exists(hz::fs::Join(Folder, Candidate.CStr())) && i < 1000; i++)
         Candidate = hz::String::Format("%s - Copy (%d)%s", Stem.CStr(), i, Ext.CStr());
     return Candidate;
+}
+
+void FilesApp::CompressSelected()
+{
+    const hz::fs::Entry *Entry = Selected();
+    if (!Entry || !Writable() || TrashMode_ || OperationActive_)
+        return;
+    hz::String Name = hz::String::Format("%s.zip", Entry->Name.CStr());
+    if (hz::fs::Exists(hz::fs::Join(Folder_, Name.CStr())))
+        Name = FreeName(Folder_, Name, false);
+    hz::String Source = hz::fs::Join(Folder_, Entry->Name.CStr());
+    hz::String Target = hz::fs::Join(Folder_, Name.CStr());
+    StartFileOperation(FileOperationKind::Compress, Source, Target, Entry->Name, "Creating ZIP archive...");
 }
 
 void FilesApp::Paste()
@@ -1738,25 +2169,8 @@ void FilesApp::Paste()
         }
         Target = hz::fs::Join(Folder_, FreeName(Folder_, Name, Directory).CStr());
     }
-    uint64_t Start = NowUs();
-    STATUS Status = ClipCut_ ? hz::fs::MoveTree(Source, Target) : hz::fs::CopyTree(Source, Target);
-    if (!HZ_SUCCESS(Status)) {
-        HzPrint("files: cannot paste %s to %s (0x%08X)", Source.CStr(), Target.CStr(), (uint32_t)Status);
-        if (!ClipCut_ && hz::fs::Exists(Target))
-            hz::fs::DeleteTree(Target); /* no half copies */
-        MessageBox(Main_, "Files", hz::String::Format("\"%s\" cannot be %s here: %s.", Name.CStr(),
-                                                      ClipCut_ ? "moved" : "copied", hz::fs::StatusText(Status)).CStr(),
-                   nullptr, nullptr);
-        Refresh();
-        return;
-    }
-    HzPrint("files: %s %s to %s (%u ms)", ClipCut_ ? "moved" : "pasted", Source.CStr(), Target.CStr(),
-            (uint32_t)((NowUs() - Start) / 1000));
-    if (ClipCut_)
-        ClipPath_ = hz::String();
-    Refresh();
-    Select(hz::fs::FileName(Target));
-    Main_->SetFocus(List_);
+    StartFileOperation(ClipCut_ ? FileOperationKind::Move : FileOperationKind::Copy, Source, Target, Name,
+                       ClipCut_ ? "Moving item..." : "Copying item...");
 }
 
 /* Unpacks an archive next to itself, into a folder named after it without the archive suffix
@@ -1785,29 +2199,7 @@ void FilesApp::ExtractSelected()
                    nullptr, nullptr);
         return;
     }
-    uint64_t Start = NowUs();
-    hz::archive::Result Count;
-    STATUS Status = hz::archive::Extract(Source, Dest, &Count);
-    if (!HZ_SUCCESS(Status)) {
-        HzPrint("files: cannot extract %s (0x%08X)", Source.CStr(), (uint32_t)Status);
-        if (Status == STATUS_NOT_SUPPORTED)
-            MessageBox(Main_, "Extract",
-                       hz::String::Format("\"%s\" uses a form of compression this OS does not read "
-                                          "(Zip64, an encrypted entry, or bzip2).",
-                                          Name.CStr())
-                           .CStr(),
-                       nullptr, nullptr);
-        else
-            MessageBox(Main_, "Extract",
-                       hz::String::Format("\"%s\" cannot be extracted: %s.", Name.CStr(), hz::fs::StatusText(Status)).CStr(),
-                       nullptr, nullptr);
-        Refresh();
-        return;
-    }
-    HzPrint("files: extracted %s to %s (%d files, %d folders, %s) (%u ms)", Source.CStr(), Dest.CStr(), Count.Files,
-            Count.Folders, hz::fs::FormatSize(Count.Bytes).CStr(), (uint32_t)((NowUs() - Start) / 1000));
-    Refresh();
-    Select(Base);
+    StartFileOperation(FileOperationKind::Extract, Source, Dest, Name, "Extracting archive...");
     Main_->SetFocus(List_);
 }
 
@@ -1832,6 +2224,9 @@ void FilesApp::ShowItemContextMenu(size_t Index, Point Screen)
         return;
     }
     Items.Push(MenuItem::Make("Open", [this, Index]() { Open(Index); }));
+    MenuItem CompressItem = MenuItem::Make("Create ZIP archive", [this]() { CompressSelected(); });
+    CompressItem.Enabled = Writable() && !OperationActive_;
+    Items.Push(hz::Move(CompressItem));
     if (!E.Directory && hz::archive::IsArchive(E.Name)) {
         MenuItem ExtractItem = MenuItem::Make("Extract all...", [this]() { ExtractSelected(); });
         ExtractItem.Enabled = Writable();
@@ -1957,8 +2352,8 @@ void FilesApp::ShowSortMenu()
 void FilesApp::ShowViewMenu()
 {
     hz::Vector<MenuItem> Items;
-    const FileView Views[3] = {FileView::Details, FileView::List, FileView::Tiles};
-    for (int i = 0; i < 3; i++) {
+    const FileView Views[4] = {FileView::Details, FileView::List, FileView::Tiles, FileView::Grid};
+    for (int i = 0; i < 4; i++) {
         MenuItem Item = MenuItem::Make(ViewName(Views[i]), [this, i, Views]() { SetView(Views[i]); });
         Item.Checked = View_ == Views[i];
         Items.Push(hz::Move(Item));

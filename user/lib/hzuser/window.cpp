@@ -13,6 +13,7 @@
  * application's content.
  */
 #include "hzuser.h"
+#include "hzui.h"
 
 static_assert(HZ_WIN32K_SERVICE_COUNT == 31, "update user/lib/hzuser/hzusersys.asm with the service table");
 
@@ -55,13 +56,6 @@ int64_t CallProc(WindowEntry *E, uint32_t Message, uint64_t WParam, uint64_t LPa
     return Proc(E->Handle, Message, WParam, LParam);
 }
 
-/* Caption colors (dark theme; Mica captions are transparent so the blurred wallpaper shows). */
-constexpr uint32_t kCaptionOpaque = 0xFF202020;
-constexpr uint32_t kTextActive = 0xFFFFFFFF;
-constexpr uint32_t kTextInactive = 0x8CFFFFFF;
-constexpr uint32_t kDefaultBackground = 0xFF202020;
-constexpr uint32_t kButtonHot = 0x14FFFFFF;
-constexpr uint32_t kButtonPressed = 0x0BFFFFFF;
 constexpr uint32_t kCloseHot = 0xFFC8342C;
 constexpr uint32_t kClosePressed = 0xFFA52B25;
 
@@ -90,7 +84,8 @@ void DrawCaptionButton(WindowEntry *E, HZ_CANVAS *C, uint32_t Button, uint32_t G
     bool Hot = E->CaptionHot == Button, Pressed = E->CaptionPressed == Button && Hot;
     if (Hot || Pressed) {
         uint32_t Fill = Button == HZ_CAPTION_BUTTON_CLOSE ? (Pressed ? kClosePressed : kCloseHot)
-                                                          : (Pressed ? kButtonPressed : kButtonHot);
+                                                          : (Pressed ? hzui::Theme::ControlFillPressed
+                                                                     : hzui::Theme::ControlFillHover);
         HzBlendRect(C, R, Fill);
         if (Button == HZ_CAPTION_BUTTON_CLOSE)
             Glyph = 0xFFFFFFFF;
@@ -132,8 +127,8 @@ void DrawCaption(WindowEntry *E, HZ_CANVAS *C)
     HZ_RECT Caption = {0, 0, Width, HZ_CAPTION_HEIGHT};
     if (C->Clip.Top >= Caption.Bottom)
         return;
-    HzFillRect(C, Caption, (E->Style & HZ_WS_MICA) ? 0x00000000 : kCaptionOpaque);
-    uint32_t Text = E->Active ? kTextActive : kTextInactive;
+    HzFillRect(C, Caption, (E->Style & HZ_WS_MICA) ? 0x00000000 : hzui::Theme::SolidBackground);
+    uint32_t Text = E->Active ? hzui::Theme::TextPrimary : hzui::Theme::TextSecondary;
     HZ_WINDOW_INFO Info;
     HZ_FONT *Font = HzGetFont(HZ_FONT_CAPTION);
     if (Font && HZ_SUCCESS(NtUserGetWindowInfo(E->Handle, &Info))) {
@@ -280,7 +275,8 @@ extern "C" int64_t HzDefWindowProc(HWND Window, uint32_t Message, uint64_t WPara
         if (HzBeginPaint(Window, &Paint)) {
             WindowEntry *E = Lookup(Window);
             HZ_RECT Client = HzGetClientRect(Window);
-            HzFillRect(&Paint.Canvas, Client, (E && (E->Style & HZ_WS_MICA)) ? 0x00000000 : kDefaultBackground);
+            HzFillRect(&Paint.Canvas, Client,
+                       (E && (E->Style & HZ_WS_MICA)) ? 0x00000000 : hzui::Theme::SolidBackground);
             HzEndPaint(Window, &Paint);
         }
         return 0;

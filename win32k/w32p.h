@@ -9,7 +9,9 @@
  *   - The compositor's dirty region has its own spinlock (CmpInvalidate* may be called with
  *     WmLock held). The compositor thread takes WmLock only to snapshot the visible windows; it
  *     composes from referenced surfaces without holding it.
- *   Lock order: WmLock -> compositor dirty lock -> pool.
+ *   - CmpBeginPaint and the compositor acquire the paint mutex before WmLock; BeginPaint keeps it
+ *     until EndPaint, so the compositor never reads a surface while its owner writes.
+ *   Lock order: paint mutex -> WmLock -> compositor dirty lock -> pool.
  */
 #ifndef W32P_H
 #define W32P_H
@@ -69,6 +71,9 @@ struct WINDOW {
     uint32_t State;          /* HZ_WINDOW_STATE_MINIMIZED, HZ_WINDOW_STATE_MAXIMIZED */
     HZ_RECT RestoreRect;     /* the normal rectangle while maximized */
     uint32_t SnapState;      /* WmSnap*; zero when neither snapped nor maximized */
+    bool MotionActive;       /* compositor-only eased transition for snap/maximize geometry */
+    HZ_RECT MotionFrom, MotionTo;
+    uint64_t MotionStartUs;
     uint32_t Cursor;         /* HZ_CURSOR_* over the client area */
     int32_t MinWidth, MinHeight; /* interactive resizing lower bound (with HZ_MIN_WINDOW_*) */
 };
@@ -175,6 +180,9 @@ bool CmpInitialize();
 bool CmpIsAvailable();
 int32_t CmpScreenWidth();
 int32_t CmpScreenHeight();
+/* Held from BeginPaint through EndPaint so composition never samples a surface during owner writes. */
+void CmpBeginPaint();
+void CmpEndPaint();
 /* Queues composition of a screen rectangle (any IRQL <= DISPATCH_LEVEL). */
 void CmpInvalidateRect(const HZ_RECT *Rect);
 void CmpInvalidateCursor(int32_t OldX, int32_t OldY, int32_t NewX, int32_t NewY);

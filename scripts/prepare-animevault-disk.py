@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Extract the AnimeVault Windows release payload and build a FAT32 QEMU test disk.
+
+Requires 7z and mtools. The NSIS installer is unpacked only; it is never executed.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import struct
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DISK_BYTES = 1024 * 1024 * 1024
+PARTITION_START = 2048
+SECTOR_BYTES = 512
+PARTITION_OFFSET = PARTITION_START * SECTOR_BYTES
+
+
+def run(arguments: list[str], *, env: dict[str, str] | None = None) -> None:
+    subprocess.run(arguments, check=True, env=env)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("installer", type=Path, help="AnimeVault Windows NSIS installer executable")
+    parser.add_argument("output", type=Path, help="destination raw disk image")
+    args = parser.parse_args()
+
+    installer = args.installer.resolve()
+    output = args.output.resolve()
+    if not installer.is_file():
+        parser.error(f"installer not found: {installer}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.parent.resolve().relative_to(ROOT)
+
+    with tempfile.TemporaryDirectory(prefix="nexora-animevault-") as temporary:
+        work = Path(temporary)
+        wrapper = work / "wrapper"
+        payload = work / "payload"
+        wrapper.mkdir()
+        payload.mkdir()
+        run(["7z", "x", str(installer), "$PLUGINSDIR/app-64.7z", f"-o{wrapper}", "-y"])
+        nested_archive = wrapper / "$PLUGINSDIR" / "app-64.7z"
+        if not nested_archive.is_file():
+            raise RuntimeError("the NSIS installer did not contain $PLUGINSDIR/app-64.7z")
+        run(["7z", "x", str(nested_archive), f"-o{payload}", "-y"])
+        if not (payload / "AnimeVault.exe").is_file() or not (payload / "resources" / "app.asar").is_file():
+            raise RuntimeError("the extracted release is missing AnimeVault.exe or resources/app.asar")
+
+        disk = work / "animevault-app-disk.img"
+        with disk.open("wb") as image:
+            image.truncate(DISK_BYTES)
+        total_sectors = DISK_BYTES // SECTOR_BYTES
+        partition_sectors = total_sectors - PARTITION_START
+        mbr = bytearray(SECTOR_BYTES)
+        entry = bytearray(16)
+        entry[1:4] = b"\xFE\xFF\xFF"
+        entry[4] = 0x0C  # FAT32 with LBA addressing
+        entry[5:8] = b"\xFE\xFF\xFF"
+        struct.pack_into("<II", entry, 8, PARTITION_START, partition_sectors)
+        mbr[446:462] = entry
+        mbr[510:512] = b"\x55\xAA"
+        with disk.open("r+b") as image:
+            image.write(mbr)
+
+        partition = f"{disk}@@{PARTITION_OFFSET}"
+        tool_env = dict(os.environ)
+        tool_env["MTOOLS_SKIP_CHECK"] = "1"
+        run([
+            "mformat", "-i", partition, "-F", "-c", "8", "-v", "ANIMEVAULT",
+            "-T", str(partition_sectors), "::",
+        ], env=tool_env)
+        for entry in sorted(payload.iterdir(), key=lambda item: item.name.casefold()):
+            run(["mcopy", "-s", "-i", partition, str(entry), "::/"], env=tool_env)
+
+        shutil.copyfile(disk, output)
+    print(f"animevault-disk: {output} ({DISK_BYTES} bytes; full app payload included)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

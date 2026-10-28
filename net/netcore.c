@@ -1,18 +1,8 @@
 /*
  * Nexora OS - net/netcore.c
- * The glue include/net.h declares but nothing implemented: frame submission with retry, the
- * receive worker that drains each interface's ring, and the dispatch that routes a received frame
- * to ARP or IPv4. arp.c already calls NetTransmitFrame, so without this file the kernel net layer
- * cannot link.
- *
- * What this file deliberately does NOT do (kept honest):
- *   - It does not start the worker for the user yet. NetStart() (net/dhcp.c) already polls the same
- *     ring while it configures the interface, and two readers of one ring would steal each other's
- *     frames. NetInitializeStack()/NetReceiveWorker() are the contract the transports will use; a
- *     later step starts the worker once UDP/TCP exist and DHCP is done with the ring.
- *   - NetInitializeStack resets the ARP and UDP tables. The TCP and socket tables it is documented
- *     to reset do not exist yet (net/tcp.c and net/socket.c are not written), so calling their
- *     initializers would not link.
+ * Frame submission with retry, per-interface receive workers, and Ethernet dispatch.
+ * DHCP owns each ring until that interface is configured; afterward its receive worker is the
+ * only ring reader for that interface.
  */
 #include "ex.h"
 #include "ke.h"
@@ -86,6 +76,7 @@ void NetReceiveWorker(void *Context)
                 Reported = true;
             }
         }
+        NetStackTick();
         if (!Drained)
             KeDelayExecutionThread(NET_POLL_INTERVAL_US);
     }
@@ -95,10 +86,12 @@ void NetInitializeStack(void)
 {
     NetArpInitialize();
     NetUdpInitialize();
-    DbgPrint("Network: stack initialized (ARP and UDP; TCP is not implemented yet)\n");
+    NetTcpInitialize();
+    DbgPrint("Network: stack initialized (ARP, UDP and TCP)\n");
 }
 
 void NetStackTick(void)
 {
     NetArpTick();
+    NetTcpTick();
 }

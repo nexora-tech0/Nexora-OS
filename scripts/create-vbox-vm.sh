@@ -17,9 +17,10 @@
 # Installing (M10): start with the ISO, run "Install Nexora OS" from Start, power off, then
 # `create-vbox-vm.sh --boot-disk --start` boots the installed system.
 #
-# VM: Other/Unknown (64-bit), EFI, 2048 MB RAM, 1 CPU (see --cpus), VMSVGA with 64 MB VRAM, PS/2 keyboard and
-# mouse, SATA AHCI with a 16 GB VDI (port 0), a DVD drive with the ISO (port 1) and optionally the
-# FAT32 test disk (port 2), COM1 logged to <VM folder>/serial-com1.log, EFI GOP resolution
+# VM: Other/Unknown (64-bit), EFI, 2048 MB RAM, 1 CPU (see --cpus), VMSVGA with 64 MB VRAM,
+# PS/2 keyboard and mouse, an E1000 NAT network adapter, SATA AHCI with a 16 GB VDI (port 0),
+# a DVD drive with the ISO (port 1) and optionally the FAT32 test disk (port 2), COM1 logged
+# to <VM folder>/serial-com1.log, EFI GOP resolution
 # 1920x1080, paravirt provider "minimal", TSC mode RealTSCOffset (M11).
 #
 # Works from Linux/macOS (VBoxManage) and from WSL or Git Bash on Windows (VBoxManage.exe).
@@ -126,7 +127,7 @@ if ! vm_exists; then
         --keyboard ps2 \
         --audio-enabled off \
         --usb-ohci off --usb-ehci off --usb-xhci off \
-        --nic1 none \
+        --nic1 nat --nictype1 82540EM --cableconnected1 on \
         --boot1 dvd --boot2 disk --boot3 none --boot4 none
     vbm setextradata "$VM" VBoxInternal2/EfiGraphicsResolution 1920x1080
 

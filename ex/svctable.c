@@ -50,6 +50,22 @@ static const KSYSTEM_SERVICE ExpServiceTable[HzSysServiceCount] = {
     [HzSysCreateProcessEx] = {NtCreateProcessEx, 5, "CreateProcessEx"},
     [HzSysOpenProcess] = {NtOpenProcess, 3, "OpenProcess"},
     [HzSysResolveHostA] = {NtResolveHostA, 2, "ResolveHostA"},
+    [HzSysTcpConnect] = {NtTcpConnect, 3, "TcpConnect"},
+    [HzSysTcpSend] = {NtTcpSend, 4, "TcpSend"},
+    [HzSysTcpReceive] = {NtTcpReceive, 5, "TcpReceive"},
+    [HzSysTcpClose] = {NtTcpClose, 1, "TcpClose"},
+    [HzSysGenerateRandomBytes] = {NtGenerateRandomBytes, 2, "GenerateRandomBytes"},
+    [HzSysWinGetStdHandle] = {NtWinGetStdHandle, 1, "WinGetStdHandle"},
+    [HzSysWinWriteFile] = {NtWinWriteFile, 5, "WinWriteFile"},
+    [HzSysWinExitProcess] = {NtWinExitProcess, 1, "WinExitProcess"},
+    [HzSysQueryWinCompatReport] = {NtQueryWinCompatReport, 3, "QueryWinCompatReport"},
+    [HzSysWinHeapAlloc] = {NtWinHeapAlloc, 4, "WinHeapAlloc"},
+    [HzSysWinHeapFree] = {NtWinHeapFree, 3, "WinHeapFree"},
+    [HzSysWinGetModuleHandle] = {NtWinGetModuleHandle, 3, "WinGetModuleHandle"},
+    [HzSysWinSocketApi] = {NtWinSocketApi, 5, "WinSocketApi"},
+    [HzSysWinGetProcAddress] = {NtWinGetProcAddress, 3, "WinGetProcAddress"},
+    [HzSysWinCreateFile] = {NtWinCreateFile, 4, "WinCreateFile"},
+    [HzSysWinGetFileAttributes] = {NtWinGetFileAttributes, 1, "WinGetFileAttributes"},
 };
 
 void ExInitializeSystem(void)

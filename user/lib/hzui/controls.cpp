@@ -10,6 +10,10 @@ namespace hzui {
 
 namespace {
 
+/* Nexora's controls use a softer capsule and a small leading signal mark. The mark is a
+   consistent interaction cue across the system and keeps buttons from reading as stock Fluent. */
+constexpr float kButtonRadius = 12.0f;
+
 int32_t TextWidth(FontRole Role, const hz::String &Text)
 {
     HZ_FONT *F = GetFont(Role);
@@ -78,9 +82,16 @@ void Button::Paint(Painter &P)
         break;
     }
     const Rect &B = Bounds();
-    P.FillRoundRect(B, Theme::ControlRadius, Fill);
+    P.FillRoundRect(B, kButtonRadius, Fill);
     if (Style == ButtonStyle::Standard)
-        P.StrokeRoundRect(B, Theme::ControlRadius, 1, Theme::ControlStroke);
+        P.StrokeRoundRect(B, kButtonRadius, 1, Theme::ControlStroke);
+
+    if (Enabled && Style != ButtonStyle::Subtle && Hover > 0.02f) {
+        int32_t SignalWidth = (int32_t)(18.0f * Hover);
+        if (SignalWidth > 0)
+            P.FillRoundRect(Rect{B.X + (B.Width - SignalWidth) / 2, B.Bottom() - 4, SignalWidth, 2},
+                            1.0f, ScaleAlpha(Theme::Accent, Hover * 0.9f));
+    }
 
     int32_t TextW = TextWidth(FontRole::Body, Text_);
     int32_t IconW = Glyph == Icon::None ? 0 : (Text_.Empty() ? 16 : 24);
@@ -94,7 +105,7 @@ void Button::Paint(Painter &P)
 void Button::PaintOverlay(Painter &P)
 {
     if (ShowsFocusRing())
-        P.FocusRing(Bounds(), Theme::ControlRadius);
+        P.FocusRing(Bounds(), kButtonRadius);
 }
 
 void Button::OnPointerEnter()

@@ -10,8 +10,7 @@
  *   - NetIpResolveAndSend resolves the next hop through ARP and then sends.
  *   - NetIpReceive answers ICMP echo requests (so the machine is pingable, a real reachability
  *     check) and hands UDP datagrams to NetUdpDeliver() (net/udp.c). TCP returns
- *     STATUS_NOT_SUPPORTED until net/tcp.c exists; this function must not call NetTcpDeliver()
- *     before then, because a call to an unimplemented function would not link.
+ *   - TCP segments are checksum-validated and dispatched to net/tcp.c.
  */
 #include "ex.h"
 #include "ke.h"
@@ -166,9 +165,13 @@ STATUS NetIpReceive(NET_INTERFACE *Interface, const NET_ETHERNET_VIEW *Ethernet,
             NetUdpDeliver(Interface, Ipv4, &Udp);
         return STATUS_SUCCESS;
     }
-    case NET_IP_PROTOCOL_TCP:
-        /* Arrives when net/tcp.c is written; dropped cleanly until then. */
-        return STATUS_NOT_SUPPORTED;
+    case NET_IP_PROTOCOL_TCP: {
+        NET_TCP_VIEW Tcp;
+        if (HZ_SUCCESS(NetParseTcp(Ipv4, &Tcp)) &&
+            NetTcpChecksumValid(Ipv4->Source, Ipv4->Destination, Tcp.Segment, Tcp.SegmentLength))
+            NetTcpDeliver(Interface, Ethernet->Source, Ipv4, &Tcp);
+        return STATUS_SUCCESS;
+    }
     default:
         return STATUS_NOT_SUPPORTED;
     }

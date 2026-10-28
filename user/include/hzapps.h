@@ -45,8 +45,15 @@ const App *FindForExtension(const Vector<App> &Apps, const String &Extension);
 const App *FindByImage(const Vector<App> &Apps, const char *ImageName); /* "notepad.exe" or a full path */
 /* Starts App (with Argument quoted as its only argument when not null). */
 STATUS Launch(const App &Program, const char *Argument, uint32_t *ProcessId = nullptr);
-/* Opens Path: a Nexora-compatible .exe runs, a document opens in the program whose manifest lists
-   its extension. The kernel currently supports statically linked PE32+ images without DLL imports.
+/* Retrieves a bounded loader/import report for a Windows PE image. */
+STATUS QueryCompatibilityReport(const String &ImagePath, String &Report);
+/* Translates a Nexora tool command such as taskmgr.nxe to its implemented .exe image name.
+   Unknown .nxe names retain their basename and map to basename.exe, allowing the caller to
+   report a normal not-found result until that tool is implemented. */
+String ResolveToolImageName(const String &Name);
+/* Opens Path: a compatible .exe runs, a document opens in the program whose manifest lists its
+   extension. The kernel accepts AMD64 PE32+ images and resolves a limited built-in Win32 import
+   surface; it does not yet load Windows DLLs or provide general CRT/GUI compatibility.
    Program (optional) gets the program's name. STATUS_NOT_FOUND: nothing opens it. */
 STATUS OpenPath(const String &Path, uint32_t *ProcessId = nullptr, String *Program = nullptr);
 

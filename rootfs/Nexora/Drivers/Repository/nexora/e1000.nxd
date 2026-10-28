@@ -1,0 +1,11 @@
+format = nexora-driver-package-v1
+name = Nexora Intel E1000 Ethernet
+provider = Nexora
+architecture = x86_64
+bus = PCI
+hardware-ids = 8086:100E,8086:10D3
+source = kernel:drivers/net/e1000.c
+status = qemu-tested
+physical-test = not-recorded
+capabilities = ethernet, dma, link, dhcp
+firmware = none

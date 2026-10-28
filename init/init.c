@@ -353,6 +353,7 @@ static void KiPhase1Initialization(void *Context)
     if (NetworkOk && DhcpTestsOk && DnsTestsOk && NetGetInterfaceList()) {
         STATUS DhcpStatus = NetStart();
         DhcpStartOk = HZ_SUCCESS(DhcpStatus);
+        DbgPrint("Network: NetStart returned 0x%08X\n", (uint32_t)DhcpStatus);
         if (!DhcpStartOk)
             DbgPrintEx(DPFLTR_ERROR_LEVEL, "Network: could not start DHCP client (0x%08X)\n",
                        (uint32_t)DhcpStatus);

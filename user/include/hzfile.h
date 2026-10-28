@@ -83,6 +83,7 @@ public:
     String Get(const char *Key, const char *Default = "") const;
     int GetInt(const char *Key, int Default = 0) const;
     void Set(const char *Key, const char *Value);
+    void Unset(const char *Key);
     void SetInt(const char *Key, int Value);
     const Vector<Item> &Items() const { return Items_; }
 

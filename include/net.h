@@ -2,8 +2,8 @@
  * Nexora OS - include/net.h
  * Kernel network protocol stack layered on the NET_INTERFACE boundary (netif.h): ARP, IPv4 with
  * ICMP echo, UDP with bounded receive queues, TCP with bounded state and timers, and a bounded
- * socket interface. A single receive worker (net/netif.c) polls every registered interface and
- * dispatches complete frames; senders submit frames directly through the interface.
+ * socket interface. One receive worker per configured interface polls its device and dispatches
+ * complete frames; senders submit frames directly through the interface.
  *
  * Locking model: the stack never blocks while holding the TCP or UDP locks. ARP has its own
  * spin lock and per-request events, so a sender may resolve an address while a peer frame is
@@ -119,7 +119,7 @@ void NetUdpDeliver(NET_INTERFACE *Interface, const NET_IPV4_VIEW *Ipv4, const NE
 #define NET_TCP_MAX_RETRANSMITS 5
 #define NET_TCP_TIME_WAIT_US 4000000ull
 #define NET_TCP_CONNECT_TIMEOUT_US 6000000ull
-#define NET_TCP_CLOSE_TIMEOUT_US 4000000ull
+#define NET_TCP_CLOSE_TIMEOUT_US 8000000ull
 
 typedef enum _NET_TCP_STATE {
     NetTcpStateClosed = 0,
@@ -156,6 +156,8 @@ STATUS NetTcpReceive(NET_TCP_CONNECTION *Connection, void *Buffer, uint32_t Capa
 STATUS NetTcpClose(NET_TCP_CONNECTION *Connection);
 void NetTcpDestroy(NET_TCP_CONNECTION *Connection);
 NET_TCP_STATE NetTcpState(NET_TCP_CONNECTION *Connection);
+/* Called by NetStackTick from the receive worker. */
+void NetTcpTick(void);
 /* Delivers an inbound segment. */
 void NetTcpDeliver(NET_INTERFACE *Interface, const uint8_t SourceMac[6], const NET_IPV4_VIEW *Ipv4,
                    const NET_TCP_VIEW *View);

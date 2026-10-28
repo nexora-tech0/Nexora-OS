@@ -17,6 +17,7 @@ Rect WorkArea();
 
 constexpr uint64_t kAnimationTimer = 1;
 constexpr uint64_t kToolTipTimer = 2;
+constexpr uint64_t kWindowMotionTimer = 3;
 constexpr uint32_t kToolTipDelayMs = 600;
 
 }  // namespace hzui

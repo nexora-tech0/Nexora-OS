@@ -1,0 +1,12 @@
+format = nexora-driver-package-v1
+name = Nexora AMD PCnet PCI Ethernet
+provider = Nexora
+architecture = x86_64
+bus = PCI
+hardware-ids = 1022:2000
+source = kernel:drivers/net/pcnet.c
+status = qemu-tested
+physical-test = not-recorded
+capabilities = pci-enumeration, dma-ring-transmit, dma-ring-receive, dhcp
+known-limitations = physical-hardware-unverified; controller-link-state-is-approximated
+firmware = none

@@ -121,6 +121,14 @@ PCI_DEVICE *PciFindDevice(uint8_t Class, uint8_t Subclass, uint8_t ProgIf, PCI_D
     return NULL;
 }
 
+void PciSetDriverStatus(PCI_DEVICE *Device, PCI_DRIVER_STATE State, const char *DriverName)
+{
+    if (!Device)
+        return;
+    Device->DriverState = (uint8_t)State;
+    RtlStringCopy(Device->DriverName, sizeof(Device->DriverName), DriverName ? DriverName : "");
+}
+
 void PciEnableDevice(PCI_DEVICE *Device, uint16_t CommandBits)
 {
     PciWriteConfig16(Device, 0x04, PciReadConfig16(Device, 0x04) | CommandBits);

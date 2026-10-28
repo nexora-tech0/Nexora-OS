@@ -204,6 +204,16 @@ void Element::InvalidateLayout()
         Window_->InvalidateLayout();
 }
 
+void Element::OnThemeChanged(Theme::Scheme Previous)
+{
+    Theme::Scheme Current = Theme::Current();
+    Background = Theme::Recolor(Background, Previous, Current);
+    BorderColor = Theme::Recolor(BorderColor, Previous, Current);
+    for (Element *Child : Children_)
+        Child->OnThemeChanged(Previous);
+    Invalidate();
+}
+
 void Element::StartAnimation()
 {
     if (Window_)
@@ -412,6 +422,13 @@ void Card::Paint(Painter &P)
         P.TextLine(GetFont(TitleFont), Rect{ContentBounds().X, ContentBounds().Y, ContentBounds().Width,
                                            HeadingHeight(TitleFont)},
                    Title_.CStr(), TitleForeground ? TitleForeground : Theme::TextPrimary);
+}
+
+void Card::OnThemeChanged(Theme::Scheme Previous)
+{
+    StackPanel::OnThemeChanged(Previous);
+    if (TitleForeground)
+        TitleForeground = Theme::Recolor(TitleForeground, Previous, Theme::Current());
 }
 
 Toolbar::Toolbar(const char *Title, int32_t ItemSpacing)
@@ -697,6 +714,12 @@ void TextBlock::Paint(Painter &P)
         Y += Layout_.LineHeight;
     }
     P.PopClip();
+}
+
+void TextBlock::OnThemeChanged(Theme::Scheme Previous)
+{
+    Element::OnThemeChanged(Previous);
+    Foreground = Theme::Recolor(Foreground, Previous, Theme::Current());
 }
 
 /* ---- ScrollBar ------------------------------------------------------------------------------------ */

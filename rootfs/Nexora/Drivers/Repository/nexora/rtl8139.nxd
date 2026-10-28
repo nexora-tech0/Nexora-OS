@@ -1,0 +1,12 @@
+format = nexora-driver-package-v1
+name = Nexora Realtek RTL8139 Ethernet
+provider = Nexora
+architecture = x86_64
+bus = PCI
+hardware-ids = 10EC:8139
+source = kernel:drivers/net/rtl8139.c
+status = qemu-tested
+physical-test = not-recorded
+capabilities = controller-initialization, link-detection, polled-transmit, polled-receive, dhcp
+known-limitations = physical-hardware-unverified; sustained-traffic-unverified
+firmware = none

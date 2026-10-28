@@ -1,0 +1,12 @@
+format = nexora-driver-package-v1
+name = Nexora VirtIO Network (Legacy PCI)
+provider = Nexora
+architecture = x86_64
+bus = PCI
+hardware-ids = 1AF4:1000
+source = kernel:drivers/virtio/virtio_net.c
+status = qemu-tested
+physical-test = not-applicable-virtual-device
+capabilities = ethernet, receive, transmit, dhcp
+known-limitations = legacy-pci-transport-only; polled-queues; no-offloads
+firmware = none

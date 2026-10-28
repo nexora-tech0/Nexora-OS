@@ -64,8 +64,24 @@ SERVICE NtCreatePipe                    ; HzSysCreatePipe
 SERVICE NtCreateProcessEx               ; HzSysCreateProcessEx
 SERVICE NtOpenProcess                   ; HzSysOpenProcess
 SERVICE NtResolveHostA                  ; HzSysResolveHostA
+SERVICE NtTcpConnect                     ; HzSysTcpConnect
+SERVICE NtTcpSend                        ; HzSysTcpSend
+SERVICE NtTcpReceive                     ; HzSysTcpReceive
+SERVICE NtTcpClose                       ; HzSysTcpClose
+SERVICE NtGenerateRandomBytes            ; HzSysGenerateRandomBytes
+SERVICE NtWinGetStdHandle                 ; HzSysWinGetStdHandle
+SERVICE NtWinWriteFile                    ; HzSysWinWriteFile
+SERVICE NtWinExitProcess                  ; HzSysWinExitProcess
+SERVICE NtQueryWinCompatReport            ; HzSysQueryWinCompatReport
+SERVICE NtWinHeapAlloc                    ; HzSysWinHeapAlloc
+SERVICE NtWinHeapFree                     ; HzSysWinHeapFree
+SERVICE NtWinGetModuleHandle               ; HzSysWinGetModuleHandle
+SERVICE NtWinSocketApi                      ; HzSysWinSocketApi
+SERVICE NtWinGetProcAddress                 ; HzSysWinGetProcAddress
+SERVICE NtWinCreateFile                      ; HzSysWinCreateFile
+SERVICE NtWinGetFileAttributes               ; HzSysWinGetFileAttributes
 
-%if HZ_SERVICE_NUMBER != 37
+%if HZ_SERVICE_NUMBER != 53
 %error "service stub count does not match HzSysServiceCount"
 %endif
 

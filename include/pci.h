@@ -20,10 +20,19 @@ typedef struct _PCI_DEVICE {
     uint8_t InterruptLine, InterruptPin;
     uint8_t MsiCapability;   /* config offset, 0 if none */
     uint8_t MsixCapability;
+    uint8_t DriverState;     /* PCI_DRIVER_STATE; updated by built-in driver startup */
+    char DriverName[32];
     uint64_t Bar[6];         /* base address (I/O port or physical memory), 0 if unused */
     uint64_t BarSize[6];
     bool BarIsIo[6];
 } PCI_DEVICE;
+
+typedef enum _PCI_DRIVER_STATE {
+    PciDriverUnmatched = 0,
+    PciDriverStarted = 1,
+    PciDriverIdentityOnly = 2,
+    PciDriverStartFailed = 3,
+} PCI_DRIVER_STATE;
 
 /* PCI command register bits */
 #define PCI_COMMAND_IO 0x0001
@@ -42,6 +51,8 @@ PCI_DEVICE *PciGetDeviceList(void);
 /* Next device after Previous (NULL = from the start) with this class/subclass/prog-if
    (0xFF = any prog-if). */
 PCI_DEVICE *PciFindDevice(uint8_t Class, uint8_t Subclass, uint8_t ProgIf, PCI_DEVICE *Previous);
+/* Record the result of a built-in driver's per-device startup attempt. */
+void PciSetDriverStatus(PCI_DEVICE *Device, PCI_DRIVER_STATE State, const char *DriverName);
 /* Sets bits in the command register (memory/I-O decoding, bus mastering). */
 void PciEnableDevice(PCI_DEVICE *Device, uint16_t CommandBits);
 /* Programs single-message MSI to Vector on the boot processor and masks INTx. */

@@ -58,11 +58,20 @@ typedef struct _EPROCESS {
     bool IsSystem;
     LIST_ENTRY ActiveProcessLinks; /* PspActiveProcessList */
     LIST_ENTRY ThreadListHead;     /* ETHREAD.ThreadListEntry, under PspLock */
+    LIST_ENTRY WinCompatHeapAllocations; /* allocations returned by the Win32 HeapAlloc shim */
+    LIST_ENTRY WinCompatModules;   /* loaded PE module records, under PspLock */
     uint32_t ActiveThreads;
     uint64_t ImageBase;
     uint64_t ImageSize;
     uint64_t EntryPoint;
     uint64_t PebAddress;
+    uint32_t TlsTemplateRva;
+    uint32_t TlsTemplateSize;
+    uint32_t TlsZeroFillSize;
+    uint32_t TlsCallbackCount;
+    uint64_t TlsCallbacks[64];
+    uint64_t TlsStartupThunk;
+    bool HasStaticTls;
     uint64_t StackReserve;
     uint64_t CreateTimeUs;
     uint64_t ExitTimeUs;
@@ -85,6 +94,8 @@ typedef struct _ETHREAD {
     uint64_t UserArgument1;
     uint64_t UserArgument2;
     uint64_t TebAddress;
+    uint64_t TlsArrayAddress;
+    uint64_t TlsBlockAddress;
     uint64_t UserStackReservation; /* allocation base (guard page at the bottom) */
     uint64_t UserStackBase;        /* top, exclusive */
     uint64_t UserStackLimit;       /* lowest committed address */
@@ -172,6 +183,10 @@ STATUS NtCreateProcessEx(const uint64_t *Args);
 STATUS NtOpenProcess(const uint64_t *Args);
 STATUS NtQueryInformationProcess(const uint64_t *Args);
 STATUS NtQueryInformationThread(const uint64_t *Args);
+STATUS NtWinGetStdHandle(const uint64_t *Args);
+STATUS NtWinWriteFile(const uint64_t *Args);
+STATUS NtWinExitProcess(const uint64_t *Args);
+STATUS NtQueryWinCompatReport(const uint64_t *Args);
 
 HZ_EXTERN_C_END
 

@@ -224,6 +224,7 @@ STATUS NtUserBeginPaint(const uint64_t *Args)
         return Status;
     HZ_PAINT Paint;
     memset(&Paint, 0, sizeof(Paint));
+    CmpBeginPaint();
     WmAcquire();
     WINDOW *W;
     Status = ReferenceWindow(Args[0], true, &W);
@@ -235,7 +236,11 @@ STATUS NtUserBeginPaint(const uint64_t *Args)
         WmFillSurfaceInfo(W, &Paint.Surface);
     }
     WmRelease();
-    return HZ_SUCCESS(Status) ? MmCopyToUser((void *)Args[1], &Paint, sizeof(Paint)) : Status;
+    if (HZ_SUCCESS(Status))
+        Status = MmCopyToUser((void *)Args[1], &Paint, sizeof(Paint));
+    if (!HZ_SUCCESS(Status))
+        CmpEndPaint();
+    return Status;
 }
 
 /* EndPaint(HWND, const HZ_RECT *Painted) */
@@ -244,8 +249,10 @@ STATUS NtUserEndPaint(const uint64_t *Args)
     HZ_RECT Painted = {0, 0, HZ_MAX_WINDOW_SIZE, HZ_MAX_WINDOW_SIZE};
     if (Args[1]) {
         STATUS Status = MmCopyFromUser(&Painted, (const void *)Args[1], sizeof(Painted));
-        if (!HZ_SUCCESS(Status))
+        if (!HZ_SUCCESS(Status)) {
+            CmpEndPaint();
             return Status;
+        }
     }
     WmAcquire();
     WINDOW *W;
@@ -257,6 +264,7 @@ STATUS NtUserEndPaint(const uint64_t *Args)
         CmpInvalidateRect(&R);
     }
     WmRelease();
+    CmpEndPaint();
     return Status;
 }
 

@@ -1,0 +1,11 @@
+format = nexora-driver-package-v1
+name = Nexora AHCI SATA Storage
+provider = Nexora
+architecture = x86_64
+bus = PCI
+hardware-ids = class:01:06:01
+source = kernel:drivers/ahci/ahci.c
+status = qemu-tested
+physical-test = not-recorded
+capabilities = identify, read, write, sata
+firmware = none

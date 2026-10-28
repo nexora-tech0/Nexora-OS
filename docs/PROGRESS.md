@@ -1,9 +1,73 @@
 # Nexora OS progress
 
+## Active driver work (2026-10-28)
+
+- Network interface registration now resolves colliding `eth0` names from independent drivers to
+  unique `ethN` names. `NetStart` launches a separate DHCP worker per registered adapter. The new
+  `network-multi-interface` QEMU smoke case boots an E1000 and RTL8139 together and confirms both
+  acquire DHCP configuration. This is emulated coverage, not physical hardware validation.
+- Added an AMD PCnet PCI driver with WIO-to-DWIO startup, DMA descriptor rings and polled
+  transmission/reception. Its `network-pcnet` QEMU smoke case passes and obtains DHCP; the test
+  caught and fixed the PCnet ring-length encoding. This does not validate physical PCnet cards or
+  the Trident ID matched by the implementation. The bundled `.nxd` descriptor records QEMU-only
+  evidence.
+- The xHCI smoke case now attaches a USB boot keyboard and relative boot mouse together, injects a
+  key plus mouse motion/button through QMP, and confirms both reports reach the shared HID input
+  path. The targeted `xhci-controller` case passes. This does not add hubs, hotplug, UASP, or
+  generic HID report-descriptor parsing.
+- Expanded `xhci-storage` to attach two independent USB BOT disks and a keyboard concurrently.
+  Both disks enumerate as separate block devices and FAT32 volumes, and the QEMU filesystem
+  read/write suite passes (15/15). Hubs, hotplug, UASP, and physical controller tests remain open.
+- The additional-storage roadmap now records that BOT-compatible USB-to-SATA bridges use the
+  existing USB mass-storage class path, while clearly leaving physical bridge validation open.
+- Extended the x64 Win32 import shim with `GetTickCount` and `GetTickCount64`, using the native
+  monotonic uptime service and converting microseconds to Windows milliseconds, plus
+  `GetCurrentProcess`/`GetCurrentThread` pseudo-handles. Added a bounded `GetModuleHandleA/W`
+  service that resolves the current executable by basename or path and reports a missing module
+  through last-error. The foreign-PE probe exercises these APIs. `windows-console-compat` QEMU
+  execution exits successfully and confirms fail-closed reporting for an unrelated unsupported
+  import. This remains a small kernel32 surface, not general Windows app support.
+- The complete remaining hardware scope and the exact next milestones are tracked in
+  `docs/DRIVER_ROADMAP.md`: Wi-Fi, broader Ethernet, USB class/controller coverage, GPU, audio and
+  Bluetooth, laptop ACPI/I2C devices, and additional storage.
+- Windows application compatibility can proceed in parallel; hardware driver completion is not a
+  prerequisite. The current `ps/wincompat.c` surface remains a small console-oriented kernel32/
+  kernelbase subset, not support for ordinary Windows GUI applications or installers. The
+  Wine-style target and staged implementation/acceptance path are recorded in
+  `docs/WINDOWS_COMPAT_ROADMAP.md`.
+
 Status at a glance: **M12 complete, version 1.1.0** (2026-10-08), then a **cleanup pass
 (2026-10-25)** that removed Blockyard and the beta/test programs. The roadmap (M0–M11) ended
 with 1.0.0; M12 added Blockyard, a block-building game, and the window manager's mouse lock. What
 could come next is listed under "Beyond 1.0" below.
+
+## Active compatibility and driver work (2026-10-27)
+
+- Setup now displays the PCI inventory and actual Nexora driver states. Its AHCI disk-selection
+  path is covered by the `installer-pnp` smoke case.
+- Added a native PCI NVMe driver and a QEMU NVMe disk path. `installer-nvme` verifies discovery in
+  Setup; `install-nvme` verifies partition creation, system installation, and file readback through
+  the NVMe driver. Both cases pass in the current WSL/QEMU environment. Physical NVMe models remain
+  unvalidated.
+- Extended the polled Intel Ethernet driver to PCI `8086:10D3` (82574L). The QEMU `e1000e` test
+  passes controller start, link-up, DHCP, and desktop startup. Physical 82574L hardware remains
+  unvalidated; `8086:1502` (82579LM) is still identification-only.
+- Advanced xHCI to enumerate multiple devices (up to 8 controller slots), configure boot-HID
+  interrupt endpoints, and publish USB keyboard events through the shared input queue. The
+  `xhci-controller` QEMU smoke case attaches a keyboard and tablet on separate ports, injects a key,
+  and verifies the event; the PS/2 `input` smoke case also passes through the shared queue. USB HID
+  mouse report handling is implemented but not yet smoke-tested.
+- Added USB mass storage Bulk-Only Transport with SCSI INQUIRY/READ CAPACITY and 512-byte
+  READ(10)/WRITE(10) disk I/O. The new `xhci-storage` QEMU case boots from a USB 2 disk, mounts its
+  GPT/FAT32 volume, runs filesystem write/read tests, then checks the resulting files from the host;
+  it passes. UASP, USB 3.x, hubs/hotplug, and physical controllers/devices remain untested or
+  unsupported. Setup input and install-media use still need end-to-end verification. Windows `.sys`
+  binaries remain incompatible with the Nexora kernel.
+- Next hardware work: verify USB keyboard and USB target-drive use through Setup, then USB HID mouse,
+  broader wired NICs, Wi-Fi, and permitted firmware packages.
+- Windows user-mode compatibility remains an early console subset. Real GUI applications and their
+  installers are not supported yet; expand the PE loader, NT/Win32 APIs, DLL/CRT loading, and GUI
+  subsystem against a named application test set.
 
 Resume checklist for a new session:
 1. Read `docs/ARCHITECTURE.md` (decisions) and this file (state, next steps, known issues).
@@ -833,7 +897,10 @@ Resume checklist for a new session:
 - Virtual memory: the VAD list is linear (fine for now); no decommit without release; no
   no-access protection on committed pages; the VM services work on the caller's own process only.
 - User mode limits (M4):
-  - no DLLs or import resolution, no TLS directory (global constructors run since M7);
+  - no Windows DLL loading, export/forwarded-export resolution, API-set lookup, or module
+    bookkeeping. Only the built-in kernel32/kernelbase console imports documented in README.md
+    resolve to process-local thunks; app-local dependencies, TLS and delay imports remain
+    unsupported (native Nexora global constructors run since M7);
   - no structured exception handling: every unhandled user exception terminates the process;
   - no handle inheritance or duplication, `NtCreateThread` only in the caller's process;
   - an NMI between `syscall` and `swapgs` would run with the user GS base (NMIs only freeze the
@@ -843,8 +910,9 @@ Resume checklist for a new session:
 - I/O limits (M5):
   - synchronous IRPs only, no IRP stack locations or filter drivers, no asynchronous/overlapped
     I/O, no cache manager (FAT32 reads and writes go to the disk every time);
-  - AHCI only (no NVMe, legacy IDE or ATAPI reads; the boot DVD is ignored after boot), LBA48 and
-    512-byte logical sectors only, one command at a time per port through a 64 KiB bounce buffer;
+  - AHCI and single-namespace NVMe storage (no legacy IDE or ATAPI reads; the boot DVD is ignored
+    after boot), 512-byte logical sectors only, synchronous transfers; NVMe uses polling and a
+    bounded DMA bounce buffer; multiple NVMe namespaces and physical-machine validation remain;
   - no INTx routing (needs AML `_PRT`): devices without MSI are polled;
   - PS/2 only (no USB HID), US layout, no keyboard LED updates;
   - FAT32: no sharing modes, no access dates, no dirty-volume bit (by decision, M11), ASCII-only

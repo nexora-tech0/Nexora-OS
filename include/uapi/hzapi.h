@@ -76,6 +76,14 @@ typedef uint32_t ACCESS_MASK;
  *                                                      standard handles for the new process (M9)
  *   OpenProcess(HANDLE *Process, ACCESS_MASK Access, uint32_t ProcessId)    (M9)
  *   ResolveHostA(const char *HostName, uint8_t Ipv4Address[4])   resolve one DNS A record
+ *   TcpConnect(uint32_t IPv4Address, uint16_t Port, HZ_TCP_HANDLE *Connection)
+ *   TcpSend(HZ_TCP_HANDLE Connection, const void *Buffer, uint32_t Length, uint32_t *BytesSent)
+ *   TcpReceive(HZ_TCP_HANDLE Connection, void *Buffer, uint32_t Capacity, uint64_t TimeoutUs,
+ *              uint32_t *BytesReceived)
+ *   TcpClose(HZ_TCP_HANDLE Connection)
+ *   GenerateRandomBytes(void *Buffer, uint32_t Length)  RDRAND only; <= HZ_RANDOM_MAX_BYTES
+ *                                                      STATUS_NOT_SUPPORTED if unavailable,
+ *                                                      STATUS_UNSUCCESSFUL on bounded retry failure
  *
  * Window manager services (win32k) use numbers from HZ_WIN32K_SERVICE_BASE (uapi/hzuser.h).
  */
@@ -118,8 +126,32 @@ enum HZ_SYSTEM_SERVICE {
     HzSysCreateProcessEx,
     HzSysOpenProcess,
     HzSysResolveHostA,
+    HzSysTcpConnect,
+    HzSysTcpSend,
+    HzSysTcpReceive,
+    HzSysTcpClose,
+    HzSysGenerateRandomBytes,
+    /* Narrow Win32 console compatibility entry points used by PE import thunks. */
+    HzSysWinGetStdHandle,
+    HzSysWinWriteFile,
+    HzSysWinExitProcess,
+    HzSysQueryWinCompatReport,
+    HzSysWinHeapAlloc,
+    HzSysWinHeapFree,
+    HzSysWinGetModuleHandle,
+    HzSysWinSocketApi,
+    HzSysWinGetProcAddress,
+    HzSysWinCreateFile,
+    HzSysWinGetFileAttributes,
     HzSysServiceCount
 };
+
+/* Opaque, process-owned token returned by TcpConnect; never a kernel pointer. */
+typedef int32_t HZ_TCP_HANDLE;
+#define HZ_TCP_INVALID_HANDLE 0
+
+/* Bound each random syscall's kernel stack use and per-call execution time. */
+#define HZ_RANDOM_MAX_BYTES 256u
 
 /* ---- Access rights ------------------------------------------------------------------------- */
 
@@ -189,6 +221,7 @@ typedef struct _HZ_PEB {
     uint64_t StandardInput;
     uint64_t StandardOutput;
     uint64_t StandardError;
+    uint16_t CommandLineW[256];
 } HZ_PEB;
 
 /* CreateProcessEx parameters: handles of the caller (0 = none) that the new process gets as its
@@ -202,16 +235,38 @@ typedef struct _HZ_PROCESS_PARAMETERS {
 } HZ_PROCESS_PARAMETERS;
 
 typedef struct _HZ_TEB {
-    struct _HZ_TEB *Self; /* gs:[0] */
+    void *ExceptionList; /* NT_TIB, gs:[0x00] */
+    uint64_t StackBase;  /* gs:[0x08], top (highest address) */
+    uint64_t StackLimit; /* gs:[0x10], lowest committed address */
+    void *SubSystemTib;
+    void *FiberData;
+    void *ArbitraryUserPointer;
+    struct _HZ_TEB *Self; /* NT_TIB.Self, gs:[0x30] */
+    void *EnvironmentPointer;
+    uint64_t WindowsProcessId; /* ClientId.UniqueProcess at gs:[0x40]. */
+    uint64_t WindowsThreadId;  /* ClientId.UniqueThread at gs:[0x48]. */
+    void *ActiveRpcHandle;
+    void **ThreadLocalStoragePointer; /* static TLS array at gs:[0x58]. */
+    void *WindowsPeb;                 /* gs:[0x60]. */
+    uint32_t WindowsLastError;        /* gs:[0x68]. */
+    uint32_t WindowsReserved;
+    uint8_t WindowsTebReserved[0x148 - 0x70];
+    void *TlsSlots[64];
+    /* Nexora runtime fields follow the Windows-compatible TEB prefix and TLS slots. */
     HZ_PEB *Peb;
     uint64_t ProcessId;
     uint64_t ThreadId;
-    uint64_t StackBase;  /* top (highest address) */
-    uint64_t StackLimit; /* lowest committed address */
     int32_t LastStatus;
     uint32_t Reserved;
-    void *TlsSlots[64];
 } HZ_TEB;
+
+_Static_assert(offsetof(HZ_TEB, StackBase) == 0x08, "Windows NT_TIB stack base offset");
+_Static_assert(offsetof(HZ_TEB, Self) == 0x30, "Windows NT_TIB self offset");
+_Static_assert(offsetof(HZ_TEB, WindowsProcessId) == 0x40, "Windows TEB client ID offset");
+_Static_assert(offsetof(HZ_TEB, ThreadLocalStoragePointer) == 0x58, "Windows TEB static TLS offset");
+_Static_assert(offsetof(HZ_TEB, WindowsPeb) == 0x60, "Windows TEB PEB offset");
+_Static_assert(offsetof(HZ_TEB, WindowsLastError) == 0x68, "Windows TEB last-error offset");
+_Static_assert(offsetof(HZ_TEB, TlsSlots) == 0x148, "Windows TEB TLS slots offset");
 
 /* ---- System information --------------------------------------------------------------------- */
 
@@ -219,7 +274,29 @@ typedef struct _HZ_TEB {
 #define HZ_SYSTEM_PROCESS_INFORMATION_CLASS 1u
 #define HZ_SYSTEM_PROCESSOR_INFORMATION_CLASS 2u /* M11: one entry per online processor */
 #define HZ_SYSTEM_NETWORK_INTERFACE_INFORMATION_CLASS 3u
+#define HZ_SYSTEM_PCI_DEVICE_INFORMATION_CLASS 4u /* PCI inventory and built-in driver match candidates */
 #define HZ_MAX_NETWORK_INTERFACES 8u
+#define HZ_MAX_PCI_DEVICES 128u
+
+#define HZ_PCI_DRIVER_UNSUPPORTED 0u
+#define HZ_PCI_DRIVER_MATCH_CANDIDATE 1u
+#define HZ_PCI_DRIVER_IDENTITY_ONLY 2u
+#define HZ_PCI_DRIVER_STARTED 3u
+#define HZ_PCI_DRIVER_START_FAILED 4u
+
+typedef struct _HZ_SYSTEM_PCI_DEVICE_INFORMATION {
+    uint16_t VendorId;
+    uint16_t DeviceId;
+    uint8_t Bus;
+    uint8_t Device;
+    uint8_t Function;
+    uint8_t Class;
+    uint8_t Subclass;
+    uint8_t ProgIf;
+    uint8_t Revision;
+    uint8_t DriverState; /* candidate match is not proof initialization succeeded */
+    char DriverName[32];
+} HZ_SYSTEM_PCI_DEVICE_INFORMATION;
 
 typedef struct _HZ_SYSTEM_PROCESSOR_INFORMATION {
     uint32_t Number;

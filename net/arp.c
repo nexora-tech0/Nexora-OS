@@ -44,6 +44,8 @@ void NetArpInitialize(void)
     memset(NetpArpCache, 0, sizeof(NetpArpCache));
     memset(NetpArpPending, 0, sizeof(NetpArpPending));
     KeInitializeSpinLock(&NetpArpLock);
+    for (uint32_t i = 0; i < NET_ARP_MAX_PENDING; ++i)
+        KeInitializeEvent(&NetpArpPending[i].Event, NotificationEvent, false);
     NetpArpInitialized = true;
 }
 

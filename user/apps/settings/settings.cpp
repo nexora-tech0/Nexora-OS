@@ -258,7 +258,7 @@ public:
         char Text[2] = {Initial_, 0};
         if (Text[0] >= 'a' && Text[0] <= 'z')
             Text[0] = (char)(Text[0] - 32);
-        P.TextLine(GetFont(FontRole::Title), B, Text, 0xFFFFFFFF, Align::Center);
+        P.TextLine(GetFont(FontRole::Title), B, Text, Theme::TextPrimary, Align::Center);
     }
 
 private:
@@ -320,6 +320,7 @@ public:
 private:
     StackPanel *NewPage(const char *Title, const char *Subtitle);
     void AddPersonalization();
+    void AddWidgets();
     void AddFilesPreferences();
     void AddAccounts();
     void ApplyName();
@@ -425,58 +426,27 @@ STATUS LoadShellSettings(hz::fs::Settings &S)
 
 StackPanel *SettingsApp::NewPage(const char *Title, const char *Subtitle)
 {
-    StackPanel *P = Pages_->Add<StackPanel>(Orientation::Vertical, 12);
-    P->Padding = Thickness(28, 12, 28, 24);
+    StackPanel *P = Pages_->Add<StackPanel>(Orientation::Vertical, 16);
+    P->Padding = Thickness(30, 18, 30, 28);
     P->Add<TextBlock>(Title, FontRole::Title);
     TextBlock *Sub = P->Add<TextBlock>(Subtitle, FontRole::Body);
     Sub->Foreground = Theme::TextSecondary;
     Sub->Wrap = true;
-    Sub->Margin = Thickness(0, 0, 0, 8);
+    Sub->Margin = Thickness(0, 0, 0, 12);
     P->SetVisible(false);
     return P;
 }
 
-void SettingsApp::AddPersonalization()
+void SettingsApp::AddWidgets()
 {
-    StackPanel *P = NewPage("Personalization",
-                            "Choose the colour mode, and separate desktop and lock-screen images. Accent-colour "
-                            "controls are not implemented yet.");
+    StackPanel *P = NewPage("Desktop widgets", "Choose which status cards appear on the desktop and lock screen.");
     TextBlock *Status = P->Add<TextBlock>("", FontRole::Caption);
     Status->Wrap = true;
-    /* The colour scheme (shell.ini "Theme"). The shell switches at once; other programs take it up
-       when they are next opened, because each one paints the palette it was built with. */
-    InfoCard *Appearance = P->Add<InfoCard>("Colour mode");
-    hz::fs::Settings ShellSettings;
-    LoadShellSettings(ShellSettings);
-    hz::Vector<hz::String> Modes;
-    Modes.Push("Dark");
-    Modes.Push("Light");
-    AddChoice(Appearance, "Colour mode", Modes, ShellSettings.GetInt("Theme", 0) != 0 ? 1 : 0, [Status](size_t Index) {
-        hz::fs::Settings S;
-        LoadShellSettings(S);
-        S.SetInt("Theme", Index == 1 ? 1 : 0);
-        bool Notified = false;
-        STATUS Result = SaveShellSettings(S, &Notified);
-        if (!HZ_SUCCESS(Result)) {
-            Status->Foreground = Theme::Accent;
-            Status->SetText(Result == STATUS_MEDIA_WRITE_PROTECTED
-                                ? "The live system is read-only. Install Nexora OS to keep this choice."
-                                : hz::String::Format("Could not save the colour mode (0x%08X).", (uint32_t)Result).CStr());
-            return;
-        }
-        Status->Foreground = Notified ? Theme::TextSecondary : Theme::Accent;
-        Status->SetText(Notified ? "Colour mode saved. The desktop switches now; programs take it up when they "
-                                   "are opened again."
-                                 : "Saved, but the shell did not pick the change up.");
-        HzPrint("settings: colour mode set to %s", Index == 1 ? "light" : "dark");
-    });
-    Appearance->Note("Light and dark. First-boot setup asks for this too, and the desktop, the taskbar and the "
-                     "flyouts follow the choice. Programs opened before the switch keep the mode they started in.");
-    InfoCard *WidgetCard = P->Add<InfoCard>("Desktop widgets");
     hz::fs::Settings DesktopSettings;
     STATUS DesktopStatus = DesktopSettings.Load(hz::fs::SettingsPath("desktop"));
     if (!HZ_SUCCESS(DesktopStatus) && DesktopStatus != STATUS_NOT_FOUND)
         HzPrint("settings: cannot read widget preferences (0x%08X)", (uint32_t)DesktopStatus);
+    InfoCard *WidgetCard = P->Add<InfoCard>("Desktop widgets");
     auto SetWidget = [Status](const char *Id, bool Enabled) {
         hz::fs::Settings S;
         STATUS LoadStatus = S.Load(hz::fs::SettingsPath("desktop"));
@@ -556,6 +526,43 @@ void SettingsApp::AddPersonalization()
     LockWidgetCard->Note("These sit on the Windows 11-style lock surface (below the clock). Click the wallpaper or "
                          "press a key to open sign-in; Escape returns to the lock surface. Right-click a lock widget "
                          "to add or remove it.");
+    List_.Push(Page{"Desktop widgets", Icon::AppWindow, P,
+                    "widgets desktop lock screen clock calendar cpu memory battery gpu", {}});
+}
+
+void SettingsApp::AddPersonalization()
+{
+    StackPanel *P = NewPage("Personalization",
+                            "Choose the colour mode, and separate desktop and lock-screen images. Accent-colour "
+                            "controls are not implemented yet.");
+    TextBlock *Status = P->Add<TextBlock>("", FontRole::Caption);
+    Status->Wrap = true;
+    /* The shell broadcasts a theme change to open windows after saving the preference. */
+    InfoCard *Appearance = P->Add<InfoCard>("Colour mode");
+    hz::fs::Settings ShellSettings;
+    LoadShellSettings(ShellSettings);
+    hz::Vector<hz::String> Modes;
+    Modes.Push("Dark");
+    Modes.Push("Light");
+    AddChoice(Appearance, "Colour mode", Modes, ShellSettings.GetInt("Theme", 0) != 0 ? 1 : 0, [Status](size_t Index) {
+        hz::fs::Settings S;
+        LoadShellSettings(S);
+        S.SetInt("Theme", Index == 1 ? 1 : 0);
+        bool Notified = false;
+        STATUS Result = SaveShellSettings(S, &Notified);
+        if (!HZ_SUCCESS(Result)) {
+            Status->Foreground = Theme::Accent;
+            Status->SetText(Result == STATUS_MEDIA_WRITE_PROTECTED
+                                ? "The live system is read-only. Install Nexora OS to keep this choice."
+                                : hz::String::Format("Could not save the colour mode (0x%08X).", (uint32_t)Result).CStr());
+            return;
+        }
+        Status->Foreground = Notified ? Theme::TextSecondary : Theme::Accent;
+        Status->SetText(Notified ? "Colour mode saved. Open windows are switching now."
+                                 : "Saved, but the shell did not pick the change up.");
+        HzPrint("settings: colour mode set to %s", Index == 1 ? "light" : "dark");
+    });
+    Appearance->Note("Light and dark. The desktop, taskbar, flyouts and open Nexora apps follow the choice.");
     StackPanel *Targets = P->Add<StackPanel>(Orientation::Horizontal, 8);
     Button *DesktopTarget = Targets->Add<Button>("Desktop", ButtonStyle::Accent);
     Button *LockTarget = Targets->Add<Button>("Lock screen", ButtonStyle::Standard);
@@ -1298,12 +1305,10 @@ void SettingsApp::AddHome()
     TextBlock *Memory = Status->Row("Memory");
     TextBlock *Processes = Status->Row("Processes");
     TextBlock *Network = Status->Row("Network");
-    P->Add<TextBlock>("Recommended settings", FontRole::Subtitle);
+    P->Add<TextBlock>("Quick links", FontRole::Subtitle);
     Grid *Shortcuts = P->Add<Grid>();
     Shortcuts->Columns.Push(GridLength::Stars(1));
     Shortcuts->Columns.Push(GridLength::Stars(1));
-    Shortcuts->Rows.Push(GridLength::AutoSize());
-    Shortcuts->Rows.Push(GridLength::AutoSize());
     Shortcuts->Rows.Push(GridLength::AutoSize());
     Shortcuts->Rows.Push(GridLength::AutoSize());
     Shortcuts->ColumnSpacing = 8;
@@ -1317,10 +1322,6 @@ void SettingsApp::AddHome()
         {"Personalization", "Choose independent desktop and lock-screen wallpapers."},
         {"Desktop & Dock", "Show or hide the desktop icons and the top dock, and arrange the icons."},
         {"Network & Internet", "Inspect adapter link and assigned IPv4 details."},
-        {"Apps", "Browse and open installed Nexora applications."},
-        {"Default apps", "See which program opens which kind of file."},
-        {"Accounts", "Manage the current account and sign-in password."},
-        {"Keyboard", "The key combinations the shell and its file windows understand."},
     };
     for (size_t Index = 0; Index < sizeof(Targets) / sizeof(Targets[0]); Index++) {
         InfoCard *Shortcut = Shortcuts->Add<InfoCard>(Targets[Index].Title);
@@ -1433,12 +1434,70 @@ void SettingsApp::AddPrivacySecurity()
 
 void SettingsApp::AddDevices()
 {
-    const char *Message = "Keyboard and mouse input are supported, but this build has no peripheral-management page, "
-                          "USB host controller stack, or Bluetooth support.";
-    StackPanel *P = NewPage("Devices", Message);
-    InfoCard *Card = P->Add<InfoCard>("Availability");
-    TextBlock *Text = Card->Add<TextBlock>(Message, FontRole::Body);
-    Text->Wrap = true;
+    StackPanel *P = NewPage("Devices", "PCI hardware detected during startup and Nexora driver matches.");
+    InfoCard *Inventory = P->Add<InfoCard>("PCI hardware inventory");
+    TextBlock *InventoryText = Inventory->Add<TextBlock>("Reading device inventory…", FontRole::Body);
+    InventoryText->Wrap = true;
+    HZ_SYSTEM_PCI_DEVICE_INFORMATION Devices[HZ_MAX_PCI_DEVICES];
+    uint32_t Returned = 0;
+    STATUS QueryStatus = NtQuerySystemInformation(HZ_SYSTEM_PCI_DEVICE_INFORMATION_CLASS, Devices,
+                                                   sizeof(Devices), &Returned);
+    if (HZ_SUCCESS(QueryStatus) || QueryStatus == STATUS_BUFFER_TOO_SMALL) {
+        size_t Count = hz::Min((size_t)(Returned / sizeof(Devices[0])), HZ_ARRAYSIZE(Devices));
+        uint32_t Started = 0, Failed = 0, Unmatched = 0;
+        hz::String Lines;
+        for (size_t I = 0; I < Count; I++) {
+            const HZ_SYSTEM_PCI_DEVICE_INFORMATION &D = Devices[I];
+            if (D.DriverState == HZ_PCI_DRIVER_STARTED)
+                Started++;
+            else if (D.DriverState == HZ_PCI_DRIVER_START_FAILED)
+                Failed++;
+            else if (D.DriverState == HZ_PCI_DRIVER_UNSUPPORTED)
+                Unmatched++;
+            Lines += hz::String::Format("PCI %02X:%02X.%u   %04X:%04X   class %02X:%02X:%02X\n",
+                                         (uint32_t)D.Bus, (uint32_t)D.Device, (uint32_t)D.Function,
+                                         (uint32_t)D.VendorId, (uint32_t)D.DeviceId, (uint32_t)D.Class,
+                                         (uint32_t)D.Subclass, (uint32_t)D.ProgIf);
+            if (D.DriverState == HZ_PCI_DRIVER_MATCH_CANDIDATE) {
+                Lines += hz::String::Format("  Built-in candidate: %s; startup status is not reported yet.\n",
+                                             D.DriverName);
+            } else if (D.DriverState == HZ_PCI_DRIVER_STARTED) {
+                Lines += hz::String::Format("  Driver started: %s.\n", D.DriverName);
+            } else if (D.DriverState == HZ_PCI_DRIVER_START_FAILED) {
+                Lines += hz::String::Format("  Driver matched but failed to start: %s.\n", D.DriverName);
+            } else if (D.DriverState == HZ_PCI_DRIVER_IDENTITY_ONLY) {
+                Lines += hz::String::Format("  Identified only: %s. No operational driver is available.\n",
+                                             D.DriverName);
+            } else {
+                Lines += hz::String::Format("  %s.\n", D.DriverName);
+            }
+        }
+        if (Count == 0)
+            Lines = "No PCI devices were reported by the firmware scan.";
+        if (QueryStatus == STATUS_BUFFER_TOO_SMALL)
+            Lines += "\nThe inventory is truncated because it exceeds this build's device limit.";
+        InventoryText->SetText(Lines.CStr());
+        HzPrint("settings: PCI inventory %u device(s), %u driver(s) started, %u failed, %u unmatched",
+                (uint32_t)Count, Started, Failed, Unmatched);
+    } else {
+        InventoryText->SetText(hz::String::Format("Device inventory is unavailable (status 0x%08X).",
+                                                   (uint32_t)QueryStatus).CStr());
+    }
+
+    InfoCard *Drivers = P->Add<InfoCard>("Driver installation");
+    TextBlock *DriverText = Drivers->Add<TextBlock>(
+        "This list reports hardware IDs and built-in driver startup results where available. Windows .sys drivers "
+        "cannot run in Nexora's kernel. Windows driver downloads, "
+        "third-party driver packages, hot-plug rescans, and a driver installer are not implemented.",
+        FontRole::Body);
+    DriverText->Wrap = true;
+
+    InfoCard *Input = P->Add<InfoCard>("Input devices");
+    TextBlock *InputText = Input->Add<TextBlock>(
+        "This build supports PS/2 keyboard and mouse input. USB HID, Bluetooth, and general peripheral management "
+        "are not implemented.",
+        FontRole::Body);
+    InputText->Wrap = true;
     List_.Push(Page{"Devices", Icon::Info, P, "devices usb bluetooth controller keyboard mouse", {}});
 }
 
@@ -1712,7 +1771,7 @@ void SettingsApp::Show(size_t Index)
 bool SettingsApp::Create(const char *Initial)
 {
     Wallpaper_ = HZ_MAX_WALLPAPER + 1;
-    Main_ = new Window("Settings", 980, 640);
+    Main_ = new Window("Settings", 980, 680);
     Main_->SetMinimumSize(640, 400);
     Grid *Root = new Grid();
     Root->Columns.Push(GridLength::Pixels(200));
@@ -1735,6 +1794,7 @@ bool SettingsApp::Create(const char *Initial)
     AddHome();
     AddSystem();
     AddPersonalization();
+    AddWidgets();
     AddFilesPreferences();
     AddDesktop();
     AddNetwork();

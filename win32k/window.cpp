@@ -339,6 +339,8 @@ static void WmReveal(WINDOW *W)
     W->Visible = true;
     WmInvalidateWindowArea(W);
     WmShellNotify(HZ_SHELL_WINDOW_CHANGED, W);
+    if (!RgnIsEmpty(W->Update))
+        KeSetEvent(&W->Owner->Wake); /* WM_PAINT is generated only while the window is visible */
 }
 
 HZ_RECT WmWorkArea()
@@ -615,6 +617,13 @@ STATUS WmSetWindowPos(WINDOW *W, int32_t X, int32_t Y, int32_t Width, int32_t He
         return STATUS_INVALID_PARAMETER;
     bool PositionChange = X != W->Rect.Left || Y != W->Rect.Top ||
                           Width != W->Rect.Right - W->Rect.Left || Height != W->Rect.Bottom - W->Rect.Top;
+    if (Requested && PositionChange &&
+        (W->SnapState != WmSnapNone || (W->State & HZ_WINDOW_STATE_MAXIMIZED))) {
+        W->MotionFrom = W->Rect;
+        W->MotionTo = HZ_RECT{X, Y, X + Width, Y + Height};
+        W->MotionStartUs = KeQueryUptimeMicroseconds();
+        W->MotionActive = true;
+    }
     if (!Requested && PositionChange && W->SnapState != WmSnapNone) {
         W->SnapState = WmSnapNone;
         WmShellNotify(HZ_SHELL_WINDOW_CHANGED, W);

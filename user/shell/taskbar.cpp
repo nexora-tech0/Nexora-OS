@@ -20,11 +20,12 @@ uint64_t ClockMinuteKey()
 
 class TaskButton final : public Element {
 public:
-    TaskButton(TaskKind Kind, HWND Window, const char *Title, const char *AppId = "", bool Compact = false)
+    TaskButton(TaskKind Kind, HWND Window, const char *Title, const char *AppId = "", bool Compact = false,
+               int32_t ButtonSize = 42)
         : Kind_(Kind), Window_(Window), Title_(Title), AppId_(AppId), Compact_(Compact)
     {
-        Width = Kind == TaskKind::Quick ? (Compact ? 28 : 72) : 44;
-        Height = Compact ? 24 : 40;
+        Width = Kind == TaskKind::Quick ? (Compact ? 30 : 64) : ButtonSize;
+        Height = Compact ? 28 : (Kind == TaskKind::Quick ? 46 : ButtonSize);
         VerticalAlignment = Align::Center;
         ToolTip = Kind == TaskKind::Start ? "Start" : (Kind == TaskKind::Quick ? "Control Center" : Title);
     }
@@ -51,24 +52,25 @@ public:
         Color BaseFill = Active || Open ? Theme::ControlFill : 0;
         Color Fill = IsPressed() ? Theme::SubtleFillPressed
                                  : MixColors(BaseFill, Theme::ControlFillHover, Hover_.Value());
-        if (Compact_)
-            Fill = IsPressed() ? 0x30000000 : ScaleAlpha(0x30000000, Hover_.Value());
         if (Fill)
             P.FillRoundRect(B, Theme::ControlRadius, Fill);
         int32_t IconSize = Compact_ ? 15 : 18;
-        int32_t Cy = B.Y + (B.Height - 24) / 2 - ((Kind_ == TaskKind::App || Kind_ == TaskKind::PinnedApp) ? 2 : 0);
+        int32_t AppIconSize = B.Width < 36 ? 20 : 24;
+        int32_t Cy = B.Y + (B.Height - AppIconSize) / 2 -
+                     ((Kind_ == TaskKind::App || Kind_ == TaskKind::PinnedApp) ? 2 : 0);
         switch (Kind_) {
         case TaskKind::Start:
-            PaintLogo(P, Rect{B.X + (B.Width - 24) / 2, Cy, 24, 24});
+            PaintLogo(P, Rect{B.X + (B.Width - AppIconSize) / 2, Cy, AppIconSize, AppIconSize});
             break;
         case TaskKind::App:
         case TaskKind::PinnedApp:
-            PaintAppIcon(P, Rect{B.X + (B.Width - 24) / 2, Cy, 24, 24}, Program, Title_.CStr());
+            PaintAppIcon(P, Rect{B.X + (B.Width - AppIconSize) / 2, Cy, AppIconSize, AppIconSize}, Program,
+                         Title_.CStr());
             if (AppWindow_) {
                 float Indicator = ActiveIndicator_.Value();
-                float IndicatorWidth = 6 + Indicator * 10;
+                float IndicatorWidth = 4 + Indicator * 8;
                 Color IndicatorColor = MixColors(Theme::TextTertiary, Theme::Accent, Indicator);
-                P.FillRoundRect(B.X + (B.Width - IndicatorWidth) / 2, (float)B.Bottom() - 4, IndicatorWidth, 3, 1.5f,
+                P.FillRoundRect(B.X + (B.Width - IndicatorWidth) / 2, (float)B.Bottom() - 3, IndicatorWidth, 2, 1,
                                 IndicatorColor);
             }
             break;
@@ -179,72 +181,12 @@ private:
     bool ActiveInitialized_ = false, WasActive_ = false;
 };
 
-class ClockView final : public Element {
+class DockMark final : public Element {
 public:
-    ClockView()
+    DockMark()
     {
-        Width = 84;
-        Height = 40;
-        VerticalAlignment = Align::Center;
-    }
-
-    void Paint(Painter &P) override
-    {
-        uint64_t Now = 0;
-        NtQuerySystemTime(&Now);
-        hz::fs::CivilTime T = hz::fs::ToCivil(Now, g_Shell.UtcOffset);
-        char Time[16], Date[24];
-        HzFormat(Time, sizeof(Time), "%02u:%02u", T.Hour, T.Minute);
-        HzFormat(Date, sizeof(Date), "%u/%u/%lld", T.Day, T.Month, T.Year);
-        const Rect &B = Bounds();
-        HZ_FONT *F = GetFont(FontRole::Caption);
-        P.TextLine(F, Rect{B.X, B.Y + 3, B.Width - 8, 17}, Time, Theme::TextPrimary, Align::End);
-        P.TextLine(F, Rect{B.X, B.Y + 20, B.Width - 8, 17}, Date, Theme::TextPrimary, Align::End);
-        HzFormat(Tip_, sizeof(Tip_), "%s, %u/%u/%lld %s (%s)", hz::fs::WeekdayNames[T.Weekday], T.Day, T.Month, T.Year, Time,
-                 hz::fs::FormatUtcOffset(g_Shell.UtcOffset).CStr());
-        ToolTip = Tip_;
-    }
-
-private:
-    char Tip_[64] = "";
-};
-
-class DockStatus final : public Element {
-public:
-    DockStatus()
-    {
-        Width = 84;
-        Height = 28;
-        VerticalAlignment = Align::Center;
-        Background = Theme::ControlFill;
-        CornerRadius = 14;
-        HitTestVisible = false;
-        ToolTip = "Network and volume indicators";
-    }
-
-    /* Called when the shell switches colour scheme: the fill was captured at construction. */
-    void ApplyTheme()
-    {
-        Background = Theme::ControlFill;
-        Invalidate();
-    }
-
-    void Paint(Painter &P) override
-    {
-        const Rect &B = Bounds();
-        const Color Ink = Theme::TextPrimary;
-        P.DrawIcon(Icon::Wifi, Rect{B.X + 8, B.Y + 7, 14, 14}, Ink);
-        P.DrawIcon(Icon::Volume, Rect{B.X + 31, B.Y + 7, 14, 14}, Ink);
-        P.TextLine(GetFont(FontRole::Caption), Rect{B.X + 54, B.Y + 4, 20, B.Height - 8}, "A", Ink, Align::Center);
-    }
-};
-
-class DockPages final : public Element {
-public:
-    DockPages()
-    {
-        Width = 30;
-        Height = 16;
+        Width = 22;
+        Height = 22;
         VerticalAlignment = Align::Center;
         HitTestVisible = false;
         ToolTip = "Nexora OS desktop";
@@ -253,9 +195,7 @@ public:
     void Paint(Painter &P) override
     {
         const Rect &B = Bounds();
-        P.FillCircle(B.X + 5.0f, B.Y + 8.0f, 2.2f, Theme::Accent);
-        P.FillCircle(B.X + 15.0f, B.Y + 8.0f, 2.2f, Theme::TextTertiary);
-        P.FillCircle(B.X + 25.0f, B.Y + 8.0f, 2.2f, Theme::TextTertiary);
+        P.DrawIcon(Icon::Nexora, B, Theme::Accent, 2.2f);
     }
 };
 
@@ -263,8 +203,8 @@ class DockClock final : public Element {
 public:
     DockClock()
     {
-        Width = 172;
-        Height = 28;
+        Width = 136;
+        Height = 34;
         VerticalAlignment = Align::Center;
         HitTestVisible = false;
     }
@@ -274,77 +214,180 @@ public:
         uint64_t Now = 0;
         NtQuerySystemTime(&Now);
         hz::fs::CivilTime T = hz::fs::ToCivil(Now, g_Shell.UtcOffset);
-        char Text[64], Weekday[4];
+        char Text[32], Weekday[4];
         memcpy(Weekday, hz::fs::WeekdayNames[T.Weekday], 3);
         Weekday[3] = 0;
-        /* Nava OS style: 14:32 Sat, April 10 78% */
-        HzFormat(Text, sizeof(Text), "%02u:%02u   %s, %s %u   78%%", T.Hour, T.Minute, Weekday,
-                 hz::fs::MonthNames[(T.Month - 1) % 12], T.Day);
+        HzFormat(Text, sizeof(Text), "%s, %s %u", Weekday, hz::fs::MonthNames[(T.Month - 1) % 12], T.Day);
+        HzFormat(Time_, sizeof(Time_), "%02u:%02u", T.Hour, T.Minute);
         const Rect &B = Bounds();
         const Color Ink = Theme::TextPrimary;
-        P.TextLine(GetFont(FontRole::Caption), Rect{B.X, B.Y, B.Width - 24, B.Height}, Text, Ink, Align::Center);
-        P.DrawIcon(Icon::Power, Rect{B.Right() - 20, B.Y + 7, 14, 14}, Ink);
+        P.TextLine(GetFont(FontRole::BodyStrong), Rect{B.X, B.Y, B.Width, 17}, Time_, Ink, Align::Center);
+        P.TextLine(GetFont(FontRole::Caption), Rect{B.X, B.Y + 17, B.Width, 16}, Text,
+                   Theme::TextSecondary, Align::Center);
     }
+
+private:
+    char Time_[8] = "";
+};
+
+class NotificationGlyph final : public Element {
+public:
+    explicit NotificationGlyph(Icon Glyph) : Glyph_(Glyph)
+    {
+        Width = 36;
+        Height = 36;
+    }
+    void Paint(Painter &P) override
+    {
+        Rect R = Bounds();
+        P.FillRoundRect(R, 12, Theme::Accent);
+        P.DrawIcon(Glyph_, R.Deflate(Thickness(10)), 0xFFFFFFFF, 1.4f);
+    }
+private:
+    Icon Glyph_;
+};
+
+class NotificationToast final : public Window {
+public:
+    NotificationToast(const char *Title, const char *Message, Icon Glyph)
+        : Window("Notification", 380, 132,
+                 HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_NOFRAME)
+    {
+        Background = 0;
+        StackPanel *Card = new StackPanel(Orientation::Vertical, 9);
+        Card->Padding = Thickness(16, 13, 16, 14);
+        Card->Background = Theme::PopupBackground;
+        Card->BorderColor = Theme::CardStroke;
+        Card->CornerRadius = 20;
+        Grid *Header = Card->Add<Grid>();
+        Header->Columns.Push(GridLength::AutoSize());
+        Header->Columns.Push(GridLength::Stars(1));
+        Header->Columns.Push(GridLength::AutoSize());
+        Header->ColumnSpacing = 10;
+        Header->Add<NotificationGlyph>(Glyph);
+        StackPanel *Heading = Header->Add<StackPanel>(Orientation::Vertical, 1);
+        Heading->GridColumn = 1;
+        Heading->VerticalAlignment = Align::Center;
+        TextBlock *Source = Heading->Add<TextBlock>("Nexora", FontRole::Caption);
+        Source->Foreground = Theme::TextTertiary;
+        TextBlock *Name = Heading->Add<TextBlock>(Title, FontRole::BodyStrong);
+        Name->Foreground = Theme::TextPrimary;
+        Button *Dismiss = Header->Add<Button>("", ButtonStyle::Subtle);
+        Dismiss->GridColumn = 2;
+        Dismiss->Glyph = Icon::Close;
+        Dismiss->ToolTip = "Dismiss";
+        Dismiss->OnClick = [this]() { NtUserPostMessage(Handle(), HZ_WM_CLOSE, 0, 0); };
+        TextBlock *Body = Card->Add<TextBlock>(Message, FontRole::Body);
+        Body->Foreground = Theme::TextSecondary;
+        Body->Wrap = true;
+        SetContent(Card);
+    }
+
+    void Reveal()
+    {
+        Reveal_.Jump(0);
+        Reveal_.To(1, Motion::FlyoutRevealMs);
+        RevealTimer_ = SetTimer(16, [this]() {
+            InvalidateRect(ClientRect());
+            if (Reveal_.Value() >= 1.0f) {
+                KillTimer(RevealTimer_);
+                RevealTimer_ = 0;
+            }
+        });
+        SetTimer(5200, [this]() { NtUserPostMessage(Handle(), HZ_WM_CLOSE, 0, 0); });
+    }
+
+protected:
+    void OnPaint(Painter &P) override
+    {
+        float T = Reveal_.Value();
+        if (T < 1.0f) {
+            int32_t Offset = (int32_t)((1.0f - T) * -18.0f);
+            Size S = WindowSize();
+            P.PushClip(Rect{0, 0, S.Width, S.Height + Offset});
+        }
+        Window::OnPaint(P);
+        if (T < 1.0f)
+            P.PopClip();
+    }
+
+private:
+    Transition Reveal_;
+    uint64_t RevealTimer_ = 0;
 };
 
 }  // namespace
 
+namespace {
+NotificationToast *g_NotificationToast = nullptr;
+}
+
+void ShowNotification(const char *Title, const char *Message, Icon Glyph)
+{
+    if (g_NotificationToast)
+        NtUserPostMessage(g_NotificationToast->Handle(), HZ_WM_CLOSE, 0, 0);
+    NotificationToast *Toast = new NotificationToast(Title, Message, Glyph);
+    g_NotificationToast = Toast;
+    Toast->OnClosed = [Toast]() {
+        if (g_NotificationToast == Toast)
+            g_NotificationToast = nullptr;
+    };
+    if (!Toast->ShowAt(hz::Max(g_Shell.Screen.Width - 404, 8), kTopDockTop + kTopDockHeight + 12)) {
+        if (g_NotificationToast == Toast)
+            g_NotificationToast = nullptr;
+        delete Toast;
+        return;
+    }
+    Toast->Reveal();
+}
+
 Taskbar::Taskbar(int32_t ScreenWidth)
-    : Window("Taskbar", ScreenWidth, kTaskbarHeight,
-             HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_MICA | HZ_WS_NOFRAME) /* shown after unlocking */
+    : Window("Nexora Dock", hz::Min(hz::Max(ScreenWidth - 32, 1), 58), kTaskbarHeight,
+             HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_TRANSPARENT | HZ_WS_NOFRAME),
+      ScreenWidth_(ScreenWidth) /* shown after unlocking */
 {
     Grid *Root = new Grid();
-    Root->Columns.Push(GridLength::Stars(1));
     Root->Columns.Push(GridLength::AutoSize());
-    Root->Columns.Push(GridLength::Stars(1));
-    Root->Padding = Thickness(12, 0);
-    StackPanel *Center = Root->Add<StackPanel>(Orientation::Horizontal, 4);
-    Center->GridColumn = 1;
-    Center->Add<TaskButton>(TaskKind::Start, (HWND)0, "Start");
+    Root->Padding = Thickness(8, 4);
+    Root->Background = Theme::Glass;
+    Root->BorderColor = Theme::CardStroke;
+    Root->CornerRadius = 23;
+    StackPanel *Center = Root->Add<StackPanel>(Orientation::Horizontal, 0);
+    Start_ = Center->Add<TaskButton>(TaskKind::Start, (HWND)0, "Start");
     Apps_ = Center->Add<StackPanel>(Orientation::Horizontal, 4);
-    StackPanel *Tray = Root->Add<StackPanel>(Orientation::Horizontal, 4);
-    Tray->GridColumn = 2;
-    Tray->HorizontalAlignment = Align::End;
-    Tray->Add<TaskButton>(TaskKind::Quick, (HWND)0, "");
-    Clock_ = Tray->Add<ClockView>();
-    Tray_ = Tray;
+    Surface_ = Root;
+    Background = 0;
     SetContent(Root);
 }
 
 void Taskbar::ApplyTheme()
 {
-    if (!Tray_)
-        return;
-    Tray_->Background = Theme::Glass;
-    Tray_->BorderColor = Theme::CardStroke;
-    Tray_->Invalidate();
+    if (Surface_) {
+        Surface_->Background = Theme::Glass;
+        Surface_->BorderColor = Theme::CardStroke;
+        Surface_->Invalidate();
+    }
     InvalidateRect(ClientRect());
 }
 
 TopDock::TopDock(int32_t ScreenWidth)
-    : Window("Nexora Dock", hz::Min(ScreenWidth > 32 ? ScreenWidth - 32 : ScreenWidth, 760), kTopDockHeight,
+    : Window("Nexora Dock", hz::Min(ScreenWidth > 32 ? ScreenWidth - 32 : ScreenWidth, 460), kTopDockHeight,
              HZ_WS_POPUP | HZ_WS_TOPMOST | HZ_WS_NOACTIVATE | HZ_WS_TRANSPARENT | HZ_WS_NOFRAME)
 {
     Background = 0;
     Grid *Root = new Grid();
-    Root->Background = Theme::Glass;
+    Root->Background = Theme::PopupBackground;
+    Root->BorderColor = Theme::CardStroke;
     Root->CornerRadius = 22;
-    Root->Columns.Push(GridLength::Stars(1));
     Root->Columns.Push(GridLength::AutoSize());
     Root->Columns.Push(GridLength::Stars(1));
-    Root->Padding = Thickness(20, 0);
-
-    DockStatus *Status = Root->Add<DockStatus>();
-    Status->VerticalAlignment = Align::Center;
-    Status_ = Status;
+    Root->Columns.Push(GridLength::AutoSize());
+    Root->Padding = Thickness(12, 0);
 
     StackPanel *Brand = Root->Add<StackPanel>(Orientation::Horizontal, 8);
-    Brand->GridColumn = 1;
     Brand->VerticalAlignment = Align::Center;
-    Brand->Padding = Thickness(16, 0);
-    Brand->Background = Theme::ControlFill;
-    Brand->CornerRadius = 14;
-    Brand->Add<DockPages>();
+    Brand->Padding = Thickness(6, 0);
+    Brand->Add<DockMark>();
     TextBlock *Name = Brand->Add<TextBlock>("Nexora OS", FontRole::BodyStrong);
     Name->VerticalAlignment = Align::Center;
     Name->Foreground = Theme::TextPrimary;
@@ -354,7 +397,7 @@ TopDock::TopDock(int32_t ScreenWidth)
     Tray->GridColumn = 2;
     Tray->HorizontalAlignment = Align::End;
     Tray->VerticalAlignment = Align::Center;
-    Tray->Padding = Thickness(10, 0);
+    Tray->Padding = Thickness(6, 0);
     Tray->Background = Theme::ControlFill;
     Tray->CornerRadius = 14;
     Clock_ = Tray->Add<DockClock>();
@@ -414,12 +457,12 @@ void TopDock::Reveal()
 
 void TopDock::ApplyTheme()
 {
-    if (Surface_)
-        Surface_->Background = Theme::Glass;
-    if (Status_)
-        static_cast<DockStatus *>(Status_)->ApplyTheme();
+    if (Surface_) {
+        Surface_->Background = Theme::PopupBackground;
+        Surface_->BorderColor = Theme::CardStroke;
+    }
     if (Brand_) {
-        Brand_->Background = Theme::ControlFill;
+        Brand_->Background = 0;
         Brand_->Invalidate();
     }
     if (Tray_) {
@@ -480,6 +523,23 @@ void Taskbar::OnContextMenu(Point Screen)
 void Taskbar::Rebuild()
 {
     Apps_->ClearChildren();
+    size_t AppCount = 0;
+    for (const hz::String &Id : g_Shell.TaskbarPins)
+        if (g_Shell.FindApp(Id))
+            AppCount++;
+    for (const AppWindow &W : g_Shell.Windows)
+        if (!g_Shell.AppForWindow(W.Handle) || !g_Shell.IsTaskbarPinned(W.AppId))
+            AppCount++;
+
+    const int32_t Gap = 4;
+    const int32_t ButtonCount = (int32_t)AppCount + 1;
+    const int32_t MaximumWidth = hz::Max(ScreenWidth_ - 32, 1);
+    const int32_t ButtonSize =
+        hz::Min(42, hz::Max(20, (MaximumWidth - 16 - Gap * (int32_t)AppCount) / ButtonCount));
+    Start_->Width = ButtonSize;
+    Start_->Height = ButtonSize;
+    Apps_->Padding = AppCount ? Thickness(Gap, 0, 0, 0) : Thickness(0);
+    Apps_->Spacing = Gap;
     for (const hz::String &Id : g_Shell.TaskbarPins) {
         const hz::apps::App *Program = g_Shell.FindApp(Id);
         if (!Program)
@@ -488,19 +548,21 @@ void Taskbar::Rebuild()
         for (const AppWindow &W : g_Shell.Windows)
             if (W.AppId == Id && (!Window || W.Handle == g_Shell.Active))
                 Window = W.Handle;
-        Apps_->Add<TaskButton>(TaskKind::PinnedApp, Window, Program->Name.CStr(), Program->Id.CStr());
+        Apps_->Add<TaskButton>(TaskKind::PinnedApp, Window, Program->Name.CStr(), Program->Id.CStr(), false,
+                               ButtonSize);
     }
     for (const AppWindow &W : g_Shell.Windows)
         if (!g_Shell.AppForWindow(W.Handle) || !g_Shell.IsTaskbarPinned(W.AppId))
-            Apps_->Add<TaskButton>(TaskKind::App, W.Handle, W.Title.CStr());
-    if (!ClockTimer_ && IsOpen()) /* once the window exists */
-        ClockTimer_ = SetTimer(1000, [this, LastMinute = ClockMinuteKey()]() mutable {
-            uint64_t Minute = ClockMinuteKey();
-            if (Minute != LastMinute) {
-                LastMinute = Minute;
-                Clock_->Invalidate();
-            }
-        });
+            Apps_->Add<TaskButton>(TaskKind::App, W.Handle, W.Title.CStr(), "", false, ButtonSize);
+    const int32_t Width = hz::Min(MaximumWidth, 16 + ButtonCount * ButtonSize + (ButtonCount - 1) * Gap);
+    Size Current = WindowSize();
+    int32_t X = (ScreenWidth_ - Width) / 2;
+    int32_t Y = g_Shell.Screen.Height - kTaskbarHeight - kTaskbarBottomInset;
+    if (Handle() && (Current.Width != Width || ScreenOrigin().X != X || ScreenOrigin().Y != Y)) {
+        STATUS Status = NtUserSetWindowPos(Handle(), X, Y, Width, kTaskbarHeight, 0);
+        if (!HZ_SUCCESS(Status))
+            HzPrint("shell: could not resize taskbar (0x%08X)", (uint32_t)Status);
+    }
     Refresh();
 }
 

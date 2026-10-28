@@ -1,0 +1,12 @@
+format = nexora-driver-package-v1
+name = Nexora VirtIO Block Storage (Legacy PCI)
+provider = Nexora
+architecture = x86_64
+bus = PCI
+hardware-ids = 1AF4:1001
+source = kernel:drivers/virtio/virtio_blk.c
+status = qemu-tested
+physical-test = not-applicable-virtual-device
+capabilities = 512-byte-sectors, read, write, gpt, installer
+known-limitations = legacy-pci-transport-only; no-flush-feature; single-queue
+firmware = none

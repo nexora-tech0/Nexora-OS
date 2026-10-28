@@ -139,7 +139,7 @@ void Notepad::Build()
 
     Editor_ = Root->Add<TextEditor>();
     Editor_->GridRow = 2;
-    Editor_->Background = 0xFF1C1C1C;
+    Editor_->Background = Theme::SolidBackground;
     Editor_->Padding = Thickness(10, 6, 0, 0);
     Editor_->OnChanged = [this]() {
         UpdateTitle();

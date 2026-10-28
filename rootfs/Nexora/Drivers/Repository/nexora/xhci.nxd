@@ -1,0 +1,12 @@
+format = nexora-driver-package-v1
+name = Nexora xHCI USB Host
+provider = Nexora
+architecture = x86_64
+bus = PCI
+hardware-ids = class:0C:03:30
+source = kernel:drivers/usb/xhci.c
+status = qemu-tested
+physical-test = not-recorded
+capabilities = multi-device-enumeration, boot-hid-keyboard, boot-hid-mouse, bulk-only-storage, scsi-read10, scsi-write10, multi-bot-disk-qemu-tested
+known-limitations = no-hub-or-hotplug-support; no-uasp; physical-controller-test-not-recorded
+firmware = none

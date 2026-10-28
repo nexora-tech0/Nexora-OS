@@ -579,6 +579,16 @@ void Settings::Set(const char *Key, const char *Value)
     Items_.Push(Move(I));
 }
 
+void Settings::Unset(const char *Key)
+{
+    for (size_t Index = 0; Index < Items_.Size(); Index++) {
+        if (EqualNames(Items_[Index].Key.CStr(), Key)) {
+            Items_.Erase(Index);
+            return;
+        }
+    }
+}
+
 void Settings::SetInt(const char *Key, int Value)
 {
     Set(Key, String::Format("%d", Value).CStr());

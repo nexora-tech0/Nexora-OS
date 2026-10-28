@@ -12,6 +12,9 @@ or artwork. The following third-party components are used or redistributed:
 | Inter typeface | 4.1 | UI font; kernel boot/stop screens use glyph bitmaps rendered from it at build time | SIL Open Font License 1.1 | `third_party/inter/` |
 | JetBrains Mono typeface | 2.304 | Monospace font; kernel stop-screen dumps use glyph bitmaps rendered from it at build time; Terminal (M9) | SIL Open Font License 1.1 | `third_party/jetbrains-mono/` |
 | Material Icons | Regular (master) | The UI icon set: `hzui::Icon` is drawn from this font at runtime, with the built-in vector paths as the fallback when the file is absent | Apache-2.0 | `third_party/icons/material/` |
+| BearSSL | 0.6 (`v0.6`, commit `8ef7680081c61b486622f2d983c0d3d21e83caad`; source archive SHA-256 `6705bba1714961b41a728dfc5debbe348d2966c117649392f8c8139efc83ff14`) | Browser verified TLS 1.2 client | MIT | `third_party/bearssl/`; license copied to `Nexora/Licenses/BearSSL-MIT.txt` |
+| Mozilla-derived CA roots | curl CA bundle dated 2026-10-20 | Browser certificate-chain trust anchors generated with BearSSL `brssl ta` | Mozilla Public License 2.0 | `third_party/bearssl-ca/`; provenance and SHA-256 in `NOTICE.txt`, copied to `Nexora/Licenses/Browser-CA-Store.txt` |
+| QuickJS | 2026-06-04 | Staged modern ECMAScript engine source for future browser integration; not yet linked or enabled | MIT | `third_party/quickjs/`; license copied to `Nexora/Licenses/QuickJS-MIT.txt` |
 | Rust `core` / `compiler_builtins` | Rust 1.98.1 | Linked into the kernel with the region library | MIT or Apache-2.0 | Rust toolchain |
 
 Build tools (LLVM/Clang/LLD, rustc, NASM, xorriso, QEMU, OVMF) are used to build and test

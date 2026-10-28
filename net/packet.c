@@ -62,9 +62,11 @@ bool NetUdpChecksumValid(const uint8_t Source[4], const uint8_t Destination[4], 
 {
     if (!Segment || Length < NET_UDP_HEADER_SIZE)
         return false;
+    const uint8_t *Bytes = Segment;
+    if (!Bytes[6] && !Bytes[7])
+        return true; /* UDP checksum zero means disabled for IPv4. */
     uint32_t Sum = NetPseudoHeaderSum(Source, Destination, NET_IP_PROTOCOL_UDP, (uint16_t)Length);
-    Sum = NetChecksumPartial(Sum, Segment, 6); /* source port .. length, skipping the checksum field */
-    Sum = NetChecksumPartial(Sum, (const uint8_t *)Segment + 8, Length - 8);
+    Sum = NetChecksumPartial(Sum, Segment, Length);
     return NetChecksumFold(Sum) == 0xFFFF;
 }
 
@@ -82,8 +84,7 @@ bool NetTcpChecksumValid(const uint8_t Source[4], const uint8_t Destination[4], 
     if (!Segment || Length < NET_TCP_HEADER_MIN_SIZE)
         return false;
     uint32_t Sum = NetPseudoHeaderSum(Source, Destination, NET_IP_PROTOCOL_TCP, (uint16_t)Length);
-    Sum = NetChecksumPartial(Sum, Segment, 16); /* skipping the checksum field at bytes 16-17 */
-    Sum = NetChecksumPartial(Sum, (const uint8_t *)Segment + 18, Length - 18);
+    Sum = NetChecksumPartial(Sum, Segment, Length);
     return NetChecksumFold(Sum) == 0xFFFF;
 }
 
@@ -271,8 +272,42 @@ bool NetRunProtocolSelfTests(void)
              "valid IPv4 datagram", &Checks, &Failures);
     NET_UDP_VIEW UdpView = {0};
     NetpTest(Status == STATUS_SUCCESS && NetParseUdp(&IpView, &UdpView) == STATUS_SUCCESS &&
-                 UdpView.SourcePort == 12345 && UdpView.DestinationPort == 53 && UdpView.PayloadLength == 0,
+                 UdpView.SourcePort == 12345 && UdpView.DestinationPort == 53 && UdpView.PayloadLength == 0 &&
+                 NetUdpChecksumValid(IpView.Source, IpView.Destination, IpView.Payload, IpView.PayloadLength),
              "valid UDP datagram", &Checks, &Failures);
+
+    Ip[9] = NET_IP_PROTOCOL_TCP;
+    Ip[2] = 0;
+    Ip[3] = NET_IPV4_MIN_HEADER_SIZE + NET_TCP_HEADER_MIN_SIZE;
+    Ip[10] = Ip[11] = 0;
+    Checksum = NetIpv4Checksum(Ip, NET_IPV4_MIN_HEADER_SIZE);
+    Ip[10] = (uint8_t)(Checksum >> 8);
+    Ip[11] = (uint8_t)Checksum;
+    uint8_t *Tcp = Ip + NET_IPV4_MIN_HEADER_SIZE;
+    memset(Tcp, 0, NET_TCP_HEADER_MIN_SIZE);
+    Tcp[0] = 0x30;
+    Tcp[1] = 0x39;
+    Tcp[3] = 80;
+    Tcp[12] = 0x50;
+    Tcp[13] = NET_TCP_FLAG_SYN | NET_TCP_FLAG_ACK;
+    Tcp[14] = 0x10;
+    Tcp[15] = 0x00;
+    Checksum = NetTcpChecksum(Ip + 12, Ip + 16, Tcp, NET_TCP_HEADER_MIN_SIZE);
+    Tcp[16] = (uint8_t)(Checksum >> 8);
+    Tcp[17] = (uint8_t)Checksum;
+    NetParseEthernet(Frame, NET_ETHERNET_HEADER_SIZE + NET_IPV4_MIN_HEADER_SIZE + NET_TCP_HEADER_MIN_SIZE,
+                     &Ethernet);
+    Status = NetParseIpv4(&Ethernet, &IpView);
+    NET_TCP_VIEW TcpView = {0};
+    NetpTest(Status == STATUS_SUCCESS && NetParseTcp(&IpView, &TcpView) == STATUS_SUCCESS &&
+                 TcpView.SourcePort == 12345 && TcpView.DestinationPort == 80 &&
+                 (TcpView.Flags & (NET_TCP_FLAG_SYN | NET_TCP_FLAG_ACK)) ==
+                     (NET_TCP_FLAG_SYN | NET_TCP_FLAG_ACK) &&
+                 NetTcpChecksumValid(IpView.Source, IpView.Destination, TcpView.Segment, TcpView.SegmentLength),
+             "valid TCP SYN-ACK", &Checks, &Failures);
+    Tcp[12] = 0x40;
+    NetpTest(NetParseTcp(&IpView, &TcpView) == STATUS_DEVICE_DATA_ERROR, "invalid TCP data offset", &Checks,
+             &Failures);
 
     Ip[0] = 0x65;
     NetpTest(NetParseIpv4(&Ethernet, &IpView) == STATUS_DEVICE_DATA_ERROR, "invalid IPv4 version", &Checks,

@@ -1,11 +1,12 @@
 /*
  * Nexora OS - net/dhcp.c
- * Bounded DHCPv4 client for the first registered Ethernet interface. The worker retries a
+ * Bounded DHCPv4 client for every registered network interface. Each worker retries its own
  * discover/request exchange and publishes only a fully validated ACK configuration.
  */
 #include "hal.h"
 #include "ke.h"
 #include "netdns.h"
+#include "net.h"
 #include "packet.h"
 #include "netif.h"
 #include "ps.h"
@@ -174,6 +175,29 @@ static bool NetpCopyDhcpOption(const uint8_t *Options, uint32_t Length, uint8_t 
     return false;
 }
 
+static bool NetpCopyDhcpAddressOption(const uint8_t *Options, uint32_t Length, uint8_t Wanted, uint8_t Output[4])
+{
+    uint32_t Offset = 0;
+    while (Offset < Length) {
+        uint8_t Code = Options[Offset++];
+        if (Code == 0)
+            continue;
+        if (Code == DhcpOptionEnd || Offset >= Length)
+            return false;
+        uint8_t OptionLength = Options[Offset++];
+        if (OptionLength > Length - Offset)
+            return false;
+        if (Code == Wanted) {
+            if (OptionLength < 4 || (OptionLength & 3))
+                return false;
+            memcpy(Output, Options + Offset, 4);
+            return true;
+        }
+        Offset += OptionLength;
+    }
+    return false;
+}
+
 static bool NetpParseDhcp(const NET_UDP_VIEW *Udp, uint32_t Xid, const uint8_t Mac[6], NET_DHCP_RESULT *Result)
 {
     if (!Udp || !Udp->Payload || !Mac || !Result || Udp->SourcePort != NET_DHCP_PORT_SERVER ||
@@ -193,8 +217,8 @@ static bool NetpParseDhcp(const NET_UDP_VIEW *Udp, uint32_t Xid, const uint8_t M
     memcpy(Result->YourAddress, Packet + 16, 4);
     Result->HasServerAddress = NetpCopyDhcpOption(Options, OptionLength, DhcpOptionServerId, Result->ServerAddress, 4);
     Result->HasSubnetMask = NetpCopyDhcpOption(Options, OptionLength, DhcpOptionSubnetMask, Result->SubnetMask, 4);
-    Result->HasRouter = NetpCopyDhcpOption(Options, OptionLength, DhcpOptionRouter, Result->Router, 4);
-    Result->HasDnsServer = NetpCopyDhcpOption(Options, OptionLength, DhcpOptionDns, Result->DnsServer, 4);
+    Result->HasRouter = NetpCopyDhcpAddressOption(Options, OptionLength, DhcpOptionRouter, Result->Router);
+    Result->HasDnsServer = NetpCopyDhcpAddressOption(Options, OptionLength, DhcpOptionDns, Result->DnsServer);
     if (!Result->HasServerAddress)
         memcpy(Result->ServerAddress, Packet + 20, 4);
     return true;
@@ -257,12 +281,16 @@ bool NetDhcpRunSelfTests(void)
     uint32_t OptionLength = 0;
     uint8_t OfferType = DhcpAck;
     const uint8_t Mask[4] = {255, 255, 255, 0}, Gateway[4] = {10, 0, 2, 2}, Dns[4] = {10, 0, 2, 3};
+    const uint8_t Gateways[8] = {10, 0, 2, 2, 10, 0, 2, 1};
+    const uint8_t DnsServers[8] = {10, 0, 2, 3, 8, 8, 8, 8};
     bool BuiltOptions = NetpDhcpOption(Packet + NET_DHCP_FIXED_SIZE, &OptionLength, DhcpOptionMessageType,
                                        &OfferType, 1) &&
                         NetpDhcpOption(Packet + NET_DHCP_FIXED_SIZE, &OptionLength, DhcpOptionServerId, ServerIp, 4) &&
                         NetpDhcpOption(Packet + NET_DHCP_FIXED_SIZE, &OptionLength, DhcpOptionSubnetMask, Mask, 4) &&
-                        NetpDhcpOption(Packet + NET_DHCP_FIXED_SIZE, &OptionLength, DhcpOptionRouter, Gateway, 4) &&
-                        NetpDhcpOption(Packet + NET_DHCP_FIXED_SIZE, &OptionLength, DhcpOptionDns, Dns, 4);
+                        NetpDhcpOption(Packet + NET_DHCP_FIXED_SIZE, &OptionLength, DhcpOptionRouter, Gateways,
+                                       sizeof(Gateways)) &&
+                        NetpDhcpOption(Packet + NET_DHCP_FIXED_SIZE, &OptionLength, DhcpOptionDns, DnsServers,
+                                       sizeof(DnsServers));
     Packet[NET_DHCP_FIXED_SIZE + OptionLength++] = DhcpOptionEnd;
     NET_UDP_VIEW Udp = {NET_DHCP_PORT_SERVER, NET_DHCP_PORT_CLIENT, Packet,
                         (uint16_t)(NET_DHCP_FIXED_SIZE + OptionLength)};
@@ -273,9 +301,19 @@ bool NetDhcpRunSelfTests(void)
                     memcmp(Result.SubnetMask, Mask, 4) == 0 && memcmp(Result.Router, Gateway, 4) == 0 &&
                     memcmp(Result.DnsServer, Dns, 4) == 0;
     NetpDhcpTest(AckValid, "ACK validates and extracts network configuration", &Checks, &Failures);
+    NetpDhcpTest(AckValid && memcmp(Result.Router, Gateway, 4) == 0 &&
+                     memcmp(Result.DnsServer, Dns, 4) == 0,
+                 "uses the first address from router and DNS lists", &Checks, &Failures);
     NetpDhcpTest(!NetpParseDhcp(&Udp, Xid + 1, Mac, &Result), "rejects a different transaction", &Checks, &Failures);
     const uint8_t OtherMac[6] = {0x02, 0, 0, 0, 0, 2};
     NetpDhcpTest(!NetpParseDhcp(&Udp, Xid, OtherMac, &Result), "rejects another client MAC", &Checks, &Failures);
+
+    const uint8_t BadDnsOption[] = {DhcpOptionDns, 5, 10, 0, 2, 3, 8, DhcpOptionEnd};
+    Udp.PayloadLength = NET_DHCP_FIXED_SIZE + sizeof(BadDnsOption);
+    memcpy(Packet + NET_DHCP_FIXED_SIZE, BadDnsOption, sizeof(BadDnsOption));
+    NetpDhcpTest(!NetpCopyDhcpAddressOption(Packet + NET_DHCP_FIXED_SIZE, sizeof(BadDnsOption), DhcpOptionDns,
+                                            Result.DnsServer),
+                 "rejects malformed DNS address lists", &Checks, &Failures);
 
     const uint8_t Malformed[] = {DhcpOptionMessageType, 3, DhcpAck, DhcpOptionEnd};
     Udp.Payload = Packet;
@@ -321,6 +359,7 @@ static void NetpDhcpWorker(void *Context)
     NET_INTERFACE *Interface = Context;
     if (!Interface)
         return;
+    DbgPrint("DHCP: worker entered\n");
 
     __atomic_store_n(&Interface->ConfigurationState, 1, __ATOMIC_RELEASE);
     uint64_t Seed = KeQueryUptimeMicroseconds();
@@ -332,8 +371,11 @@ static void NetpDhcpWorker(void *Context)
     uint8_t Dhcp[NET_DHCP_MAX_SIZE], Frame[NETIF_MAX_FRAME_SIZE];
     NET_DHCP_RESULT Offer = {0}, Ack = {0};
     bool Configured = false;
+    DbgPrint("DHCP: discovery worker started on %s\n", Interface->Name);
     for (uint32_t Retry = 0; Retry < NET_DHCP_RETRIES && !Configured; Retry++) {
         if (!Interface->QueryLink(Interface)) {
+            if (!Retry)
+                DbgPrintEx(DPFLTR_WARNING_LEVEL, "DHCP: waiting for link on %s\n", Interface->Name);
             KeDelayExecutionThread(250000);
             continue;
         }
@@ -380,7 +422,6 @@ static void NetpDhcpWorker(void *Context)
         memcpy(Interface->SubnetMask, Ack.SubnetMask, sizeof(Interface->SubnetMask));
         memcpy(Interface->Gateway, Ack.Router, sizeof(Interface->Gateway));
         memcpy(Interface->DnsServer, Ack.DnsServer, sizeof(Interface->DnsServer));
-        __atomic_store_n(&Interface->ConfigurationState, 2, __ATOMIC_RELEASE);
         Configured = true;
     }
 
@@ -390,6 +431,17 @@ static void NetpDhcpWorker(void *Context)
                  Interface->Ipv4Address[3], Interface->Gateway[0], Interface->Gateway[1], Interface->Gateway[2],
                  Interface->Gateway[3], Interface->DnsServer[0], Interface->DnsServer[1], Interface->DnsServer[2],
                  Interface->DnsServer[3]);
+        ETHREAD *ReceiveThread = NULL;
+        STATUS ReceiveStatus = PsCreateSystemThread(NetReceiveWorker, Interface, KI_THREAD_PRIORITY_DEFAULT,
+                                                    "NetReceive", &ReceiveThread);
+        if (HZ_SUCCESS(ReceiveStatus) && ReceiveThread) {
+            ObDereferenceObject(ReceiveThread);
+            __atomic_store_n(&Interface->ConfigurationState, 2, __ATOMIC_RELEASE);
+        } else {
+            DbgPrintEx(DPFLTR_ERROR_LEVEL, "Network: could not start receive worker (0x%08X)\n",
+                       (uint32_t)ReceiveStatus);
+            __atomic_store_n(&Interface->ConfigurationState, 3, __ATOMIC_RELEASE);
+        }
     } else {
         __atomic_store_n(&Interface->ConfigurationState, 3, __ATOMIC_RELEASE);
         DbgPrintEx(DPFLTR_WARNING_LEVEL, "DHCP: configuration failed for %s after %u attempts\n", Interface->Name,
@@ -399,13 +451,32 @@ static void NetpDhcpWorker(void *Context)
 
 STATUS NetStart(void)
 {
-    NET_INTERFACE *Interface = NetGetInterfaceList();
-    if (!Interface)
+    NET_INTERFACE *Interfaces = NetGetInterfaceList();
+    if (!Interfaces)
         return STATUS_NO_SUCH_DEVICE;
+    NetInitializeStack();
     NetDnsInitialize();
-    ETHREAD *Thread = NULL;
-    STATUS Status = PsCreateSystemThread(NetpDhcpWorker, Interface, 1, "DhcpClient", &Thread);
-    if (HZ_SUCCESS(Status) && Thread)
-        ObDereferenceObject(Thread);
-    return Status;
+
+    uint32_t Started = 0;
+    STATUS FirstFailure = STATUS_NO_SUCH_DEVICE;
+    for (NET_INTERFACE *Interface = Interfaces; Interface; Interface = Interface->Next) {
+        DbgPrint("Network: starting DHCP on %s\n", Interface->Name);
+        ETHREAD *Thread = NULL;
+        STATUS Status = PsCreateSystemThread(NetpDhcpWorker, Interface, KI_THREAD_PRIORITY_DEFAULT, "DhcpClient",
+                                             &Thread);
+        if (HZ_SUCCESS(Status) && Thread) {
+            ObDereferenceObject(Thread);
+            Started++;
+            continue;
+        }
+        if (HZ_SUCCESS(Status))
+            Status = STATUS_UNSUCCESSFUL;
+        if (!Started)
+            FirstFailure = Status;
+        DbgPrintEx(DPFLTR_ERROR_LEVEL, "Network: could not start DHCP on %s (0x%08X)\n", Interface->Name,
+                   (uint32_t)Status);
+    }
+
+    DbgPrint("Network: DHCP started on %u interface(s)\n", Started);
+    return Started ? STATUS_SUCCESS : FirstFailure;
 }

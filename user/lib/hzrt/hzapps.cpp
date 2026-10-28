@@ -216,9 +216,64 @@ STATUS Launch(const App &Program, const char *Argument, uint32_t *ProcessId)
     return Status;
 }
 
+STATUS QueryCompatibilityReport(const String &ImagePath, String &Report)
+{
+    char Buffer[2048] = {};
+    STATUS Status = NtQueryWinCompatReport(ImagePath.CStr(), Buffer, sizeof(Buffer));
+    if (Buffer[0]) {
+        Report = String(Buffer);
+        if (Status == STATUS_BUFFER_TOO_SMALL)
+            Report.Append("\n[compatibility report truncated]");
+        return STATUS_SUCCESS;
+    }
+    return Status;
+}
+
+String ResolveToolImageName(const String &Name)
+{
+    if (!fs::EqualNames(fs::Extension(Name).CStr(), "nxe"))
+        return Name;
+
+    String Leaf = fs::FileName(Name);
+    String Stem = Leaf.Substring(0, Leaf.Length() - 4);
+    const char *Image = nullptr;
+    /* These are genuine Nexora equivalents already present in this build. Keep this list
+       deliberately small: an alias must not suggest that an unrelated Windows subsystem exists. */
+    if (fs::EqualNames(Stem.CStr(), "msinfo32"))
+        Image = "sysinfo.exe";
+    else if (fs::EqualNames(Stem.CStr(), "control"))
+        Image = "settings.exe";
+    else {
+        Stem.Append(".exe");
+        Image = Stem.CStr();
+    }
+
+    size_t LeafAt = Name.Length() - Leaf.Length();
+    String Result(Name.CStr(), LeafAt);
+    Result.Append(Image);
+    return Result;
+}
+
 STATUS OpenPath(const String &Path, uint32_t *ProcessId, String *Program)
 {
     String Extension = fs::Extension(Path);
+    if (fs::EqualNames(Extension.CStr(), "nxe")) {
+        String ImagePath = ResolveToolImageName(Path);
+        bool HasPath = ImagePath.Find("\\") != NotFound || ImagePath.Find(":") != NotFound;
+        if (!HasPath)
+            ImagePath = fs::Join(String("C:\\Nexora\\System"), ImagePath.CStr());
+        HANDLE Process = 0;
+        uint32_t Id = 0;
+        STATUS Status = NtCreateProcess(ImagePath.CStr(), fs::FileName(ImagePath).CStr(), &Process, &Id);
+        if (HZ_SUCCESS(Status)) {
+            NtClose(Process);
+            if (ProcessId)
+                *ProcessId = Id;
+            if (Program)
+                *Program = fs::FileName(ImagePath);
+        }
+        return Status;
+    }
     if (Extension == "exe") {
         HANDLE Process = 0;
         uint32_t Id = 0;

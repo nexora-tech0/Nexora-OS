@@ -4,21 +4,20 @@
  */
 #include "netdns.h"
 #include "ke.h"
+#include "net.h"
 #include "netif.h"
-#include "packet.h"
 #include "rtl.h"
 
 #define DNS_HEADER_SIZE 12
 #define DNS_TYPE_A 1
+#define DNS_TYPE_CNAME 5
 #define DNS_CLASS_IN 1
 #define DNS_MAX_ANSWERS 32
 #define DNS_PORT 53
-#define DNS_SOURCE_PORT_MIN 49152
-#define DNS_POLL_US 10000ull
 #define DNS_TIMEOUT_US 2000000ull
 #define DNS_RETRIES 2
 
-/* DNS lookups serialize access to the NIC receive ring after DHCP finishes. */
+/* Serialize identifiers and preserve the existing bounded DNS request behavior. */
 static KMUTEX NetpDnsMutex;
 static bool NetpDnsInitialized;
 static uint16_t NetpDnsPacketId;
@@ -35,135 +34,6 @@ static void NetDnsWriteBe16(uint8_t *Data, uint16_t Value)
 {
     Data[0] = (uint8_t)(Value >> 8);
     Data[1] = (uint8_t)Value;
-}
-
-static bool NetDnsAddressZero(const uint8_t Address[4])
-{
-    return !(Address[0] | Address[1] | Address[2] | Address[3]);
-}
-
-static bool NetDnsSameSubnet(const uint8_t Left[4], const uint8_t Right[4], const uint8_t Mask[4])
-{
-    for (uint32_t i = 0; i < 4; ++i)
-        if ((Left[i] & Mask[i]) != (Right[i] & Mask[i]))
-            return false;
-    return true;
-}
-
-static void NetDnsBuildArpRequest(NET_INTERFACE *Interface, const uint8_t Target[4], uint8_t Frame[42])
-{
-    static const uint8_t Broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    memset(Frame, 0, 42);
-    memcpy(Frame, Broadcast, sizeof(Broadcast));
-    memcpy(Frame + 6, Interface->MacAddress, 6);
-    NetDnsWriteBe16(Frame + 12, NET_ETHERTYPE_ARP);
-    uint8_t *Arp = Frame + NET_ETHERNET_HEADER_SIZE;
-    NetDnsWriteBe16(Arp, 1);
-    NetDnsWriteBe16(Arp + 2, NET_ETHERTYPE_IPV4);
-    Arp[4] = 6;
-    Arp[5] = 4;
-    NetDnsWriteBe16(Arp + 6, 1);
-    memcpy(Arp + 8, Interface->MacAddress, 6);
-    memcpy(Arp + 14, Interface->Ipv4Address, 4);
-    memcpy(Arp + 24, Target, 4);
-}
-
-static STATUS NetDnsWaitForArp(NET_INTERFACE *Interface, const uint8_t Target[4], uint8_t Mac[6])
-{
-    uint8_t Frame[NETIF_MAX_FRAME_SIZE];
-    uint64_t Elapsed = 0;
-    while (Elapsed < DNS_TIMEOUT_US) {
-        uint32_t Length = 0;
-        STATUS Status = Interface->ReceiveFrame(Interface, Frame, sizeof(Frame), &Length);
-        if (HZ_SUCCESS(Status)) {
-            NET_ETHERNET_VIEW Ethernet;
-            NET_ARP_VIEW Arp;
-            if (HZ_SUCCESS(NetParseEthernet(Frame, Length, &Ethernet)) &&
-                memcmp(Ethernet.Destination, Interface->MacAddress, 6) == 0 &&
-                HZ_SUCCESS(NetParseArp(&Ethernet, &Arp)) && Arp.Operation == 2 &&
-                memcmp(Arp.SenderIpv4, Target, 4) == 0 &&
-                memcmp(Arp.TargetIpv4, Interface->Ipv4Address, 4) == 0 &&
-                memcmp(Arp.TargetMac, Interface->MacAddress, 6) == 0 &&
-                memcmp(Arp.SenderMac, Ethernet.Source, 6) == 0 && !(Arp.SenderMac[0] & 1)) {
-                memcpy(Mac, Arp.SenderMac, 6);
-                return STATUS_SUCCESS;
-            }
-        } else if (Status != STATUS_NO_MORE_ENTRIES && Status != STATUS_DEVICE_DATA_ERROR) {
-            return Status;
-        }
-        KeDelayExecutionThread(DNS_POLL_US);
-        Elapsed += DNS_POLL_US;
-    }
-    return STATUS_IO_TIMEOUT;
-}
-
-static STATUS NetDnsSendQuery(NET_INTERFACE *Interface, const uint8_t DestinationMac[6],
-                              const uint8_t DestinationIp[4], uint16_t SourcePort,
-                              const uint8_t *Payload, uint32_t PayloadLength)
-{
-    uint8_t Frame[NETIF_MAX_FRAME_SIZE] = {0};
-    uint32_t FrameLength = NET_ETHERNET_HEADER_SIZE + NET_IPV4_MIN_HEADER_SIZE + NET_UDP_HEADER_SIZE + PayloadLength;
-    if (FrameLength > sizeof(Frame) || PayloadLength > NET_DNS_MAX_MESSAGE_SIZE)
-        return STATUS_BUFFER_TOO_SMALL;
-
-    memcpy(Frame, DestinationMac, 6);
-    memcpy(Frame + 6, Interface->MacAddress, 6);
-    NetDnsWriteBe16(Frame + 12, NET_ETHERTYPE_IPV4);
-    uint8_t *Ip = Frame + NET_ETHERNET_HEADER_SIZE;
-    Ip[0] = 0x45;
-    NetDnsWriteBe16(Ip + 2, (uint16_t)(NET_IPV4_MIN_HEADER_SIZE + NET_UDP_HEADER_SIZE + PayloadLength));
-    NetDnsWriteBe16(Ip + 4, ++NetpDnsPacketId);
-    NetDnsWriteBe16(Ip + 6, 0x4000);
-    Ip[8] = 64;
-    Ip[9] = NET_IP_PROTOCOL_UDP;
-    memcpy(Ip + 12, Interface->Ipv4Address, 4);
-    memcpy(Ip + 16, DestinationIp, 4);
-    NetDnsWriteBe16(Ip + 10, NetIpv4Checksum(Ip, NET_IPV4_MIN_HEADER_SIZE));
-    uint8_t *Udp = Ip + NET_IPV4_MIN_HEADER_SIZE;
-    NetDnsWriteBe16(Udp, SourcePort);
-    NetDnsWriteBe16(Udp + 2, DNS_PORT);
-    NetDnsWriteBe16(Udp + 4, (uint16_t)(NET_UDP_HEADER_SIZE + PayloadLength));
-    memcpy(Udp + NET_UDP_HEADER_SIZE, Payload, PayloadLength);
-
-    for (uint32_t Retry = 0; Retry < 10; ++Retry) {
-        STATUS Status = Interface->SendFrame(Interface, Frame, FrameLength);
-        if (Status != STATUS_DEVICE_BUSY)
-            return Status;
-        KeDelayExecutionThread(DNS_POLL_US);
-    }
-    return STATUS_DEVICE_BUSY;
-}
-
-static STATUS NetDnsWaitForResponse(NET_INTERFACE *Interface, uint16_t Identifier, const char *Name,
-                                    uint16_t SourcePort, uint8_t Address[4])
-{
-    uint8_t Frame[NETIF_MAX_FRAME_SIZE];
-    uint64_t Elapsed = 0;
-    while (Elapsed < DNS_TIMEOUT_US) {
-        uint32_t Length = 0;
-        STATUS Status = Interface->ReceiveFrame(Interface, Frame, sizeof(Frame), &Length);
-        if (HZ_SUCCESS(Status)) {
-            NET_ETHERNET_VIEW Ethernet;
-            NET_IPV4_VIEW Ipv4;
-            NET_UDP_VIEW Udp;
-            if (HZ_SUCCESS(NetParseEthernet(Frame, Length, &Ethernet)) &&
-                memcmp(Ethernet.Destination, Interface->MacAddress, 6) == 0 &&
-                HZ_SUCCESS(NetParseIpv4(&Ethernet, &Ipv4)) && HZ_SUCCESS(NetParseUdp(&Ipv4, &Udp)) &&
-                Ipv4.Protocol == NET_IP_PROTOCOL_UDP &&
-                memcmp(Ipv4.Source, Interface->DnsServer, 4) == 0 &&
-                memcmp(Ipv4.Destination, Interface->Ipv4Address, 4) == 0 &&
-                Udp.SourcePort == DNS_PORT && Udp.DestinationPort == SourcePort) {
-                Status = NetDnsParseAResponse(Identifier, Name, Udp.Payload, Udp.PayloadLength, Address);
-                if (Status != STATUS_DEVICE_DATA_ERROR)
-                    return Status;
-            }
-        } else if (Status != STATUS_NO_MORE_ENTRIES && Status != STATUS_DEVICE_DATA_ERROR) {
-            return Status;
-        }
-        KeDelayExecutionThread(DNS_POLL_US);
-        Elapsed += DNS_POLL_US;
-    }
-    return STATUS_IO_TIMEOUT;
 }
 
 void NetDnsInitialize(void)
@@ -198,47 +68,43 @@ STATUS NetDnsResolveA(const char *Name, uint8_t Address[4])
     if (!HZ_SUCCESS(Status))
         return Status;
 
-    uint8_t NextHop[4], DestinationMac[6];
-    memcpy(NextHop, NetDnsSameSubnet(Interface->DnsServer, Interface->Ipv4Address, Interface->SubnetMask)
-                        ? Interface->DnsServer
-                        : Interface->Gateway,
-           sizeof(NextHop));
-    if (NetDnsAddressZero(Interface->DnsServer) || NetDnsAddressZero(NextHop)) {
+    if (NetAddressZero(Interface->DnsServer)) {
         Status = STATUS_DEVICE_NOT_READY;
         goto Exit;
     }
-    uint8_t ArpFrame[42];
-    NetDnsBuildArpRequest(Interface, NextHop, ArpFrame);
-    for (uint32_t Retry = 0; Retry < 10; ++Retry) {
-        Status = Interface->SendFrame(Interface, ArpFrame, sizeof(ArpFrame));
-        if (Status != STATUS_DEVICE_BUSY)
-            break;
-        KeDelayExecutionThread(DNS_POLL_US);
-    }
+    NET_UDP_BINDING *Binding = NULL;
+    Status = NetUdpBind(0, &Binding);
     if (!HZ_SUCCESS(Status))
         goto Exit;
-    Status = NetDnsWaitForArp(Interface, NextHop, DestinationMac);
-    if (!HZ_SUCCESS(Status)) {
-        DbgPrintEx(DPFLTR_WARNING_LEVEL, "DNS: ARP resolution failed for %u.%u.%u.%u (0x%08X)\n",
-                   NextHop[0], NextHop[1], NextHop[2], NextHop[3], (uint32_t)Status);
-        goto Exit;
-    }
-
     uint16_t Identifier = ++NetpDnsPacketId;
-    uint16_t SourcePort = (uint16_t)(DNS_SOURCE_PORT_MIN + (Identifier & 0x3FFF));
+    uint16_t SourcePort = NetUdpBindingPort(Binding);
     NetDnsWriteBe16(Query, Identifier);
     for (uint32_t Retry = 0; Retry < DNS_RETRIES; ++Retry) {
-        Status = NetDnsSendQuery(Interface, DestinationMac, Interface->DnsServer, SourcePort, Query, QueryLength);
+        Status = NetUdpSend(Interface, Interface->Ipv4Address, SourcePort, Interface->DnsServer, DNS_PORT, Query,
+                            QueryLength, DNS_TIMEOUT_US);
         if (!HZ_SUCCESS(Status))
             break;
-        Status = NetDnsWaitForResponse(Interface, Identifier, Name, SourcePort, Address);
-        if (Status != STATUS_IO_TIMEOUT)
+        uint8_t Response[NET_DNS_MAX_MESSAGE_SIZE], Source[4];
+        uint16_t ResponsePort = 0;
+        uint32_t ResponseLength = 0;
+        Status = NetUdpReceive(Binding, Response, sizeof(Response), Source, &ResponsePort, &ResponseLength,
+                              DNS_TIMEOUT_US);
+        if (HZ_SUCCESS(Status) && ResponsePort == DNS_PORT &&
+            NetAddressEqual(Source, Interface->DnsServer)) {
+            Status = NetDnsParseAResponse(Identifier, Name, Response, ResponseLength, Address);
+            if (Status != STATUS_DEVICE_DATA_ERROR)
+                break;
+        } else if (HZ_SUCCESS(Status)) {
+            Status = STATUS_DEVICE_DATA_ERROR;
+        }
+        if (Status != STATUS_IO_TIMEOUT && Status != STATUS_DEVICE_DATA_ERROR)
             break;
     }
     if (Status == STATUS_IO_TIMEOUT)
         DbgPrintEx(DPFLTR_WARNING_LEVEL, "DNS: response timed out for %s via %u.%u.%u.%u\n", Name,
                    Interface->DnsServer[0], Interface->DnsServer[1], Interface->DnsServer[2],
                    Interface->DnsServer[3]);
+    NetUdpUnbind(Binding);
 
 Exit:
     KeReleaseMutex(&NetpDnsMutex);
@@ -407,23 +273,49 @@ STATUS NetDnsParseAResponse(uint16_t Identifier, const char *Name, const void *M
         return STATUS_DEVICE_DATA_ERROR;
     Offset += 4;
 
-    for (uint16_t i = 0; i < Answers; ++i) {
-        Status = NetDnsDecodeName(Bytes, Length, &Offset, Decoded, sizeof(Decoded));
-        if (!HZ_SUCCESS(Status) || Offset > Length || Length - Offset < 10)
-            return STATUS_DEVICE_DATA_ERROR;
-        uint16_t Type = NetDnsReadBe16(Bytes + Offset);
-        uint16_t Class = NetDnsReadBe16(Bytes + Offset + 2);
-        uint16_t DataLength = NetDnsReadBe16(Bytes + Offset + 8);
-        Offset += 10;
-        if (DataLength > Length - Offset)
-            return STATUS_DEVICE_DATA_ERROR;
-        if (Type == DNS_TYPE_A && Class == DNS_CLASS_IN && DataLength == 4 && NetDnsNameEqual(Decoded, Name)) {
-            memcpy(Address, Bytes + Offset, 4);
-            return STATUS_SUCCESS;
+    char CurrentName[NET_DNS_MAX_NAME_LENGTH + 1];
+    memcpy(CurrentName, Decoded, strlen(Decoded) + 1);
+    uint32_t AnswerStart = Offset;
+    for (uint16_t Hop = 0; Hop <= Answers; ++Hop) {
+        bool FoundCname = false;
+        char CanonicalName[NET_DNS_MAX_NAME_LENGTH + 1];
+        uint32_t RecordOffset = AnswerStart;
+        for (uint16_t i = 0; i < Answers; ++i) {
+            Status = NetDnsDecodeName(Bytes, Length, &RecordOffset, Decoded, sizeof(Decoded));
+            if (!HZ_SUCCESS(Status) || RecordOffset > Length || Length - RecordOffset < 10)
+                return STATUS_DEVICE_DATA_ERROR;
+            uint16_t Type = NetDnsReadBe16(Bytes + RecordOffset);
+            uint16_t Class = NetDnsReadBe16(Bytes + RecordOffset + 2);
+            uint16_t DataLength = NetDnsReadBe16(Bytes + RecordOffset + 8);
+            RecordOffset += 10;
+            if (DataLength > Length - RecordOffset)
+                return STATUS_DEVICE_DATA_ERROR;
+            uint32_t DataEnd = RecordOffset + DataLength;
+            if (Class == DNS_CLASS_IN && NetDnsNameEqual(Decoded, CurrentName)) {
+                if (Type == DNS_TYPE_A && DataLength == 4) {
+                    memcpy(Address, Bytes + RecordOffset, 4);
+                    return STATUS_SUCCESS;
+                }
+                if (Type == DNS_TYPE_CNAME) {
+                    if (FoundCname)
+                        return STATUS_DEVICE_DATA_ERROR;
+                    uint32_t TargetOffset = RecordOffset;
+                    Status = NetDnsDecodeName(Bytes, Length, &TargetOffset, CanonicalName,
+                                              sizeof(CanonicalName));
+                    if (!HZ_SUCCESS(Status) || TargetOffset != DataEnd || !CanonicalName[0])
+                        return STATUS_DEVICE_DATA_ERROR;
+                    FoundCname = true;
+                }
+            }
+            RecordOffset = DataEnd;
         }
-        Offset += DataLength;
+        if (!FoundCname)
+            return STATUS_NOT_FOUND;
+        if (Hop == Answers)
+            return STATUS_DEVICE_DATA_ERROR; /* the answer contains a CNAME loop */
+        memcpy(CurrentName, CanonicalName, strlen(CanonicalName) + 1);
     }
-    return STATUS_NOT_FOUND;
+    return STATUS_DEVICE_DATA_ERROR;
 }
 
 static bool NetDnsTest(bool Condition, const char *Name, uint32_t *Checks, uint32_t *Failures)
@@ -454,7 +346,7 @@ bool NetDnsRunSelfTests(void)
     NetDnsTest(NetDnsBuildAQuery(1, "nexora.test", Query, 28, &QueryLength) == STATUS_BUFFER_TOO_SMALL,
                "query record buffer bound", &Checks, &Failures);
 
-    uint8_t Response[64] = {0};
+    uint8_t Response[128] = {0};
     NetDnsWriteBe16(Response, 0x1234);
     NetDnsWriteBe16(Response + 2, 0x8180);
     NetDnsWriteBe16(Response + 4, 1);
@@ -488,6 +380,54 @@ bool NetDnsRunSelfTests(void)
                "compressed A response", &Checks, &Failures);
     NetDnsTest(NetDnsParseAResponse(0x4321, "nexora.test", Response, Offset, Address) == STATUS_DEVICE_DATA_ERROR,
                "response identifier checked", &Checks, &Failures);
+
+    memset(Response, 0, sizeof(Response));
+    NetDnsWriteBe16(Response, 0x1234);
+    NetDnsWriteBe16(Response + 2, 0x8180);
+    NetDnsWriteBe16(Response + 4, 1);
+    NetDnsWriteBe16(Response + 6, 2);
+    Offset = 12;
+    Response[Offset++] = 3;
+    memcpy(Response + Offset, "www", 3);
+    Offset += 3;
+    Response[Offset++] = 6;
+    memcpy(Response + Offset, "nexora", 6);
+    Offset += 6;
+    Response[Offset++] = 4;
+    memcpy(Response + Offset, "test", 4);
+    Offset += 4;
+    Response[Offset++] = 0;
+    NetDnsWriteBe16(Response + Offset, DNS_TYPE_A);
+    NetDnsWriteBe16(Response + Offset + 2, DNS_CLASS_IN);
+    Offset += 4;
+    Response[Offset++] = 0xC0;
+    Response[Offset++] = 0x0C;
+    NetDnsWriteBe16(Response + Offset, DNS_TYPE_CNAME);
+    NetDnsWriteBe16(Response + Offset + 2, DNS_CLASS_IN);
+    NetDnsWriteBe16(Response + Offset + 8, 13);
+    Offset += 10;
+    uint32_t CanonicalOffset = Offset;
+    Response[Offset++] = 6;
+    memcpy(Response + Offset, "portal", 6);
+    Offset += 6;
+    Response[Offset++] = 4;
+    memcpy(Response + Offset, "test", 4);
+    Offset += 4;
+    Response[Offset++] = 0;
+    Response[Offset++] = (uint8_t)(0xC0 | (CanonicalOffset >> 8));
+    Response[Offset++] = (uint8_t)CanonicalOffset;
+    NetDnsWriteBe16(Response + Offset, DNS_TYPE_A);
+    NetDnsWriteBe16(Response + Offset + 2, DNS_CLASS_IN);
+    NetDnsWriteBe16(Response + Offset + 8, 4);
+    Offset += 10;
+    Response[Offset++] = 198;
+    Response[Offset++] = 51;
+    Response[Offset++] = 100;
+    Response[Offset++] = 9;
+    Status = NetDnsParseAResponse(0x1234, "www.nexora.test", Response, Offset, Address);
+    NetDnsTest(Status == STATUS_SUCCESS && Address[0] == 198 && Address[1] == 51 && Address[2] == 100 &&
+                   Address[3] == 9,
+               "CNAME chain to compressed A record", &Checks, &Failures);
 
     Response[12] = 0xC0;
     Response[13] = 0x0C;

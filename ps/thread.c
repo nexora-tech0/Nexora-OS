@@ -140,7 +140,7 @@ STATUS PsCreateUserThread(EPROCESS *Process, uint64_t StartAddress, uint64_t Arg
 
     /* Everything that can fail happens before KeInitializeThread. */
     MMADDRESS_SPACE *As = Process->AddressSpace;
-    void *Reservation = NULL, *Committed = NULL, *Teb = NULL;
+    void *Reservation = NULL, *Committed = NULL, *Teb = NULL, *TlsArray = NULL, *TlsBlock = NULL;
     uint64_t StackReserve = Process->StackReserve ? Process->StackReserve : PSP_DEFAULT_STACK_RESERVE;
     Status = MmAllocateVirtualMemory(As, &Reservation, StackReserve + PAGE_SIZE, MEM_RESERVE, MM_PROT_READWRITE);
     if (HZ_SUCCESS(Status)) {
@@ -149,6 +149,13 @@ STATUS PsCreateUserThread(EPROCESS *Process, uint64_t StartAddress, uint64_t Arg
     }
     if (HZ_SUCCESS(Status))
         Status = MmAllocateVirtualMemory(As, &Teb, sizeof(HZ_TEB), MEM_RESERVE | MEM_COMMIT, MM_PROT_READWRITE);
+    uint64_t TlsBytes = (uint64_t)Process->TlsTemplateSize + Process->TlsZeroFillSize;
+    if (HZ_SUCCESS(Status) && Process->HasStaticTls) {
+        Status = MmAllocateVirtualMemory(As, &TlsArray, PAGE_SIZE, MEM_RESERVE | MEM_COMMIT, MM_PROT_READWRITE);
+        if (HZ_SUCCESS(Status) && TlsBytes)
+            Status = MmAllocateVirtualMemory(As, &TlsBlock, HZ_ALIGN_UP(TlsBytes, PAGE_SIZE),
+                                             MEM_RESERVE | MEM_COMMIT, MM_PROT_READWRITE);
+    }
     if (HZ_SUCCESS(Status)) {
         Thread->Tcb.XSaveArea = KeAllocateExtendedState();
         if (!Thread->Tcb.XSaveArea)
@@ -163,6 +170,10 @@ STATUS PsCreateUserThread(EPROCESS *Process, uint64_t StartAddress, uint64_t Arg
     if (!HZ_SUCCESS(Status)) {
         if (Teb)
             MmFreeVirtualMemory(As, Teb);
+        if (TlsArray)
+            MmFreeVirtualMemory(As, TlsArray);
+        if (TlsBlock)
+            MmFreeVirtualMemory(As, TlsBlock);
         if (Reservation)
             MmFreeVirtualMemory(As, Reservation);
         ObDereferenceObject(Thread); /* frees the extended state */
@@ -173,6 +184,8 @@ STATUS PsCreateUserThread(EPROCESS *Process, uint64_t StartAddress, uint64_t Arg
     Thread->UserStackLimit = (uint64_t)Reservation + PAGE_SIZE;
     Thread->UserStackBase = (uint64_t)Reservation + PAGE_SIZE + StackReserve;
     Thread->TebAddress = (uint64_t)Teb;
+    Thread->TlsArrayAddress = (uint64_t)TlsArray;
+    Thread->TlsBlockAddress = (uint64_t)TlsBlock;
     Thread->Tcb.UserGsBase = (uint64_t)Teb;
 
     HZ_TEB Block;
@@ -181,10 +194,30 @@ STATUS PsCreateUserThread(EPROCESS *Process, uint64_t StartAddress, uint64_t Arg
     Block.Peb = (HZ_PEB *)Process->PebAddress;
     Block.ProcessId = Process->ProcessId;
     Block.ThreadId = Thread->Tcb.ThreadId;
+    Block.WindowsProcessId = Process->ProcessId;
+    Block.WindowsThreadId = Thread->Tcb.ThreadId;
+    Block.WindowsPeb = (void *)Process->PebAddress;
     Block.StackBase = Thread->UserStackBase;
     Block.StackLimit = Thread->UserStackLimit;
+    Block.ThreadLocalStoragePointer = (void **)TlsArray;
     MMADDRESS_SPACE *Previous = PsAttachProcess(Process);
     Status = MmCopyToUser(Teb, &Block, sizeof(Block));
+    if (HZ_SUCCESS(Status) && Process->HasStaticTls) {
+        uint64_t TlsSlot = (uint64_t)TlsBlock;
+        Status = MmCopyToUser(TlsArray, &TlsSlot, sizeof(TlsSlot));
+        if (HZ_SUCCESS(Status) && Process->TlsTemplateSize) {
+            void *Template = ExAllocatePoolZero(NonPagedPool, Process->TlsTemplateSize, PSP_IMAGE_TAG);
+            if (!Template)
+                Status = STATUS_NO_MEMORY;
+            else {
+                Status = MmCopyFromUser(Template, (void *)(Process->ImageBase + Process->TlsTemplateRva),
+                                        Process->TlsTemplateSize);
+                if (HZ_SUCCESS(Status))
+                    Status = MmCopyToUser(TlsBlock, Template, Process->TlsTemplateSize);
+                ExFreePoolWithTag(Template, PSP_IMAGE_TAG);
+            }
+        }
+    }
     PsDetachProcess(Previous);
     if (!HZ_SUCCESS(Status)) {
         Thread->Terminating = true; /* cannot happen for a freshly committed page; exit cleanly */
@@ -238,6 +271,10 @@ HZ_NORETURN void PsExitThread(STATUS ExitStatus)
         if (!Last) {
             /* The rest of the address space goes with the process; give back this thread's part. */
             MmFreeVirtualMemory(Process->AddressSpace, (void *)Thread->TebAddress);
+            if (Thread->TlsArrayAddress)
+                MmFreeVirtualMemory(Process->AddressSpace, (void *)Thread->TlsArrayAddress);
+            if (Thread->TlsBlockAddress)
+                MmFreeVirtualMemory(Process->AddressSpace, (void *)Thread->TlsBlockAddress);
             MmFreeVirtualMemory(Process->AddressSpace, (void *)Thread->UserStackReservation);
         }
     }

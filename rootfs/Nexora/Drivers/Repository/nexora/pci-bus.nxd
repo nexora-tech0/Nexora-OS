@@ -1,0 +1,11 @@
+format = nexora-driver-package-v1
+name = Nexora PCI Bus Enumerator
+provider = Nexora
+architecture = x86_64
+bus = PCI
+hardware-ids = pci:any
+source = kernel:drivers/pci/pci.c
+status = qemu-tested
+physical-test = not-recorded
+capabilities = configuration-space, bridge-enumeration, device-inventory
+firmware = none

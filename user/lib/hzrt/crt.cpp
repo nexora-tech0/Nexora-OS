@@ -13,6 +13,8 @@
  * against other threads.
  */
 #include "hzsys.h"
+#include "hzfile.h"
+#include "hzui.h"
 #include "rtl.h"
 
 extern "C" int main(int argc, char **argv);
@@ -30,8 +32,8 @@ __attribute__((section(".CRT$XCA"), used)) const HZ_INITIALIZER HzpInitializersB
 __attribute__((section(".CRT$XCZ"), used)) const HZ_INITIALIZER HzpInitializersEnd = nullptr;
 }
 
-static_assert(HzSysServiceCount == 37, "update the SERVICE list in user/lib/hzsys/hzsys.asm");
-static_assert(sizeof(HANDLE) == 8 && offsetof(HZ_TEB, TlsSlots) == 56 && sizeof(HZ_PEB) == 376, "ABI layout");
+    static_assert(HzSysServiceCount == 53, "update the SERVICE list in user/lib/hzsys/hzsys.asm");
+static_assert(sizeof(HANDLE) == 8 && offsetof(HZ_TEB, TlsSlots) == 0x148 && sizeof(HZ_PEB) == 888, "ABI layout");
 
 namespace {
 
@@ -104,6 +106,7 @@ extern "C" [[noreturn]] void HzProcessStartup(HZ_PEB *Peb)
     g_CommandLine[sizeof(g_CommandLine) - 1] = '\0';
     int Argc = SplitCommandLine(g_CommandLine, g_Argv);
     RunInitializers();
+    hzui::Theme::RefreshFromSettings();
     int Result = main(Argc, g_Argv);
     RunExitHandlers();
     HzExitProcess(Result);

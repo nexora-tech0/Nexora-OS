@@ -13,7 +13,9 @@
  * Missing hardware is not a failure: without a test disk the disk and FAT32 parts are skipped.
  */
 #include "disk.h"
+#include "bootinfo.h"
 #include "iop.h"
+#include "ntfs.h"
 #include "ps.h"
 
 #define IOT_TAG HZ_POOL_TAG('I', 'o', 'T', 's')
@@ -105,6 +107,84 @@ static void IotTestBootVolume(void)
 
 /* ---- Raw sectors ----------------------------------------------------------------------------------- */
 
+static void IotTestNtfsRunRead(DEVICE_OBJECT *Storage)
+{
+    if (Storage->SectorSize != 512 || Storage->SectorCount < 407) {
+        DbgPrint("IoTest: scratch geometry cannot run the NTFS stream-read test\n");
+        return;
+    }
+    uint8_t ExtentA[1024], ExtentB[1024], Readback[512];
+    for (uint32_t Index = 0; Index < sizeof(ExtentA); ++Index) {
+        ExtentA[Index] = IotPattern(Index + 17001);
+        ExtentB[Index] = IotPattern(Index + 88003);
+    }
+    NTFS_BOOT_INFORMATION Geometry = {0};
+    Geometry.BytesPerSector = 512;
+    Geometry.SectorsPerCluster = 1;
+    Geometry.BytesPerCluster = 512;
+    Geometry.TotalSectors = Storage->SectorCount;
+    NTFS_RUN Runs[] = {
+        {.Vcn = 0, .Length = 2, .Lcn = 400, .Sparse = false},
+        {.Vcn = 2, .Length = 2, .Lcn = 0, .Sparse = true},
+        {.Vcn = 4, .Length = 2, .Lcn = 405, .Sparse = false},
+    };
+    STATUS WriteA = IoWriteSectors(Storage, 400, 2, ExtentA);
+    STATUS WriteB = IoWriteSectors(Storage, 405, 2, ExtentB);
+    bool Ok = HZ_SUCCESS(WriteA) && HZ_SUCCESS(WriteB);
+    STATUS ReadA = Ok ? NtfsReadDataStream(Storage, &Geometry, Runs, HZ_ARRAYSIZE(Runs),
+                                            6 * 512, 5 * 512 + 17, 480, 80, Readback) : STATUS_UNSUCCESSFUL;
+    bool ReadAContent = HZ_SUCCESS(ReadA) && memcmp(Readback, ExtentA + 480, 32) == 0;
+    Ok = Ok && ReadAContent;
+    for (size_t Index = 32; Ok && Index < 80; ++Index)
+        Ok = Readback[Index] == ExtentA[512 + Index - 32];
+    STATUS ReadSparse = Ok ? NtfsReadDataStream(Storage, &Geometry, Runs, HZ_ARRAYSIZE(Runs),
+                                                 6 * 512, 5 * 512 + 17, 2 * 512, 512, Readback) : STATUS_UNSUCCESSFUL;
+    Ok = Ok && HZ_SUCCESS(ReadSparse);
+    for (size_t Index = 0; Ok && Index < 512; ++Index)
+        Ok = Readback[Index] == 0;
+    STATUS ReadInitialized = Ok ? NtfsReadDataStream(Storage, &Geometry, Runs, HZ_ARRAYSIZE(Runs),
+                                                      6 * 512, 5 * 512 + 17, 5 * 512, 32, Readback) : STATUS_UNSUCCESSFUL;
+    bool InitializedContent = HZ_SUCCESS(ReadInitialized) && memcmp(Readback, ExtentB + 512, 17) == 0;
+    Ok = Ok && InitializedContent;
+    for (size_t Index = 17; Ok && Index < 32; ++Index)
+        Ok = Readback[Index] == 0;
+    DbgPrint("IoTest: NTFS stream stage status writes=%08X/%08X read=%08X sparse=%08X initialized=%08X data=%u/%u/%u\n",
+             WriteA, WriteB, ReadA, ReadSparse, ReadInitialized, ReadAContent, InitializedContent, Ok);
+    IotReport(Ok, "NTFS run-based stream reads across sectors, sparse runs, and initialized-data boundary");
+}
+
+static void IotTestNtfsMftRead(DEVICE_OBJECT *Storage)
+{
+    if (Storage->SectorSize != 512 || Storage->SectorCount < 413)
+        return;
+    uint8_t DiskRecord[1024] = {0}, Record[1024] = {0};
+    memcpy(DiskRecord, "FILE", 4);
+    DiskRecord[20] = 56; /* first attribute */
+    DiskRecord[24] = 56; /* bytes in use */
+    DiskRecord[4] = 48; /* USA offset */
+    DiskRecord[6] = 3;  /* sequence plus two sector-tail words */
+    DiskRecord[48] = 0x5A; DiskRecord[49] = 0xA5;
+    DiskRecord[50] = 0x34; DiskRecord[51] = 0x12;
+    DiskRecord[52] = 0x78; DiskRecord[53] = 0x56;
+    DiskRecord[510] = 0x5A; DiskRecord[511] = 0xA5;
+    DiskRecord[1022] = 0x5A; DiskRecord[1023] = 0xA5;
+    NTFS_BOOT_INFORMATION Geometry = {0};
+    Geometry.BytesPerSector = 512;
+    Geometry.SectorsPerCluster = 1;
+    Geometry.BytesPerCluster = 512;
+    Geometry.TotalSectors = Storage->SectorCount;
+    Geometry.FileRecordBytes = sizeof(DiskRecord);
+    NTFS_RUN Run = {.Vcn = 0, .Length = 2, .Lcn = 411, .Sparse = false};
+    STATUS WriteStatus = IoWriteSectors(Storage, 411, 2, DiskRecord);
+    STATUS ReadStatus = HZ_SUCCESS(WriteStatus)
+                            ? NtfsReadMftRecord(Storage, &Geometry, &Run, 1, sizeof(DiskRecord),
+                                                sizeof(DiskRecord), 0, Record, sizeof(Record))
+                            : STATUS_UNSUCCESSFUL;
+    bool Ok = HZ_SUCCESS(ReadStatus) && memcmp(Record, "FILE", 4) == 0 &&
+              Record[510] == 0x34 && Record[511] == 0x12 && Record[1022] == 0x78 && Record[1023] == 0x56;
+    IotReport(Ok, "NTFS MFT record read and USA repair through storage sectors");
+}
+
 static void IotTestRawDisk(void)
 {
     DEVICE_OBJECT *Scratch = DiskFindPartitionByType(DiskTestScratchType);
@@ -128,6 +208,8 @@ static void IotTestRawDisk(void)
     Ok = Ok && IoCallDriver(Scratch, &Irp) == STATUS_INVALID_PARAMETER;
     Ok = Ok && IoReadSectors(Scratch, Scratch->SectorCount - 1, 2, In) == STATUS_INVALID_PARAMETER;
     IotReport(Ok, "raw sector round trip on the scratch partition (300 sectors)");
+    IotTestNtfsRunRead(Scratch);
+    IotTestNtfsMftRead(Scratch);
     if (Out)
         ExFreePoolWithTag(Out, IOT_TAG);
     if (In)
@@ -398,6 +480,62 @@ bool IoRunSelfTests(void)
     uint64_t FilesBefore = IoFileObjectType->ObjectCount, ThreadsBefore = PsThreadType->ObjectCount;
     uint64_t Start = KeQueryUptimeMicroseconds();
     IotPassed = IotTotal = 0;
+
+    uint32_t NtfsPassed = 0, NtfsTotal = 0;
+    bool NtfsOk = NtfsRunBootRecordSelfTests(&NtfsPassed, &NtfsTotal);
+    IotReport(NtfsOk, "NTFS boot-record geometry validation");
+    DbgPrint("IoTest: NTFS boot-record cases %u/%u passed\n", NtfsPassed, NtfsTotal);
+    NtfsOk = NtfsRunRecordSelfTests(&NtfsPassed, &NtfsTotal);
+    IotReport(NtfsOk, "NTFS MFT record fixup and data-run decoding");
+    DbgPrint("IoTest: NTFS record cases %u/%u passed\n", NtfsPassed, NtfsTotal);
+    if (BiCommandLineHasOption("hz.ntfs-probe=1")) {
+        DEVICE_OBJECT *NtfsDevice = NULL;
+        STATUS OpenStatus = ObReferenceObjectByName("\\Device\\Harddisk0\\Partition1",
+                                                     IoDeviceObjectType, (void **)&NtfsDevice);
+        NTFS_VOLUME_CONTEXT NtfsVolume = {0};
+        STATUS InitStatus = HZ_SUCCESS(OpenStatus) ? NtfsInitializeVolume(NtfsDevice, &NtfsVolume)
+                                                    : OpenStatus;
+        static const uint16_t ProbeName[] = {'N', 'E', 'X', 'O', 'R', 'A', '.', 'T', 'X', 'T'};
+        NTFS_FILE_INFORMATION FileInformation = {0};
+        STATUS LookupStatus = HZ_SUCCESS(InitStatus)
+                                  ? NtfsLookupDirectoryEntry(&NtfsVolume, 5, ProbeName,
+                                                             HZ_ARRAYSIZE(ProbeName), &FileInformation)
+                                  : InitStatus;
+        static const char ExpectedData[] = "Nexora NTFS data-read probe: 3.1\n";
+        char ActualData[sizeof(ExpectedData)] = {0};
+        uint32_t BytesRead = 0;
+        STATUS ReadStatus = HZ_SUCCESS(LookupStatus)
+                                ? NtfsReadFileData(&NtfsVolume, &FileInformation, 0,
+                                                   sizeof(ExpectedData) - 1, ActualData, &BytesRead)
+                                : LookupStatus;
+        bool ProbeOk = HZ_SUCCESS(ReadStatus) && BytesRead == sizeof(ExpectedData) - 1 &&
+                       memcmp(ActualData, ExpectedData, sizeof(ExpectedData) - 1) == 0;
+        DbgPrint("IoTest: NTFS root-file read statuses init=%08X lookup=%08X read=%08X bytes=%u\n",
+                 InitStatus, LookupStatus, ReadStatus, BytesRead);
+        NtfsReleaseVolume(&NtfsVolume);
+        if (NtfsDevice)
+            ObDereferenceObject(NtfsDevice);
+        IotReport(ProbeOk, "NTFS root index lookup and file-data read");
+
+        /* Exercise the same fixture through the registered NTFS mount and ordinary file API. */
+        FILE_OBJECT *MountedFile = NULL;
+        STATUS MountedOpenStatus = IoCreateFile("\\Device\\Harddisk0\\Partition1\\NEXORA.TXT",
+                                                 FILE_READ_DATA, FILE_OPEN, FILE_NON_DIRECTORY_FILE,
+                                                 KernelMode, &MountedFile, NULL);
+        char MountedData[sizeof(ExpectedData)] = {0};
+        uint32_t MountedBytes = 0;
+        STATUS MountedReadStatus = HZ_SUCCESS(MountedOpenStatus)
+                                       ? IoReadFile(MountedFile, MountedData, sizeof(ExpectedData) - 1,
+                                                    NULL, KernelMode, &MountedBytes)
+                                       : MountedOpenStatus;
+        bool MountedOk = HZ_SUCCESS(MountedReadStatus) && MountedBytes == sizeof(ExpectedData) - 1 &&
+                         memcmp(MountedData, ExpectedData, sizeof(ExpectedData) - 1) == 0;
+        if (MountedFile)
+            ObDereferenceObject(MountedFile);
+        DbgPrint("IoTest: mounted NTFS file open=%08X read=%08X bytes=%u\n",
+                 MountedOpenStatus, MountedReadStatus, MountedBytes);
+        IotReport(MountedOk, "NTFS mounted file open and read through I/O manager");
+    }
 
     IotTestBootVolume();
     IotTestRawDisk();

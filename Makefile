@@ -34,6 +34,11 @@ CC := $(LLVM_BIN)clang
 CXX := $(LLVM_BIN)clang++
 LD := $(LLVM_BIN)ld.lld
 LLD_LINK := $(LLVM_BIN)lld-link
+ifneq ($(wildcard $(LLVM_BIN)llvm-dlltool),)
+LLVM_DLLTOOL := $(LLVM_BIN)llvm-dlltool
+else
+LLVM_DLLTOOL ?= llvm-dlltool
+endif
 NASM := nasm
 XORRISO := xorriso
 HOSTCC ?= cc
@@ -74,8 +79,8 @@ KERNEL_LDFLAGS := -m elf_x86_64 -nostdlib -static -z max-page-size=0x1000 -z noe
     --gc-sections --build-id=none -T init/kernel.ld
 
 # Directories linked into the kernel image (every .c/.cpp/.asm in them is built).
-KERNEL_SRC_DIRS := init hal ke mm ob ps io ex rtl win32k net drivers/bootvid drivers/pci drivers/disk drivers/ahci \
-    drivers/net drivers/i8042 drivers/ramdisk fs/ustarfs fs/fat32
+KERNEL_SRC_DIRS := init hal ke mm ob ps io ex rtl win32k net drivers/bootvid drivers/pci drivers/input drivers/disk drivers/ahci drivers/nvme \
+    drivers/net drivers/virtio drivers/usb drivers/i8042 drivers/ramdisk fs/ustarfs fs/fat32 fs/ntfs
 
 KERNEL_C_SRCS := $(foreach d,$(KERNEL_SRC_DIRS),$(wildcard $(d)/*.c))
 KERNEL_CXX_SRCS := $(foreach d,$(KERNEL_SRC_DIRS),$(wildcard $(d)/*.cpp))
@@ -117,7 +122,7 @@ RUST_KERNEL_FLAGS := -C code-model=kernel -C relocation-model=static -C force-fr
 # probes: the user stack is fully reserved up front with one guard page at the bottom.
 USER_COMMON_FLAGS := --target=x86_64-pc-windows-msvc -ffreestanding -fno-stack-protector -mno-stack-arg-probe \
     -O2 -Wall -Wextra -Werror -Wno-unused-parameter \
-    -nostdinc -isystem $(CLANG_RESOURCE_DIR)/include -Iinclude -Iuser/include \
+    -nostdinc -isystem $(CLANG_RESOURCE_DIR)/include -Iinclude -Iuser/include -Ithird_party/bearssl/inc \
     -Ithird_party/stb/compat -MMD -MP
 USER_CFLAGS := -std=c17 $(USER_COMMON_FLAGS)
 USER_CXXFLAGS := -std=c++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics $(USER_COMMON_FLAGS)
@@ -140,6 +145,18 @@ HZUSER_LIB := $(BUILD)/user/hzuser.lib
 HZUI_OBJS := $(patsubst %,$(UOBJ)/user/lib/hzui/%.cpp.obj,painter element window controls textbox listview menu \
     editor dialogs wallpaper)
 HZUI_LIB := $(BUILD)/user/hzui.lib
+# BearSSL is linked only by Browser. Keep the full upstream source in an archive so LLD pulls
+# only the implementations reachable from the configured TLS 1.2 client profile.
+BEARSSL_SRC_DIRS := $(sort $(dir $(wildcard third_party/bearssl/src/*/*.c)))
+BEARSSL_SRCS := $(wildcard third_party/bearssl/src/*.c) \
+    $(foreach d,$(BEARSSL_SRC_DIRS),$(wildcard $(d)*.c))
+BEARSSL_OBJS := $(BEARSSL_SRCS:%=$(UOBJ)/%.obj) \
+    $(UOBJ)/third_party/bearssl-ca/trust_anchors_wrapper.c.obj
+BEARSSL_LIB := $(BUILD)/user/bearssl.lib
+BEARSSL_CFLAGS := $(USER_CFLAGS) -Ithird_party/bearssl/inc -Ithird_party/bearssl/src -Ithird_party/bearssl/port \
+    -U_MSC_VER \
+    -DBR_RDRAND=0 -DBR_USE_URANDOM=0 -DBR_USE_WIN32_RAND=0 \
+    -DBR_USE_UNIX_TIME=0 -DBR_USE_WIN32_TIME=0
 UI_FONTS := third_party/inter/Inter-Regular.ttf third_party/inter/Inter-SemiBold.ttf \
     third_party/inter/InterDisplay-SemiBold.ttf \
     third_party/jetbrains-mono/JetBrainsMono-Regular.ttf \
@@ -150,6 +167,8 @@ UI_FONTS := third_party/inter/Inter-Regular.ttf third_party/inter/Inter-SemiBold
 USER_APP_DIRS := user/shell $(patsubst %/,%,$(sort $(dir $(wildcard user/apps/*/*.cpp))))
 USER_APP_NAMES := $(notdir $(USER_APP_DIRS))
 USER_EXES := $(USER_APP_NAMES:%=$(BUILD)/user/%.exe)
+BROWSER_NET_OBJS := $(UOBJ)/user/apps/browser/http.cpp.obj $(UOBJ)/user/apps/browser/url.cpp.obj \
+    $(UOBJ)/user/apps/browser/tls.cpp.obj
 
 # ---- Images ---------------------------------------------------------------------------------
 
@@ -236,6 +255,11 @@ $(UOBJ)/%.c.obj: %.c
 	@echo "  CC      $< (user)"
 	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
 
+$(UOBJ)/third_party/%.c.obj: third_party/%.c
+	@mkdir -p $(@D)
+	@echo "  CC      $< (BearSSL)"
+	$(Q)$(CC) $(BEARSSL_CFLAGS) -c $< -o $@
+
 $(UOBJ)/%.cpp.obj: %.cpp
 	@mkdir -p $(@D)
 	@echo "  CXX     $< (user)"
@@ -258,13 +282,67 @@ $(HZUI_LIB): $(HZUI_OBJS)
 	$(Q)rm -f $@
 	$(Q)$(LLVM_BIN)llvm-ar rcs --format=coff $@ $^
 
+$(BEARSSL_LIB): $(BEARSSL_OBJS)
+	@mkdir -p $(@D)
+	@echo "  LIB     $@"
+	$(Q)rm -f $@
+	$(Q)$(LLVM_BIN)llvm-ar rcs --format=coff $@ $^
+
 define USER_APP_RULE
-$(BUILD)/user/$(1).exe: $(patsubst %,$(UOBJ)/%.obj,$(wildcard $(2)/*.cpp)) $(USER_RUNTIME_OBJS) $(HZUI_LIB) $(HZUSER_LIB)
+$(BUILD)/user/$(1).exe: $(patsubst %,$(UOBJ)/%.obj,$(wildcard $(2)/*.cpp)) $(USER_RUNTIME_OBJS) $(HZUI_LIB) $(HZUSER_LIB) $(if $(filter browser,$(1)),$(BEARSSL_LIB)) $(if $(filter store,$(1)),$(BROWSER_NET_OBJS) $(BEARSSL_LIB)) $(if $(filter diskmgmt,$(1)),$(UOBJ)/user/apps/setup/installer.cpp.obj)
 	@mkdir -p $$(@D)
 	@echo "  LINK    $$@"
 	$(Q)$(LLD_LINK) $(USER_LDFLAGS) /out:$$@ $$^
 endef
 $(foreach d,$(USER_APP_DIRS),$(eval $(call USER_APP_RULE,$(notdir $(d)),$(d))))
+
+# Tiny foreign-PE console image used to exercise the bounded kernel32 import compatibility path.
+WINCOMPAT_PROBE_OBJ := $(UOBJ)/tests/wincompat/probe.c.obj
+WINCOMPAT_NETWORK_PROBE_OBJ := $(UOBJ)/tests/wincompat/network_probe.c.obj
+WINCOMPAT_MISSING_API_PROBE_OBJ := $(UOBJ)/tests/wincompat/missing_api.c.obj
+WINCOMPAT_IMPORT_LIB := $(BUILD)/user/kernel32-imports.lib
+WINCOMPAT_CRT_IMPORT_LIB := $(BUILD)/user/msvcrt-imports.lib
+WINCOMPAT_WS2_IMPORT_LIB := $(BUILD)/user/ws2_32-imports.lib
+WINCOMPAT_PROBE := $(BUILD)/user/wincompat-probe.exe
+WINCOMPAT_NETWORK_PROBE := $(BUILD)/user/wincompat-network-probe.exe
+WINCOMPAT_MISSING_API_PROBE := $(BUILD)/user/wincompat-missing-api.exe
+$(WINCOMPAT_PROBE_OBJ): tests/wincompat/probe.c
+	@mkdir -p $(@D)
+	@echo "  CC      $< (Windows PE compatibility probe)"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(WINCOMPAT_MISSING_API_PROBE_OBJ): tests/wincompat/missing_api.c
+	@mkdir -p $(@D)
+	@echo "  CC      $< (unsupported-import probe)"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(WINCOMPAT_NETWORK_PROBE_OBJ): tests/wincompat/network_probe.c
+	@mkdir -p $(@D)
+	@echo "  CC      $< (Winsock PE compatibility probe)"
+	$(Q)$(CC) $(USER_CFLAGS) -c $< -o $@
+$(WINCOMPAT_IMPORT_LIB): tests/wincompat/kernel32.def
+	@mkdir -p $(@D)
+	@echo "  DLLTOOL $<"
+	$(Q)$(LLVM_DLLTOOL) -m i386:x86-64 -d $< -l $@
+$(WINCOMPAT_CRT_IMPORT_LIB): tests/wincompat/msvcrt.def
+	@mkdir -p $(@D)
+	@echo "  DLLTOOL $<"
+	$(Q)$(LLVM_DLLTOOL) -m i386:x86-64 -d $< -l $@
+$(WINCOMPAT_WS2_IMPORT_LIB): tests/wincompat/ws2_32.def
+	@mkdir -p $(@D)
+	@echo "  DLLTOOL $<"
+	$(Q)$(LLVM_DLLTOOL) -m i386:x86-64 -d $< -l $@
+$(WINCOMPAT_PROBE): $(WINCOMPAT_PROBE_OBJ) $(WINCOMPAT_IMPORT_LIB) $(WINCOMPAT_CRT_IMPORT_LIB)
+	@mkdir -p $(@D)
+	@echo "  LINK    $@ (Windows PE compatibility probe)"
+	$(Q)$(LLD_LINK) /nologo /nodefaultlib /machine:x64 /subsystem:console /entry:WinCompatProbe \
+	    /export:WinCompatExportProbe /out:$@ $^
+$(WINCOMPAT_NETWORK_PROBE): $(WINCOMPAT_NETWORK_PROBE_OBJ) $(WINCOMPAT_IMPORT_LIB) $(WINCOMPAT_WS2_IMPORT_LIB)
+	@mkdir -p $(@D)
+	@echo "  LINK    $@ (Winsock PE compatibility probe)"
+	$(Q)$(LLD_LINK) /nologo /nodefaultlib /machine:x64 /subsystem:console /entry:WinCompatNetworkProbe /out:$@ $^
+$(WINCOMPAT_MISSING_API_PROBE): $(WINCOMPAT_MISSING_API_PROBE_OBJ) $(WINCOMPAT_IMPORT_LIB)
+	@mkdir -p $(@D)
+	@echo "  LINK    $@ (unsupported-import probe)"
+	$(Q)$(LLD_LINK) /nologo /nodefaultlib /machine:x64 /subsystem:console /entry:WinCompatMissingApiProbe /out:$@ $^
 
 # ---- Ramdisk and ISO ------------------------------------------------------------------------
 
@@ -272,24 +350,33 @@ ROOTFS_FILES := $(shell find rootfs -type f 2>/dev/null)
 
 LICENSE_FILES := THIRD_PARTY_NOTICES.md third_party/inter/LICENSE.txt \
     third_party/jetbrains-mono/OFL.txt third_party/limine-protocol/LICENSE \
-    third_party/icons/material/LICENSE.txt third_party/stb/LICENSE.txt
+    third_party/icons/material/LICENSE.txt third_party/stb/LICENSE.txt \
+    third_party/bearssl/LICENSE.txt third_party/bearssl-ca/NOTICE.txt \
+    third_party/quickjs/LICENSE
 
 .PHONY: prepare-wallpapers
 prepare-wallpapers:
 	$(Q)$(PYTHON) tools/prepare-wallpapers.py assets/Wallpapers $(BUILD)/wallpapers
+
+.PHONY: driver-catalog
+driver-catalog:
+	$(Q)$(PYTHON) scripts/validate-driver-catalog.py
 
 # The system tree, the same one Setup copies to an installed disk: C:\Nexora holds System (the
 # programs), Fonts, Apps (the manifests), Wallpapers, Licenses and Settings (the .ini files that
 # SettingsPath() reads and writes); rootfs/ supplies Apps and anything else a clean install starts
 # with. C:\Users and its per-user folders are not here: they belong to an installation, not to the
 # installation media.
-$(RAMDISK): $(USER_EXES) $(ROOTFS_FILES) $(LICENSE_FILES) $(UI_FONTS) prepare-wallpapers
+$(RAMDISK): $(USER_EXES) $(WINCOMPAT_PROBE) $(WINCOMPAT_NETWORK_PROBE) $(WINCOMPAT_MISSING_API_PROBE) $(ROOTFS_FILES) $(LICENSE_FILES) $(UI_FONTS) prepare-wallpapers driver-catalog
 	rm -rf $(BUILD)/ramdisk_root
 	mkdir -p $(BUILD)/ramdisk_root/Nexora/System $(BUILD)/ramdisk_root/Nexora/Fonts \
 	    $(BUILD)/ramdisk_root/Nexora/Apps $(BUILD)/ramdisk_root/Nexora/Wallpapers \
 	    $(BUILD)/ramdisk_root/Nexora/Licenses $(BUILD)/ramdisk_root/Nexora/Settings
 	cp -R rootfs/. $(BUILD)/ramdisk_root/
 	cp $(USER_EXES) $(BUILD)/ramdisk_root/Nexora/System/
+	cp $(WINCOMPAT_PROBE) $(BUILD)/ramdisk_root/Nexora/System/
+	cp $(WINCOMPAT_NETWORK_PROBE) $(BUILD)/ramdisk_root/Nexora/System/
+	cp $(WINCOMPAT_MISSING_API_PROBE) $(BUILD)/ramdisk_root/Nexora/System/
 	cp $(UI_FONTS) $(BUILD)/ramdisk_root/Nexora/Fonts/
 	cp -R $(BUILD)/wallpapers/. $(BUILD)/ramdisk_root/Nexora/Wallpapers/
 	cp THIRD_PARTY_NOTICES.md $(BUILD)/ramdisk_root/Nexora/Licenses/ThirdPartyNotices.md
@@ -298,6 +385,9 @@ $(RAMDISK): $(USER_EXES) $(ROOTFS_FILES) $(LICENSE_FILES) $(UI_FONTS) prepare-wa
 	cp third_party/icons/material/LICENSE.txt $(BUILD)/ramdisk_root/Nexora/Licenses/MaterialIcons-Apache-2.0.txt
 	cp third_party/limine-protocol/LICENSE $(BUILD)/ramdisk_root/Nexora/Licenses/Limine-protocol-0BSD.txt
 	cp third_party/stb/LICENSE.txt $(BUILD)/ramdisk_root/Nexora/Licenses/stb-MIT.txt
+	cp third_party/bearssl/LICENSE.txt $(BUILD)/ramdisk_root/Nexora/Licenses/BearSSL-MIT.txt
+	cp third_party/bearssl-ca/NOTICE.txt $(BUILD)/ramdisk_root/Nexora/Licenses/Browser-CA-Store.txt
+	cp third_party/quickjs/LICENSE $(BUILD)/ramdisk_root/Nexora/Licenses/QuickJS-MIT.txt
 	cp $(LIMINE_DIR)/LICENSE $(BUILD)/ramdisk_root/Nexora/Licenses/Limine-BSD-2-Clause.txt
 	tar --format=ustar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@$(SOURCE_DATE_EPOCH) \
 	    -cf $@ -C $(BUILD)/ramdisk_root Nexora

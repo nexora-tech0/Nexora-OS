@@ -214,9 +214,13 @@ bool Terminal::Create()
     Env_.Set("USERPROFILE", Cwd_);
     Env_.Set("OS", "Nexora OS");
     Env_.Set("PATH", "C:\\Nexora\\System");
+    hz::fs::Settings Environment;
+    if (HZ_SUCCESS(Environment.Load(hz::fs::SettingsPath("environment"))))
+        for (const hz::fs::Settings::Item &Item : Environment.Items())
+            Env_.Set(Item.Key, Item.Value);
     Main_ = new TerminalWindow(this);
     Main_->SetMinimumSize(420, 240);
-    Main_->Background = 0xF20C0C0E;
+    Main_->Background = Theme::SolidBackground;
     View_ = new ConsoleView();
     View_->OnCommand = [this](const hz::String &Line) { Run(Line); };
     View_->OnBusyKey = [this](KeyEvent &E) { OnPagerKey(E); };
@@ -946,9 +950,15 @@ void Terminal::Start(const CommandLine &C)
             Line(hz::String::Format("Opened %s with %s (process %u).", File.CStr(), Program.CStr(), Pid));
         else if (Status == STATUS_NOT_FOUND && hz::fs::Exists(File))
             Line(hz::String::Format("No program opens %s.", File.CStr()));
-        else if (Status == STATUS_DLL_NOT_FOUND)
-            Line("This EXE imports DLLs; Nexora currently runs statically linked Nexora programs only.");
-        else
+        else if (Status == STATUS_DLL_NOT_FOUND || Status == STATUS_NOT_SUPPORTED ||
+                 Status == STATUS_INVALID_IMAGE_NOT_MZ || Status == STATUS_INVALID_IMAGE_FORMAT) {
+            hz::String Report;
+            if (HZ_SUCCESS(hz::apps::QueryCompatibilityReport(File, Report)))
+                Line(Report.CStr());
+            else
+                Line(hz::String::Format("Cannot load %s (0x%08X); its compatibility report could not be read.",
+                                        File.CStr(), (uint32_t)Status));
+        } else
             Line(hz::String::Format("'%s' is not a program or a file.", Target.CStr()));
         return;
     }
@@ -961,7 +971,13 @@ void Terminal::Start(const CommandLine &C)
     uint32_t Pid = 0;
     STATUS Status = NtCreateProcess(Image.CStr(), CommandText.CStr(), &Process, &Pid);
     if (!HZ_SUCCESS(Status)) {
-        Line(hz::String::Format("Cannot start %s (0x%08X).", Image.CStr(), (uint32_t)Status));
+        hz::String Report;
+        if ((Status == STATUS_DLL_NOT_FOUND || Status == STATUS_NOT_SUPPORTED ||
+             Status == STATUS_INVALID_IMAGE_NOT_MZ || Status == STATUS_INVALID_IMAGE_FORMAT) &&
+            HZ_SUCCESS(hz::apps::QueryCompatibilityReport(Image, Report)))
+            Line(Report.CStr());
+        else
+            Line(hz::String::Format("Cannot start %s (0x%08X).", Image.CStr(), (uint32_t)Status));
         return;
     }
     NtClose(Process);
@@ -1403,9 +1419,12 @@ bool Terminal::UnavailableLinuxCommand(const hz::String &Name)
 hz::String Terminal::FindProgram(const hz::String &Name) const
 {
     hz::String WithExe = Name;
-    if (hz::fs::Extension(Name).Empty())
+    hz::String Extension = hz::fs::Extension(Name);
+    if (hz::fs::EqualNames(Extension.CStr(), "nxe"))
+        WithExe = hz::apps::ResolveToolImageName(Name);
+    else if (Extension.Empty())
         WithExe.Append(".exe");
-    else if (hz::fs::Extension(Name) != "exe")
+    else if (!hz::fs::EqualNames(Extension.CStr(), "exe"))
         return hz::String();
     bool HasPath = WithExe.Find("\\") != hz::NotFound || WithExe.Find(":") != hz::NotFound;
     hz::String Candidate = Path(WithExe);
@@ -1414,6 +1433,26 @@ hz::String Terminal::FindProgram(const hz::String &Name) const
         return Candidate;
     if (HasPath)
         return hz::String();
+    /* PATH is a semicolon-separated list, matching the Windows command convention. */
+    hz::String SearchPath;
+    if (Env_.Get("PATH", &SearchPath)) {
+        size_t Begin = 0;
+        while (Begin <= SearchPath.Length()) {
+            size_t End = SearchPath.Find(";", Begin);
+            if (End == hz::NotFound)
+                End = SearchPath.Length();
+            hz::String Folder = SearchPath.Substring(Begin, End - Begin);
+            if (!Folder.Empty()) {
+                Candidate = hz::fs::Join(Folder, WithExe.CStr());
+                if (hz::fs::Exists(Candidate, &Directory) && !Directory)
+                    return Candidate;
+            }
+            if (End == SearchPath.Length())
+                break;
+            Begin = End + 1;
+        }
+    }
+    /* Keep built-in programs reachable even if PATH was cleared or edited incorrectly. */
     Candidate = hz::fs::Join(hz::String(kSystemFolder), WithExe.CStr());
     if (hz::fs::Exists(Candidate, &Directory) && !Directory)
         return Candidate;
@@ -1437,7 +1476,13 @@ bool Terminal::StartChild(const hz::String &Image, const CommandLine &C)
             NtClose(Process);
             Line(hz::String::Format("Started %s (process %u).", App->Name.CStr(), Pid));
         } else {
-            Line(hz::String::Format("Cannot start %s (0x%08X).", Image.CStr(), (uint32_t)Status));
+            hz::String Report;
+            if ((Status == STATUS_DLL_NOT_FOUND || Status == STATUS_NOT_SUPPORTED ||
+                 Status == STATUS_INVALID_IMAGE_NOT_MZ || Status == STATUS_INVALID_IMAGE_FORMAT) &&
+                HZ_SUCCESS(hz::apps::QueryCompatibilityReport(Image, Report)))
+                Line(Report.CStr());
+            else
+                Line(hz::String::Format("Cannot start %s (0x%08X).", Image.CStr(), (uint32_t)Status));
         }
         return false;
     }
@@ -1456,7 +1501,13 @@ bool Terminal::StartChild(const hz::String &Image, const CommandLine &C)
     NtClose(Write); /* the child has its own handle; end of file comes when it exits */
     if (!HZ_SUCCESS(Status)) {
         NtClose(Read);
-        Line(hz::String::Format("Cannot start %s (0x%08X).", Image.CStr(), (uint32_t)Status));
+        hz::String Report;
+        if ((Status == STATUS_DLL_NOT_FOUND || Status == STATUS_NOT_SUPPORTED ||
+             Status == STATUS_INVALID_IMAGE_NOT_MZ || Status == STATUS_INVALID_IMAGE_FORMAT) &&
+            HZ_SUCCESS(hz::apps::QueryCompatibilityReport(Image, Report)))
+            Line(Report.CStr());
+        else
+            Line(hz::String::Format("Cannot start %s (0x%08X).", Image.CStr(), (uint32_t)Status));
         return false;
     }
     Reader_ = new ReaderContext{Read, Process, Main_->Handle()};

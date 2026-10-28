@@ -99,6 +99,8 @@ enum class Scheme : uint8_t { Dark, Light };
 
 void ApplyScheme(Scheme S);       /* switches the palette; repaint afterwards */
 Scheme Current();
+Color Recolor(Color Value, Scheme From, Scheme To);
+Scheme RefreshFromSettings();
 
 /* The values below mirror the dark palette in painter.cpp; ApplyScheme() overwrites them. They are
    inline so the one definition is shared by every translation unit that includes this header. */
@@ -132,7 +134,7 @@ inline Color FocusStrokeInner = 0xB3000000;
 inline Color KnobFill = 0xFFFFFFFF;
 /* The fixed surfaces the shell draws: the glass of the taskbar and tray, the cards of the flyouts
    and the band along the bottom of a flyout. Opaque, so they carry the scheme themselves. */
-inline Color Glass = 0x523D424F;
+inline Color Glass = 0xFF30343B;
 inline Color FlyoutBackground = 0xB02B2E37;
 inline Color HoverRow = 0x1CFFFFFF;
 inline Color FooterBand = 0x26000000;
@@ -323,6 +325,7 @@ public:
     void Arrange(const Rect &Slot);
     void Invalidate();
     void InvalidateLayout();
+    virtual void OnThemeChanged(Theme::Scheme Previous);
 
     /* Overridables */
     virtual Size MeasureOverride(Size Available); /* content size; default: the largest child */
@@ -394,6 +397,7 @@ public:
     Size MeasureOverride(Size Available) override;
     void ArrangeOverride(const Rect &Content) override;
     void Paint(Painter &P) override;
+    void OnThemeChanged(Theme::Scheme Previous) override;
 
 private:
     hz::String Title_;
@@ -457,6 +461,7 @@ public:
     Size MeasureOverride(Size Available) override;
     void ArrangeOverride(const Rect &Content) override;
     void Paint(Painter &P) override;
+    void OnThemeChanged(Theme::Scheme Previous) override;
 
 private:
     hz::String Text_;
@@ -1054,6 +1059,7 @@ private:
     void UpdateHover(Element *Target);
     void HandleKey(uint32_t Message, uint64_t WParam, uint64_t LParam);
     void AnimationTick();
+    void WindowMotionTick();
     void UpdateToolTip(Point Screen);
     void HideToolTip();
     void Destroyed();
@@ -1087,6 +1093,10 @@ private:
     Point Origin_;                         /* screen position of the window */
     uint32_t CursorShape_ = HZ_CURSOR_ARROW;
     int32_t MinWidth_ = 0, MinHeight_ = 0;
+    uint64_t WindowMotionStartUs_ = 0;
+    int32_t WindowMotionFromY_ = 0, WindowMotionToY_ = 0;
+    uint8_t WindowMotionState_ = 0; /* 1 opening, 2 closing */
+    bool Destroying_ = false;
 };
 
 /* Popups: no caption, topmost, never activated, opaque. */

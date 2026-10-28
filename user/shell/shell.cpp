@@ -166,10 +166,15 @@ void Shell::SetLightMode(bool Light)
 {
     if (Light == LightMode)
         return;
+    Theme::Scheme Previous = Theme::Current();
     LightMode = Light;
     Theme::ApplyScheme(Light ? Theme::Scheme::Light : Theme::Scheme::Dark);
     ReloadChrome();
     SaveSettings();
+    for (const AppWindow &Window : Windows)
+        if (Window.Handle)
+            NtUserPostMessage(Window.Handle, HZ_WM_THEMECHANGED, Light ? 1 : 0,
+                              static_cast<uint64_t>(Previous));
     HzPrint("shell: %s colour scheme", Light ? "light" : "dark");
 }
 
@@ -215,6 +220,58 @@ void Shell::ToggleTaskbarPin(const hz::String &Id)
     if (Bar)
         Bar->Rebuild();
     HzPrint("shell: %s taskbar pin %s", IsTaskbarPinned(Id) ? "added" : "removed", Id.CStr());
+}
+
+bool Shell::IsDesktopShortcut(const hz::apps::App &Program) const
+{
+    if (Config.GetInt("DesktopShortcutsConfigured", 0) == 0)
+        return Program.Pinned; /* older installs keep their manifest-pinned desktop icons */
+    hz::String List = Config.Get("DesktopShortcuts");
+    for (const char *P = List.CStr(); *P;) {
+        const char *End = P;
+        while (*End && *End != ',')
+            End++;
+        if (hz::String(P, (size_t)(End - P)) == Program.Id)
+            return true;
+        P = *End ? End + 1 : End;
+    }
+    return false;
+}
+
+void Shell::ToggleDesktopShortcut(const hz::apps::App &Program)
+{
+    hz::Vector<hz::String> Ids;
+    if (Config.GetInt("DesktopShortcutsConfigured", 0) == 0) {
+        for (const hz::apps::App &Existing : Apps)
+            if (Existing.Pinned && Existing.Id != "setup")
+                Ids.Push(Existing.Id);
+    } else {
+        hz::String List = Config.Get("DesktopShortcuts");
+        for (const char *P = List.CStr(); *P;) {
+            const char *End = P;
+            while (*End && *End != ',')
+                End++;
+            hz::String Id(P, (size_t)(End - P));
+            if (!Id.Empty() && FindApp(Id))
+                Ids.Push(Id);
+            P = *End ? End + 1 : End;
+        }
+    }
+    bool Removed = Ids.Remove(Program.Id);
+    if (!Removed)
+        Ids.Push(Program.Id);
+    hz::String List;
+    for (const hz::String &Id : Ids) {
+        if (!List.Empty())
+            List.Append(',');
+        List.Append(Id);
+    }
+    Config.SetInt("DesktopShortcutsConfigured", 1);
+    Config.Set("DesktopShortcuts", List.CStr());
+    SaveSettings();
+    if (Desk)
+        Desk->Reload();
+    HzPrint("shell: desktop shortcut %s %s", Removed ? "removed" : "added", Program.Id.CStr());
 }
 
 void Shell::SetWallpaper(uint32_t Index)
@@ -291,6 +348,8 @@ void ShowAppContextMenu(Window *Owner, const hz::apps::App &App, Point Screen, H
     }));
     Items.Push(MenuItem::Make(g_Shell.IsTaskbarPinned(Program.Id) ? "Unpin from taskbar" : "Pin to taskbar",
                               [Id = Program.Id]() { g_Shell.ToggleTaskbarPin(Id); }));
+    Items.Push(MenuItem::Make(g_Shell.IsDesktopShortcut(Program) ? "Remove desktop shortcut" : "Add desktop shortcut",
+                              [Program]() { g_Shell.ToggleDesktopShortcut(Program); }));
     if (Window) {
         Items.Push(MenuItem::MakeSeparator());
         Items.Push(MenuItem::Make("Close window", [Window]() { NtUserPostMessage(Window, HZ_WM_CLOSE, 0, 0); }));
@@ -463,6 +522,20 @@ void Shell::OnShellRequest(uint64_t Request, uint64_t Detail)
     } else if (Request == HZ_SHELL_REQUEST_SHUTDOWN) {
         if (Detail == HZ_SHUTDOWN_POWER_OFF || Detail == HZ_SHUTDOWN_REBOOT)
             RequestShutdown((uint32_t)Detail);
+    } else if (Request == HZ_SHELL_REQUEST_NOTIFICATION) {
+        switch (Detail) {
+        case HZ_NOTIFICATION_APP_INSTALLED:
+            ShowNotification("App installed", "The app is ready to open from Start.", Icon::Nexora);
+            break;
+        case HZ_NOTIFICATION_FILE_COMPLETE:
+            ShowNotification("File operation complete", "Your file changes are ready.", Icon::Folder);
+            break;
+        case HZ_NOTIFICATION_ARCHIVE_COMPLETE:
+            ShowNotification("Archive ready", "Your archive operation has finished.", Icon::Archive);
+            break;
+        default:
+            break;
+        }
     }
 }
 
@@ -715,7 +788,7 @@ public:
     {
         const Rect &B = Bounds();
         float T = Leave_.Value();
-        float Prm = PromptTransition_.Value();
+        float Prm = PowerDialogOpen_ ? 0.0f : PromptTransition_.Value();
         int32_t Shift = (int32_t)(T * B.Height * 0.07f);
         float Fade = 1 - T;
         float LockFade = Fade * (1 - Prm);
@@ -748,6 +821,9 @@ public:
             P.FillRect(B, ScaleAlpha(HighContrast_ ? 0xB0000000 : 0x66000000, SignFade));
             int32_t Cx = B.X + B.Width / 2;
             int32_t Cy = B.Y + B.Height * 42 / 100 + (int32_t)((1.0f - Prm) * 28) - Shift;
+            Rect SignCard{Cx - 210, Cy - 168, 420, 356};
+            P.FillRoundRect(SignCard, 24, ScaleAlpha(HighContrast_ ? 0xF0000000 : 0xD0222935, SignFade));
+            P.StrokeRoundRect(SignCard, 24, 1, ScaleAlpha(0x70FFFFFF, SignFade));
             if (Picture_)
                 P.DrawBitmap(Rect{Cx - 48, Cy - 132, 96, 96}, Picture_, kPicture, kPicture);
             else {
@@ -851,6 +927,33 @@ public:
         Invalidate();
     }
 
+    void ShowPowerOptions()
+    {
+        PowerDialogOpen_ = true;
+        if (Widgets)
+            Widgets->SetVisible(false);
+        if (Box)
+            Box->SetVisible(false);
+        if (SignIn)
+            SignIn->SetVisible(false);
+        if (Account)
+            Account->SetVisible(false);
+        if (Controls)
+            Controls->SetVisible(false);
+        Invalidate();
+
+        MessageBox(GetWindow(), "Power", "Choose a power option.", "Shut down|Restart|Cancel", [this](int Choice) {
+            PowerDialogOpen_ = false;
+            if (Prompting_)
+                ShowSignInChrome();
+            Invalidate();
+            if (Choice == 0)
+                g_Shell.RequestShutdown(HZ_SHUTDOWN_POWER_OFF);
+            else if (Choice == 1)
+                g_Shell.RequestShutdown(HZ_SHUTDOWN_REBOOT);
+        });
+    }
+
     bool Animate() override
     {
         Invalidate();
@@ -905,6 +1008,7 @@ private:
     Transition PromptTransition_;
     bool Leaving_ = false;
     bool Prompting_ = false, Accepted_ = false, Wrong_ = false;
+    bool PowerDialogOpen_ = false;
     bool HighContrast_ = false;
     uint32_t Failures_ = 0;
 };
@@ -923,10 +1027,22 @@ public:
 
     void Paint(Painter &P) override
     {
-        Color Fill = IsPressed() ? 0x806A7A8E : IsHovered() ? 0x70586779 : 0x50374455;
+        Color Fill = IsPressed() ? 0x806A7A8E : MixColors(0x50374455, 0x70586779, Hover_.Value());
         P.FillRoundRect(Bounds(), 12, Fill);
         P.StrokeRoundRect(Bounds(), 12, 1, 0x70FFFFFF);
         P.DrawIcon(Glyph_, Rect{Bounds().X + 13, Bounds().Y + 13, 18, 18}, 0xFFFFFFFF, 1.45f);
+    }
+
+    void OnPointerEnter() override
+    {
+        Hover_.To(1, Motion::HoverEnterMs);
+        StartAnimation();
+    }
+
+    void OnPointerLeave() override
+    {
+        Hover_.To(0, Motion::HoverLeaveMs);
+        StartAnimation();
     }
 
     void PaintOverlay(Painter &P) override
@@ -955,6 +1071,12 @@ public:
         }
     }
 
+    bool Animate() override
+    {
+        Invalidate();
+        return Hover_.Running();
+    }
+
 private:
     void Activate()
     {
@@ -963,12 +1085,7 @@ private:
             return;
         }
         if (Action_ == LockControl::Power) {
-            MessageBox(GetWindow(), "Power", "Choose a power option.", "Shut down|Restart|Cancel", [](int Choice) {
-                if (Choice == 0)
-                    g_Shell.RequestShutdown(HZ_SHUTDOWN_POWER_OFF);
-                else if (Choice == 1)
-                    g_Shell.RequestShutdown(HZ_SHUTDOWN_REBOOT);
-            });
+            View_->ShowPowerOptions();
             return;
         }
 
@@ -1001,6 +1118,7 @@ private:
     Icon Glyph_;
     LockControl Action_;
     LockView *View_;
+    Transition Hover_;
 };
 
 class LockAccountChip final : public Element {
@@ -1036,10 +1154,12 @@ Window *CreateLockScreen()
     Grid *Root = new Grid();
     LockView *View = Root->Add<LockView>();
     WidgetHost *Widgets = Root->Add<WidgetHost>(WidgetSurface::Lock);
-    Widgets->HorizontalAlignment = Align::Stretch;
+    /* Keep the lock widgets in the open right-hand area so the large clock at left stays clear. */
+    Widgets->Width = 620;
     Widgets->VerticalAlignment = Align::End;
     Widgets->Height = 180;
-    Widgets->Margin = Thickness(48, 0, 48, 72);
+    Widgets->HorizontalAlignment = Align::End;
+    Widgets->Margin = Thickness(0, 0, 48, 72);
     g_Shell.LockWidgets = Widgets;
     View->Widgets = Widgets;
     TextBox *Box = Root->Add<TextBox>("Password");
@@ -1248,10 +1368,11 @@ extern "C" int main(int argc, char **argv)
     g_Shell.Wallpaper = Display.Wallpaper;
     g_Shell.LoadApps();
     g_Shell.Work = Rect{0, kWorkAreaTop, (int32_t)Display.Width,
-                        (int32_t)Display.Height - kWorkAreaTop - kTaskbarHeight};
+                        (int32_t)Display.Height - kWorkAreaTop - kWorkAreaBottomInset};
 
     Taskbar *Bar = new Taskbar(g_Shell.Screen.Width);
-    if (!Bar->ShowAt(0, g_Shell.Screen.Height - kTaskbarHeight)) {
+    if (!Bar->ShowAt((g_Shell.Screen.Width - Bar->WindowSize().Width) / 2,
+                     g_Shell.Screen.Height - kTaskbarHeight - kTaskbarBottomInset)) {
         HzPrint("shell: cannot create the taskbar");
         return 1;
     }

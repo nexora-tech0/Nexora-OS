@@ -69,6 +69,7 @@ Window::~Window()
 {
     ClosePopups();
     OnClosed = nullptr; /* the program is tearing this down itself */
+    Destroying_ = true;
     if (Handle_)
         HzDestroyWindow(Handle_);
     if (Root_) {
@@ -100,15 +101,25 @@ bool Window::ShowAt(int32_t X, int32_t Y)
 {
     if (Handle_)
         return true;
-    Origin_ = Point{X, Y};
+    bool AnimateOpen = (Style_ & HZ_WS_CAPTION) && !(Style_ & (HZ_WS_POPUP | HZ_WS_NOFRAME | HZ_WS_NOACTIVATE));
+    int32_t InitialY = AnimateOpen ? Y + 12 : Y;
+    Origin_ = Point{X, InitialY};
     Active_ = (Style_ & HZ_WS_VISIBLE) && !(Style_ & HZ_WS_NOACTIVATE);
     LayoutDirty_ = true;
-    HWND Handle = HzCreateWindow(Title_.CStr(), HZ_RECT{X, Y, X + Width_, Y + Height_}, Style_, WindowProc, this);
+    HWND Handle = HzCreateWindow(Title_.CStr(), HZ_RECT{X, InitialY, X + Width_, InitialY + Height_}, Style_,
+                                 WindowProc, this);
     if (!Handle)
         return false;
     Handle_ = Handle;
     if (MinWidth_ || MinHeight_)
         HzSetMinimumSize(Handle_, MinWidth_, MinHeight_);
+    if (AnimateOpen) {
+        WindowMotionState_ = 1;
+        WindowMotionFromY_ = InitialY;
+        WindowMotionToY_ = Y;
+        NtQueryUptime(&WindowMotionStartUs_);
+        NtUserSetTimer(Handle_, kWindowMotionTimer, 15);
+    }
     if (!Animating_.Empty() && !AnimationTimer_) {
         NtUserSetTimer(Handle_, kAnimationTimer, 15);
         AnimationTimer_ = true;
@@ -120,8 +131,20 @@ bool Window::ShowAt(int32_t X, int32_t Y)
 
 void Window::Close()
 {
-    if (Handle_)
-        HzDestroyWindow(Handle_); /* WM_DESTROY -> Destroyed() */
+    if (!Handle_)
+        return;
+    if (!Destroying_ && WindowMotionState_ != 2 && (Style_ & HZ_WS_CAPTION) &&
+        !(Style_ & (HZ_WS_POPUP | HZ_WS_NOFRAME | HZ_WS_NOACTIVATE))) {
+        WindowMotionState_ = 2;
+        WindowMotionFromY_ = Origin_.Y;
+        WindowMotionToY_ = Origin_.Y + 12;
+        NtQueryUptime(&WindowMotionStartUs_);
+        NtUserSetTimer(Handle_, kWindowMotionTimer, 15);
+        return;
+    }
+    if (WindowMotionState_ == 2)
+        NtUserKillTimer(Handle_, kWindowMotionTimer);
+    HzDestroyWindow(Handle_);
 }
 
 void Window::Destroyed()
@@ -217,6 +240,16 @@ int64_t Window::HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam
             Focus_->Invalidate();
         }
         return 0;
+    case HZ_WM_THEMECHANGED: {
+        Theme::Scheme Previous = static_cast<Theme::Scheme>(LParam != 0);
+        Theme::Scheme Current = static_cast<Theme::Scheme>(WParam != 0);
+        Theme::ApplyScheme(Current);
+        Background = Theme::Recolor(Background, Previous, Current);
+        if (Root_)
+            Root_->OnThemeChanged(Previous);
+        InvalidateRect(ClientRect());
+        return 0;
+    }
     case HZ_WM_MOUSEMOVE:
     case HZ_WM_LBUTTONDOWN:
     case HZ_WM_LBUTTONUP:
@@ -242,6 +275,8 @@ int64_t Window::HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam
     case HZ_WM_TIMER:
         if (WParam == kAnimationTimer) {
             AnimationTick();
+        } else if (WParam == kWindowMotionTimer) {
+            WindowMotionTick();
         } else if (WParam == kToolTipTimer) {
             NtUserKillTimer(Handle_, kToolTipTimer);
             if (ToolTipCandidate_ && !ToolTip_ && Active_) {
@@ -259,6 +294,9 @@ int64_t Window::HandleMessage(uint32_t Message, uint64_t WParam, uint64_t LParam
         }
         return 0;
     case HZ_WM_CLOSE:
+        /* Ignore repeated close requests while the close motion is in flight. */
+        if (WindowMotionState_ == 2)
+            return 0;
         if (OnCloseRequested && !OnCloseRequested())
             return 0;
         Close();
@@ -361,6 +399,29 @@ void Window::AnimationTick()
         NtUserKillTimer(Handle_, kAnimationTimer);
         AnimationTimer_ = false;
     }
+}
+
+void Window::WindowMotionTick()
+{
+    if (!Handle_ || !WindowMotionState_)
+        return;
+    constexpr uint64_t DurationUs = 150000;
+    uint64_t Now = 0;
+    NtQueryUptime(&Now);
+    uint64_t Elapsed = Now >= WindowMotionStartUs_ ? Now - WindowMotionStartUs_ : DurationUs;
+    uint32_t T = Elapsed >= DurationUs ? 65535u : (uint32_t)(Elapsed * 65535 / DurationUs);
+    uint64_t Ease = (uint64_t)T * T * (3 * 65535u - 2 * T) / (65535ull * 65535ull);
+    int32_t Y = WindowMotionFromY_ + (int32_t)((int64_t)(WindowMotionToY_ - WindowMotionFromY_) *
+                                               (int64_t)Ease / 65535);
+    NtUserSetWindowPos(Handle_, Origin_.X, Y, Width_, Height_, HZ_SWP_NOSIZE);
+    if (Elapsed < DurationUs)
+        return;
+
+    uint8_t Finished = WindowMotionState_;
+    WindowMotionState_ = 0;
+    NtUserKillTimer(Handle_, kWindowMotionTimer);
+    if (Finished == 2)
+        HzDestroyWindow(Handle_);
 }
 
 uint64_t Window::SetTimer(uint32_t PeriodMs, hz::Function<void()> Callback)

@@ -58,11 +58,7 @@ void InbvSetStatusText(const char *Text)
     (void)Text;
 }
 
-/*
- * sin(2*pi*i/256) in Q15. The spinner places its dots from this table instead of on a coarse ring
- * of fixed points, so a dot moves by a fraction of a pixel from frame to frame and the sweep looks
- * continuous rather than stepped.
- */
+/* sin(2*pi*i/256) in Q15; the loader uses it to place a smooth, thick arc under the mark. */
 static const int16_t SplashSin[256] = {
     0,     804,   1608,  2410,  3212,  4011,  4808,  5602,  6393,  7179,  7962,  8739,  9512,
     10278, 11039, 11793, 12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530, 18204, 18868,
@@ -93,33 +89,28 @@ static const int16_t SplashSin[256] = {
 
 #define SPLASH_FADE_FRAMES 14    /* the mark is opaque after ~230 ms at the 60 Hz cadence */
 #define SPLASH_SPINNER_START 8   /* the ring appears as the mark reaches full brightness */
-#define SPLASH_SPINNER_DOTS 6    /* chasing dots for Win11 26H2 style */
-#define SPLASH_SPINNER_SPEED 4   /* faster base speed for acceleration feel */
+#define SPLASH_SPINNER_SEGMENTS 28 /* overlapping discs form one thick, continuous bar */
+#define SPLASH_SPINNER_SPEED 4   /* one smooth sweep per second at the 60 Hz cadence */
 
 static void InbvDrawSpinner(int Width, int Height, int MarkSize, int MarkY)
 {
     int Radius = HZ_MAX(12, HZ_MIN(MarkSize * 15 / 100, 30));
-    int DotRadius = HZ_MAX(3, Radius / 5); /* bold chasing dots */
-    int Reach = Radius + DotRadius + 4;
+    int StrokeRadius = HZ_MAX(4, Radius / 4);
+    int Reach = Radius + StrokeRadius + 4;
     int CenterX = Width / 2;
     int CenterY = HZ_MIN(Height - Reach - 8, MarkY + MarkSize + Height * 9 / 100);
 
     Inbv.Phase = (Inbv.Phase + SPLASH_SPINNER_SPEED) & 255;
     /* Clear the whole ring in one write so no dot leaves a trail behind it. */
     VidFillRect(CenterX - Reach, CenterY - Reach, Reach * 2, Reach * 2, SPLASH_BACKGROUND);
-    for (int I = 0; I < SPLASH_SPINNER_DOTS; I++) {
-        /* Chasing effect: each dot i follows the one before it with a non-linear gap.
-           Dynamic acceleration: map the linear phase through a sine curve to bunch/spread dots. */
-        uint32_t RawStep = (Inbv.Phase - (uint32_t)I * 12) & 255;
-        int32_t Accel = (SPLASH_SIN(RawStep) * 40) >> 15;
-        uint32_t Step = (RawStep + Accel) & 255;
-
-        /* Head brightest, tail fading: the dots read as one travelling sweep. */
-        uint32_t Alpha = 255 - (uint32_t)I * 255 / (SPLASH_SPINNER_DOTS + 2);
-        int32_t DotX = ((int32_t)CenterX << 16) + ((int32_t)Radius * SPLASH_COS(Step)) * 2;
-        int32_t DotY = ((int32_t)CenterY << 16) + ((int32_t)Radius * SPLASH_SIN(Step)) * 2;
-        VidFillDiscAA(DotX, DotY, (int32_t)DotRadius << 16, VidBlend(SPLASH_BACKGROUND, SPLASH_SPINNER, Alpha),
-                      SPLASH_BACKGROUND);
+    for (int I = 0; I < SPLASH_SPINNER_SEGMENTS; I++) {
+        /* Closely spaced, overlapping antialiased discs make a single curved bar with a soft tail. */
+        uint32_t Step = (Inbv.Phase - (uint32_t)I * 2) & 255;
+        uint32_t Alpha = 255 - (uint32_t)I * 190 / SPLASH_SPINNER_SEGMENTS;
+        int32_t BarX = ((int32_t)CenterX << 16) + ((int32_t)Radius * SPLASH_COS(Step)) * 2;
+        int32_t BarY = ((int32_t)CenterY << 16) + ((int32_t)Radius * SPLASH_SIN(Step)) * 2;
+        VidFillDiscAA(BarX, BarY, (int32_t)StrokeRadius << 16,
+                      VidBlend(SPLASH_BACKGROUND, SPLASH_SPINNER, Alpha), SPLASH_BACKGROUND);
     }
 }
 

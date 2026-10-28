@@ -18,10 +18,12 @@ namespace shell {
 
 using namespace hzui;
 
-constexpr int32_t kTaskbarHeight = 48;
+constexpr int32_t kTaskbarHeight = 56;
+constexpr int32_t kTaskbarBottomInset = 12;
+constexpr int32_t kWorkAreaBottomInset = kTaskbarHeight + 20;
 constexpr int32_t kTopDockHeight = 48;
 constexpr int32_t kTopDockTop = 8;
-constexpr int32_t kWorkAreaTop = kTopDockHeight;
+constexpr int32_t kWorkAreaTop = kTopDockTop + kTopDockHeight;
 constexpr size_t kMaxRecent = 4;
 
 struct AppWindow {
@@ -96,6 +98,8 @@ struct Shell {
     void NoteRecent(const hz::String &Id);
     bool IsTaskbarPinned(const hz::String &Id) const;
     void ToggleTaskbarPin(const hz::String &Id);
+    bool IsDesktopShortcut(const hz::apps::App &App) const;
+    void ToggleDesktopShortcut(const hz::apps::App &App);
     void OnShellEvent(uint64_t Event, uint64_t Detail);
     void OnShellRequest(uint64_t Request, uint64_t Detail);
     void RefreshWindows();

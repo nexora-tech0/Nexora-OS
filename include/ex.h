@@ -78,6 +78,21 @@ STATUS NtQuerySystemInformation(const uint64_t *Args);
 STATUS NtShutdownSystem(const uint64_t *Args);
 STATUS NtQuerySystemTime(const uint64_t *Args);
 STATUS NtResolveHostA(const uint64_t *Args);
+STATUS NtTcpConnect(const uint64_t *Args);
+STATUS NtTcpSend(const uint64_t *Args);
+STATUS NtTcpReceive(const uint64_t *Args);
+STATUS NtTcpClose(const uint64_t *Args);
+STATUS NtGenerateRandomBytes(const uint64_t *Args);
+/* Narrow Win32 kernel32 compatibility services implemented by Ps. */
+STATUS NtWinHeapAlloc(const uint64_t *Args);
+STATUS NtWinHeapFree(const uint64_t *Args);
+STATUS NtWinGetModuleHandle(const uint64_t *Args);
+STATUS NtWinGetProcAddress(const uint64_t *Args);
+STATUS NtWinCreateFile(const uint64_t *Args);
+STATUS NtWinGetFileAttributes(const uint64_t *Args);
+STATUS NtWinSocketApi(const uint64_t *Args);
+/* Called when the last process thread exits, including abnormal Windows PE termination. */
+void ExCleanupWinSocketsForCurrentProcess(void);
 
 /* Flushes volumes and powers off (HZ_SHUTDOWN_POWER_OFF) or restarts (HZ_SHUTDOWN_REBOOT). */
 HZ_NORETURN void ExShutdownSystem(uint32_t Action);
